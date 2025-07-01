@@ -1,15 +1,14 @@
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
 #include "hardware/watchdog.h"
-#include "usb_descriptors.h"
+// #include "usb_descriptors.h"  // Temporarily disabled
 #include <stdio.h>
 #include <string.h>
 
 // App headers
-#include "therm_app.h"
 #include "motor_app.h" 
 #include "switch_app.h"
-#include "sensor_app.h"
+#include "blink_app.h"
 #include "relay_app.h"
 #include "adc_app.h"
 
@@ -29,12 +28,12 @@ typedef struct {
 
 // App dispatch table
 static const AppDescriptor app_table[MAX_APPS] = {
-    {"therm",  NULL},        // 0b000 - Thermocouple app (not yet implemented)
+    {"blink",  blink_app},   // 0b000 - LED blink (default when no DIP switches)
     {"motor",  motor_app},   // 0b001 - Motor controller
     {"switch", switch_app},  // 0b010 - Switch network
-    {"sensor", NULL},        // 0b011 - Sensor app (not yet implemented)  
-    {"relay",  NULL},        // 0b100 - Relay control (not yet implemented)
-    {"adc",    NULL},        // 0b101 - ADC monitor (not yet implemented)
+    {"relay",  relay_app},   // 0b011 - Relay control
+    {"adc",    adc_app},     // 0b100 - ADC monitor
+    {"test5",  NULL},        // 0b101 - Future app
 };
 
 // Read 3-bit DIP switch code
@@ -66,7 +65,7 @@ static void log_usb_serial_number(uint8_t code) {
 
 int main(void) {
     // Initialize USB serial number based on DIP switches BEFORE USB enumeration
-    usb_serial_init();
+    // usb_serial_init();  // Temporarily disabled
     
     // Initialize stdio for debug output
     stdio_init_all();
@@ -83,23 +82,20 @@ int main(void) {
     // Log the USB serial number that was set during initialization
     log_usb_serial_number(app_code);
     
-    // Validate app code
+    // Validate app code and fallback to blink if needed
     if (app_code >= MAX_APPS) {
-        printf("ERROR: Invalid DIP code %d (max %d)\n", app_code, MAX_APPS - 1);
-        while (1) {
-            tight_loop_contents();
-        }
+        printf("WARNING: Invalid DIP code %d (max %d), defaulting to blink\n", app_code, MAX_APPS - 1);
+        app_code = 0;
     }
     
     // Get app descriptor
     const AppDescriptor* app = &app_table[app_code];
     
-    // Check if app is implemented
+    // Check if app is implemented, fallback to blink if not
     if (app->app_func == NULL) {
-        printf("ERROR: App '%s' (code %d) not implemented\n", app->name, app_code);
-        while (1) {
-            tight_loop_contents();
-        }
+        printf("WARNING: App '%s' (code %d) not implemented, defaulting to blink\n", app->name, app_code);
+        app_code = 0;
+        app = &app_table[0];
     }
     
     // Display startup info

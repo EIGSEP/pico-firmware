@@ -1,5 +1,6 @@
 #include "pico/stdlib.h"
 #include "hardware/watchdog.h"
+#include <stdio.h>
 #include "relay_app.h"
 
 void relay_app(void) {

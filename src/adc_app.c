@@ -1,5 +1,6 @@
 #include "pico/stdlib.h" 
 #include "hardware/watchdog.h"
+#include <stdio.h>
 #include "adc_app.h"
 
 
