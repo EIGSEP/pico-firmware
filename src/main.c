@@ -4,10 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
-// App headers (to be created)
-// #include "therm.h"
-// #include "motor.h"
-// #include "switch.h"
+// App headers
+#include "therm_app.h"
+#include "motor_app.h" 
+#include "switch_app.h"
+#include "sensor_app.h"
+#include "relay_app.h"
+#include "adc_app.h"
 
 // DIP switch GPIO pins
 #define DIP0_PIN 2
@@ -16,14 +19,6 @@
 
 // Number of supported apps
 #define MAX_APPS 6
-
-// App function prototypes (temporary until headers exist)
-void motor_app(void);
-void switch_app(void);
-// void therm_app(void);
-// void sensor_app(void);
-// void relay_app(void);
-// void adc_app(void);
 
 // App descriptor structure
 typedef struct {
@@ -72,18 +67,6 @@ static void set_usb_serial_number(uint8_t code) {
     printf("USB Serial Number: %s\n", serial_number);
 }
 
-// Temporary stub implementations
-void motor_app(void) {
-    // Forward to actual motor app main
-    extern int main(void);
-    main();
-}
-
-void switch_app(void) {
-    // Forward to actual switch app main
-    extern int main(void);
-    main();
-}
 
 int main(void) {
     // Initialize stdio for debug output
