@@ -8,6 +8,13 @@ set -e
 echo "==================================="
 echo "Building Pico Multi-App Firmware"
 echo "==================================="
+echo "Target: Raspberry Pi Pico 2 (RP2350)"
+echo "Features:"
+echo "  • Multi-app firmware with DIP switch selection"
+echo "  • Dynamic USB serial numbers (PICO_000, PICO_001, etc.)"
+echo "  • Apps: motor, switch, blink, relay, adc"
+echo "  • Blink app as fallback for DIP 000"
+echo "==================================="
 
 # Check if build directory exists
 if [ ! -d "build" ]; then
@@ -22,19 +29,27 @@ if [ -z "$PICO_SDK_PATH" ]; then
     echo "WARNING: PICO_SDK_PATH not set. Assuming SDK is in PATH."
 fi
 
-# Configure with CMake
-echo "Configuring with CMake..."
-cmake ..
+# Configure with CMake for Pico 2 (RP2350)
+echo "Configuring with CMake for Pico 2..."
+PICO_BOARD=pico2 cmake ..
 
 # Build the project
 echo "Building project..."
-make -j$(nproc)
+PICO_BOARD=pico2 make -j$(nproc)
 
 # Check if the output file was created
 if [ -f "pico_multi.uf2" ]; then
     echo "==================================="
     echo "✅ Build successful!"
     echo "Output: build/pico_multi.uf2"
+    echo ""
+    echo "Ready to flash to Pico 2!"
+    echo "DIP switch combinations:"
+    echo "  000 - Blink app (default/fallback)"
+    echo "  001 - Motor app"
+    echo "  010 - Switch app" 
+    echo "  011 - Relay app"
+    echo "  100 - ADC app"
     echo "==================================="
     
     # Show file size
