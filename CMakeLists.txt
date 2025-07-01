@@ -21,7 +21,7 @@ add_executable(pico_multi
     src/blink_app.c
     src/relay_app.c
     src/adc_app.c
-    # src/usb_descriptors.c  # Temporarily disabled due to build issues
+    src/usb_descriptors.c
     apps/motor/motor.c
 )
 
@@ -39,7 +39,7 @@ target_link_libraries(pico_multi
     hardware_gpio
     hardware_timer
     hardware_adc
-    # tinyusb_device  # Temporarily disabled
+    tinyusb_device
 )
 
 # Enable USB output, disable UART output
