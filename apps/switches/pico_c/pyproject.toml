@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "switch_network"
+version = "0.0.1"
+description = "Control code for failsafe RF switches."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{ name="Charlie Tolley", email="tolley412e@berkeley.edu" }]
+requires-python = ">=3.8"
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+  "pyserial",
+  "mockserial @ git+https://github.com/christianhbye/mockserial.git",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "flake8",
+  "pytest",
+  "pytest-cov",
+  "pytest-mock",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+  "--cov=switch_network",
+  "--cov-report=term-missing",
+  "--cov-report=xml",
+  "--junitxml=junit.xml",
+  "-o junit_family=legacy",
+]
+
+[tool.black]
+line-length = 79
+extend-exclude = "scripts/test_scripts"
