@@ -1,16 +1,16 @@
 # TODO - Pico Multi-App Firmware
 
 ## Build System
-- [ ] Create top-level CMakeLists.txt that includes pico_sdk and builds all apps
+- [x] Create top-level CMakeLists.txt that includes pico_sdk and builds all apps
 - [ ] Add CMake subdirectory configuration for each app
-- [ ] Configure unified build output as `pico_multi.uf2`
-- [ ] Add build scripts for automated compilation
+- [x] Configure unified build output as `pico_multi.uf2`
+- [x] Add build scripts for automated compilation
 - [ ] Set up GitHub Actions CI/CD pipeline
 
 ## App Integration
-- [ ] Create header files for each app with proper `*_app()` function declarations
-- [ ] Modify motor app to expose `motor_app()` instead of `main()`
-- [ ] Modify switch app to expose `switch_app()` instead of `main()`
+- [x] Create header files for each app with proper `*_app()` function declarations
+- [x] Modify motor app to expose `motor_app()` instead of `main()`
+- [x] Modify switch app to expose `switch_app()` instead of `main()`
 - [ ] Add remaining apps via git subtree:
   - [ ] Thermocouple (therm) - Code 0
   - [ ] Sensor monitoring - Code 3
@@ -18,7 +18,7 @@
   - [ ] ADC monitor - Code 5
 
 ## USB Configuration
-- [ ] Implement USB descriptor modification to set serial number based on DIP code
+- [x] Implement USB descriptor modification to set serial number based on DIP code
 - [ ] Test USB enumeration with PICO_000, PICO_001, etc. format
 - [ ] Verify multiple boards enumerate correctly with unique IDs
 - [ ] Create udev rules example for Linux hosts
@@ -37,7 +37,7 @@
 - [ ] Include example host scripts for each app type
 
 ## Testing
-- [ ] Create test harness for DIP switch reading
+- [x] Create test harness for DIP switch reading
 - [ ] Implement automated tests for app dispatch logic
 - [ ] Add integration tests for each app
 - [ ] Test watchdog timer behavior
@@ -63,8 +63,8 @@
 - [ ] Implement app-to-app communication protocol
 
 ## Known Issues
-- [ ] USB serial number override not yet implemented (requires TinyUSB customization)
-- [ ] Apps currently use their own `main()` functions - need refactoring
+- [x] ~~USB serial number override not yet implemented (requires TinyUSB customization)~~ ✅ COMPLETED
+- [x] ~~Apps currently use their own `main()` functions - need refactoring~~ ✅ COMPLETED  
 - [ ] No unified error reporting mechanism across apps
 
 ## Notes

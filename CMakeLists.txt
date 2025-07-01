@@ -18,6 +18,7 @@ add_executable(pico_multi
     src/main.c
     src/motor_app.c
     src/switch_app.c
+    src/usb_descriptors.c
     apps/motor/motor.c
 )
 
@@ -34,6 +35,7 @@ target_link_libraries(pico_multi
     hardware_watchdog
     hardware_gpio
     hardware_timer
+    tinyusb_device
 )
 
 # Enable USB output, disable UART output

@@ -1,6 +1,7 @@
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
 #include "hardware/watchdog.h"
+#include "usb_descriptors.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -57,18 +58,16 @@ static void init_dip_switches(void) {
     sleep_ms(10);
 }
 
-// Set USB serial number based on DIP code
-static void set_usb_serial_number(uint8_t code) {
-    static char serial_number[16];
-    snprintf(serial_number, sizeof(serial_number), "PICO_%03d", code);
-    
-    // This would require modifying the USB descriptor
-    // For now, just document the intended serial number
-    printf("USB Serial Number: %s\n", serial_number);
+// Log the USB serial number that was set during initialization
+static void log_usb_serial_number(uint8_t code) {
+    printf("USB Serial Number: PICO_%03d\n", code);
 }
 
 
 int main(void) {
+    // Initialize USB serial number based on DIP switches BEFORE USB enumeration
+    usb_serial_init();
+    
     // Initialize stdio for debug output
     stdio_init_all();
     
@@ -81,8 +80,8 @@ int main(void) {
     // Read DIP switch code
     uint8_t app_code = read_dip_code();
     
-    // Set USB serial number
-    set_usb_serial_number(app_code);
+    // Log the USB serial number that was set during initialization
+    log_usb_serial_number(app_code);
     
     // Validate app code
     if (app_code >= MAX_APPS) {
