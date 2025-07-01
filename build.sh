@@ -24,9 +24,21 @@ fi
 
 cd build
 
-# Check if CMAKE_TOOLCHAIN_FILE is set
+# Set PICO_SDK_PATH if not already set
 if [ -z "$PICO_SDK_PATH" ]; then
-    echo "WARNING: PICO_SDK_PATH not set. Assuming SDK is in PATH."
+    if [ -d "../pico-sdk" ]; then
+        export PICO_SDK_PATH="$(realpath ../pico-sdk)"
+        echo "Using local Pico SDK: $PICO_SDK_PATH"
+    elif [ -d "pico-sdk" ]; then
+        export PICO_SDK_PATH="$(realpath pico-sdk)"
+        echo "Using local Pico SDK: $PICO_SDK_PATH"
+    else
+        echo "ERROR: PICO_SDK_PATH not set and no local pico-sdk directory found!"
+        echo "Please set PICO_SDK_PATH or place the pico-sdk in the project directory."
+        exit 1
+    fi
+else
+    echo "Using PICO_SDK_PATH: $PICO_SDK_PATH"
 fi
 
 # Configure with CMake for Pico 2 (RP2350)

@@ -1,12 +1,11 @@
 #include "pico/stdlib.h"
-#include "pico/unique_id.h"
+#include "hardware/gpio.h"
 #include "hardware/watchdog.h"
-// #include "usb_descriptors.h"  // Temporarily disabled
 #include <stdio.h>
 #include <string.h>
 
 // App headers
-#include "motor_app.h" 
+#include "motor_app.h"
 #include "switch_app.h"
 #include "blink_app.h"
 #include "relay_app.h"
@@ -28,7 +27,7 @@ typedef struct {
 
 // App dispatch table
 static const AppDescriptor app_table[MAX_APPS] = {
-    {"blink",  blink_app},   // 0b000 - LED blink (default when no DIP switches)
+    {"blink",  blink_app},   // 0b000 - LED blink (default)
     {"motor",  motor_app},   // 0b001 - Motor controller
     {"switch", switch_app},  // 0b010 - Switch network
     {"relay",  relay_app},   // 0b011 - Relay control
@@ -43,85 +42,64 @@ static uint8_t read_dip_code(void) {
            gpio_get(DIP0_PIN);
 }
 
-// Initialize DIP switch GPIOs
+// Initialize DIP switch GPIOs (pull-ups for default HIGH)
 static void init_dip_switches(void) {
-    const uint dip_pins[] = {DIP0_PIN, DIP1_PIN, DIP2_PIN};
-    
+    const uint dip_pins[] = { DIP0_PIN, DIP1_PIN, DIP2_PIN };
     for (int i = 0; i < 3; i++) {
         gpio_init(dip_pins[i]);
         gpio_set_dir(dip_pins[i], GPIO_IN);
-        gpio_pull_down(dip_pins[i]);
+        gpio_pull_up(dip_pins[i]);
     }
-    
-    // Allow switches to settle
-    sleep_ms(10);
+    sleep_ms(10); // allow switches to settle
 }
 
-// Log the USB serial number that was set during initialization
-static void log_usb_serial_number(uint8_t code) {
-    printf("USB Serial Number: PICO_%03d\n", code);
+// Log the device ID over USB-CDC
+static void log_device_id(uint8_t code) {
+    printf("Device ID: %u\r\n", code);
 }
-
 
 int main(void) {
-    // Initialize USB serial number based on DIP switches BEFORE USB enumeration
-    // usb_serial_init();  // Temporarily disabled
-    
-    // Initialize stdio for debug output
-    stdio_init_all();
-    
-    // Brief delay to ensure USB enumeration
-    sleep_ms(1000);
-    
-    // Initialize DIP switches
+    // 1) Initialize DIP switches before USB init
     init_dip_switches();
-    
-    // Read DIP switch code
-    uint8_t app_code = read_dip_code();
-    
-    // Log the USB serial number that was set during initialization
-    log_usb_serial_number(app_code);
-    
-    // Validate app code and fallback to blink if needed
-    if (app_code >= MAX_APPS) {
-        printf("WARNING: Invalid DIP code %d (max %d), defaulting to blink\n", app_code, MAX_APPS - 1);
+    // 2) Bring up USB CDC (stdio)
+    stdio_init_all();
+    // allow host to enumerate
+    sleep_ms(1000);
+
+    // Read DIP code and log as device identifier
+    uint8_t app_code = read_dip_code() & 0x07;
+    log_device_id(app_code);
+
+    // Validate app code
+    if (app_code >= MAX_APPS || app_table[app_code].app_func == NULL) {
+        printf("WARNING: invalid or unimplemented code %d, defaulting to blink\r\n", app_code);
         app_code = 0;
     }
-    
-    // Get app descriptor
     const AppDescriptor* app = &app_table[app_code];
-    
-    // Check if app is implemented, fallback to blink if not
-    if (app->app_func == NULL) {
-        printf("WARNING: App '%s' (code %d) not implemented, defaulting to blink\n", app->name, app_code);
-        app_code = 0;
-        app = &app_table[0];
-    }
-    
+
     // Display startup info
-    printf("\n");
-    printf("=================================\n");
-    printf("PICO Multi-App Firmware v1.0\n");
-    printf("=================================\n");
-    printf("DIP Switch Code: %d (0b%d%d%d)\n", 
+    printf("\r\n=================================\r\n");
+    printf("PICO Multi-App Firmware v1.0\r\n");
+    printf("=================================\r\n");
+    printf("DIP Switch Code: %d (0b%d%d%d)\r\n",
            app_code,
            (app_code >> 2) & 1,
-           (app_code >> 1) & 1, 
+           (app_code >> 1) & 1,
            app_code & 1);
-    printf("Starting App: %s\n", app->name);
-    printf("=================================\n\n");
-    
+    printf("Starting App: %s\r\n", app->name);
+    printf("=================================\r\n\r\n");
+
     // Enable watchdog (8 seconds)
     watchdog_enable(8000, 1);
-    
+
     // Launch the selected app
     app->app_func();
-    
-    // Should never reach here
-    printf("ERROR: App returned unexpectedly\n");
+
+    // Should never return
+    printf("ERROR: App returned unexpectedly\r\n");
     while (1) {
         tight_loop_contents();
     }
-    
     return 0;
 }
+
