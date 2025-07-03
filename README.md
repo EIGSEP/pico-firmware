@@ -31,14 +31,11 @@ cmake ..
 make
 
 # Install udev rule for non-root access
-echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", MODE="0666"' \
-  | sudo tee /etc/udev/rules.d/99-picotool.rules
+sudo cp udev/99-picotool.rules /etc/udev/rules.d/
 
 # Reload udev rules (or reboot)
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
-
-> **Note:** Adjust `idVendor` and `idProduct` if you are using a different board.
 
 ---
 
@@ -58,7 +55,7 @@ git submodule update --init pico-sdk
 ./build.sh
 ```
 
-- The `build.sh` script will invoke CMake and generate a `build/firmware.uf2` file ready for flashing.
+- The `build.sh` script will invoke CMake and generate a `build/pico_multi.uf2` file ready for flashing.
 
 ---
 
@@ -68,33 +65,9 @@ Use the provided Python script `flash_picos.py` to automate flashing one or mult
 
 ```bash
 # Run the flashing script
-python3 flash_picos.py --firmware build/firmware.uf2
+pip3 install serial
+python3 flash_picos.py --uf2 build/pico_multi.uf2
 ```
 
 ### Options
-
-- `--firmware <path>`: Path to the UF2 file (default: `build/firmware.uf2`)
-- `--port <device>`: Specify a serial port (e.g., `/dev/ttyACM0`) to flash a single board
-- `--all`: Flash all connected Pico devices automatically
-
-> **Tip:** If you encounter permission errors, ensure your user is in the `plugdev` group or rerun the udev rules step.
-
----
-
-## 4. Troubleshooting
-
-- ``** not found:** Make sure the `picotool` binary is in your `PATH` or invoke it via `./build/picotool`.
-- **Udev rule not applied:** Check `/etc/udev/rules.d/99-picotool.rules` and reload rules with `sudo udevadm`.
-- **Board not detected:** Hold the BOOTSEL button while plugging in the Pico or use the `--all` flag to scan automatically.
-
----
-
-## License & Author
-
-- **Author:** Christian Bye
-- **License:** MIT
-
----
-
-For any questions or issues, please open an issue on the repository. Happy hacking!
-
+See `python flash_picos.py --help`.
