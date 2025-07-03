@@ -98,7 +98,7 @@ int main(void) {
     uint8_t app_code = read_dip_code() & 0x07;
 
     // Wait for GO command
-    wait_for_go_command();
+    // wait_for_go_command();
 
     // Get unique board ID
     pico_unique_board_id_t unique_id;
