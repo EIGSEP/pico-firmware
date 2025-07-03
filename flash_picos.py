@@ -14,16 +14,15 @@ PICO_PID_CDC = 0x0009  # CDC serial mode PID
 
 def find_pico_ports():
     """
-    Return a list of (device, serial, is_bootsel) tuples for all ttyACM*/ttyUSB* ports
-    whose USB VID/PID matches the Pico in either BOOTSEL or CDC mode.
+    Return a list of (device, serial, is_bootsel) tuples for all
+    ttyACM*/ttyUSB* ports whose USB VID/PID matches the Pico in either
+    BOOTSEL or CDC mode.
     """
-    ports = []
+    ports = {}
     for info in list_ports.comports():
         if info.vid == PICO_VID:
-            if info.pid == PICO_PID_BOOTSEL:
-                ports.append((info.device, info.serial_number, True))
-            elif info.pid == PICO_PID_CDC:
-                ports.append((info.device, info.serial_number, False))
+            if info.pid in (PICO_PID_BOOTSEL, PICO_PID_CDC):
+                ports[info.device] = info.serial_number
     return ports
 
 
@@ -32,19 +31,20 @@ def flash_uf2(uf2_path, serial):
     Flash the UF2 onto the Pico whose USB serial number is `serial`,
     using picotool’s --ser selector.
     """
-    cmd = [
+    _cmd = [
         "picotool",
         "load",
-        "--vid",
-        hex(PICO_VID),
-        "--pid",
-        hex(PICO_PID_BOOTSEL),
+#        "--vid",
+#        hex(PICO_VID),
+#        "--pid",
+#        hex(PICO_PID_BOOTSEL),
         "--ser",
         serial,
         "-x",
         uf2_path,
         "-f",
     ]
+    cmd = f"picotool load --ser {serial} -x {uf2_path} -f".split()
     print(f"Flashing {uf2_path} → serial={serial}")
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -76,7 +76,11 @@ def main():
     p = argparse.ArgumentParser(
         description="Flash all attached Picos, read JSON from each, save to files"
     )
-    p.add_argument("--uf2", required=True, help="Path to your pico_multi.uf2")
+    p.add_argument(
+        "--uf2",
+        default="build/pico_multi.uf2",
+        help="Path to your pico_multi.uf2"
+    )
     p.add_argument(
         "--baud",
         type=int,
@@ -99,15 +103,16 @@ def main():
     ports = find_pico_ports()
     if not ports:
         print(
-            "❌ No Raspberry Pi Pico serial ports found.",
+            "No Raspberry Pi Pico serial ports found.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    print(f"Found Picos on: {', '.join(ports)}")
-    for port in ports:
+    print(f"Found Picos on: {ports}")
+    for port_dev, port_serial in ports.items():
+        print("Flashing Pico on port:", port_dev)
         try:
-            flash_uf2(args.uf2, serial)
+            flash_uf2(args.uf2, port_serial)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
@@ -116,12 +121,12 @@ def main():
         time.sleep(1)
 
         try:
-            data = read_json_from_serial(device, args.baud, args.timeout)
+            data = read_json_from_serial(port_serial, args.baud, args.timeout)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
 
-        uid = data.get("unique_id") or serial
+        uid = data.get("unique_id") or port_dev
         out_file = f"{args.out_prefix}_{uid}.json"
         with open(out_file, "w") as f:
             json.dump(data, f, indent=2)
