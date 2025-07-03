@@ -11,6 +11,10 @@ target_link_libraries(pico_bootloader
 	pico_stdlib
 	pico_unique_id
 )
+
+pico_set_uf2_family(pico_bootloader rp2350-arm-s)
+pico_embed_pt_in_binary(pico_bootloader "${CMAKE_CURRENT_LIST_DIR}/pt.json")
+
 pico_enable_stdio_usb(pico_bootloader 1)
 pico_enable_stdio_uart(pico_bootloader 0)
 pico_add_extra_outputs(pico_bootloader)

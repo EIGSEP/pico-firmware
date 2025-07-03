@@ -30,14 +30,12 @@ target_link_libraries(pico_multi
     hardware_gpio
     hardware_watchdog
     hardware_timer
+    pico_unique_id
 )
 
 # enable USB CDC for stdio
 pico_enable_stdio_usb(pico_multi 1)
 pico_enable_stdio_uart(pico_multi 0)
-
-# tell the UF2 generator to place code at +0x8000 bytes
-set(PICO_FLASH_OFFSET 0x8000)
 
 # generate UF2, map file, etc.
 pico_add_extra_outputs(pico_multi)

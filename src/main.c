@@ -1,6 +1,7 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/watchdog.h"
+#include "pico/unique_id.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -12,6 +13,9 @@
 #define DIP0_PIN 2
 #define DIP1_PIN 3
 #define DIP2_PIN 4
+
+// LED GPIO pin
+#define LED_PIN PICO_DEFAULT_LED_PIN
 
 // Number of supported apps
 #define MAX_APPS 2
@@ -47,21 +51,67 @@ static void init_dip_switches(void) {
     sleep_ms(10); // allow switches to settle
 }
 
+// Initialize LED GPIO
+static void init_led(void) {
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+    gpio_put(LED_PIN, 1); // Turn LED on
+}
+
 // Log the device ID over USB-CDC
 static void log_device_id(uint8_t code) {
     printf("Device ID: %u\r\n", code);
 }
 
+// Wait for "GO" command from serial
+static void wait_for_go_command(void) {
+    char buffer[10];
+    int pos = 0;
+    
+    while (1) {
+        int c = getchar();
+        if (c != EOF) {
+            if (c == '\r' || c == '\n') {
+                buffer[pos] = '\0';
+                if (strcmp(buffer, "GO") == 0) {
+                    return;
+                }
+                pos = 0;
+            } else if (pos < 9) {
+                buffer[pos++] = (char)c;
+            }
+        }
+    }
+}
+
 int main(void) {
     // 1) Initialize DIP switches before USB init
     init_dip_switches();
-    // 2) Bring up USB CDC (stdio)
+    // 2) Initialize LED and turn it on
+    init_led();
+    // 3) Bring up USB CDC (stdio)
     stdio_init_all();
     // allow host to enumerate
     sleep_ms(1000);
 
-    // Read DIP code and log as device identifier
+    // Read DIP code early
     uint8_t app_code = read_dip_code() & 0x07;
+
+    // Wait for GO command
+    wait_for_go_command();
+
+    // Get unique board ID
+    pico_unique_board_id_t unique_id;
+    pico_get_unique_board_id(&unique_id);
+
+    // Send response with unique ID and DIP code
+    printf("ID:");
+    for (int i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
+        printf("%02X", unique_id.id[i]);
+    }
+    printf(",DIP:%d\r\n", app_code);
+
+    // Original device ID log
     log_device_id(app_code);
 
     // Validate app code

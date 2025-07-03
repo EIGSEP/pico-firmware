@@ -20,15 +20,15 @@ void blink_app2(void) {
         // First blink
         gpio_put(LED_PIN, 1);
         printf("APP2 v2: LED ON (blink 1)\n");
-        sleep_ms(150);
+        sleep_ms(500);
         
         gpio_put(LED_PIN, 0);
-        sleep_ms(150);
+        sleep_ms(500);
         
         // Second blink
         gpio_put(LED_PIN, 1);
         printf("APP2 v2: LED ON (blink 2)\n");
-        sleep_ms(150);
+        sleep_ms(1000);
         
         gpio_put(LED_PIN, 0);
         printf("APP2 v2: LED OFF (pause)\n");

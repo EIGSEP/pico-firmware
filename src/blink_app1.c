@@ -19,10 +19,10 @@ void blink_app1(void) {
     while (true) {
         gpio_put(LED_PIN, 1);
         printf("APP1 v2: LED ON\n");
-        sleep_ms(100);  // Changed from 200ms to 100ms
+        sleep_ms(1000);  // Changed from 200ms to 100ms
         
         gpio_put(LED_PIN, 0);
         printf("APP1 v2: LED OFF\n");
-        sleep_ms(100);  // Changed from 200ms to 100ms
+        sleep_ms(1000);
     }
 }
