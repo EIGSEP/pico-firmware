@@ -61,7 +61,7 @@ def read_json_from_serial(port, baud, timeout):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Flash all attached Picos, read JSON from each, save to files"
+        description="Flash all attached Picos, read JSON from each, save to single file"
     )
     p.add_argument(
         "--uf2",
@@ -81,9 +81,9 @@ def main():
         help="Seconds to wait for each Pico's JSON (default: 10)",
     )
     p.add_argument(
-        "--out-prefix",
-        default="device_info",
-        help="Prefix for output JSON files (default: device_info)",
+        "--output",
+        default="devices_info.json",
+        help="Output JSON file (default: devices_info.json)",
     )
     args = p.parse_args()
 
@@ -96,6 +96,8 @@ def main():
         sys.exit(1)
 
     print(f"Found Picos on: {ports}")
+    all_devices = []
+    
     for port_dev, port_serial in ports.items():
         print("Flashing Pico on port:", port_dev)
         try:
@@ -113,11 +115,16 @@ def main():
             print(e, file=sys.stderr)
             continue
 
-        uid = data.get("unique_id") or port_serial
-        out_file = f"{args.out_prefix}_{uid}.json"
-        with open(out_file, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"✔ Wrote {out_file}")
+        # Add port and serial info to the device data
+        data["port"] = port_dev
+        data["usb_serial"] = port_serial
+        all_devices.append(data)
+        print(f"✔ Read device info from {port_dev}")
+    
+    # Write all device info to a single file
+    with open(args.output, "w") as f:
+        json.dump(all_devices, f, indent=2)
+    print(f"\n✔ Wrote all device information to {args.output} ({len(all_devices)} devices)")
 
 
 if __name__ == "__main__":
