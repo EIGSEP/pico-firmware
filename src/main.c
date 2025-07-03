@@ -8,14 +8,6 @@
 // App headers
 #include "pico_multi.h"
 
-// DIP switch GPIO pins
-#define DIP0_PIN 2
-#define DIP1_PIN 3
-#define DIP2_PIN 4
-
-// LED GPIO pin
-#define LED_PIN PICO_DEFAULT_LED_PIN
-
 
 void motor_server(char *cmd_str) {
     send_json(2, KV_STR,
@@ -83,10 +75,9 @@ static void init_led(void) {
 
 int main(void) {
     char line[BUFFER_SIZE];  // buffer to hold input command
-    uint32_t cadence_ms = 300;  //cadence for loop?
     int index = 0;
     bool led_state=1;
-    absolute_time_t next_sample = make_timeout_time_ms(cadence_ms);
+    absolute_time_t next_sample = make_timeout_time_ms(STATUS_CADENCE_MS);
 
     // 1) Initialize DIP switches before USB init
     init_dip_switches();
@@ -139,6 +130,7 @@ int main(void) {
             }
         }
 
+        // Perform every-loop operations
         switch (app_code) {
             case APP_MOTOR:
                 motor_op();
@@ -147,7 +139,7 @@ int main(void) {
                 no_op();
         }
 
-        // Perform scheduled tasks
+        // Perform scheduled status reporting
         if (absolute_time_diff_us(get_absolute_time(), next_sample) <= 0) {
             gpio_put(LED_PIN, led_state);
             led_state = !led_state;
@@ -158,7 +150,7 @@ int main(void) {
                 default:
                     no_status(app_code);
             }
-            next_sample = make_timeout_time_ms(cadence_ms);
+            next_sample = make_timeout_time_ms(STATUS_CADENCE_MS);
         }
     }
 }

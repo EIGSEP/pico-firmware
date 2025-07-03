@@ -22,19 +22,14 @@ add_executable(pico_multi
 add_library(cjson STATIC lib/cJSON/cJSON.c)
 target_include_directories(cjson PUBLIC lib/cJSON)
 
-add_library(base64 STATIC lib/base64/base64.c)
-target_include_directories(base64 PUBLIC lib/base64)
-
 add_library(eigsep_command STATIC lib/eigsep_command/eigsep_command.c)
 target_include_directories(eigsep_command PUBLIC
     lib/eigsep_command
     lib/cJSON
-    lib/base64
 )
 target_link_libraries(eigsep_command
   PUBLIC
     cjson
-    base64
 )
 
 target_include_directories(pico_multi PRIVATE
@@ -50,7 +45,6 @@ target_link_libraries(pico_multi
     hardware_timer
     pico_unique_id
     cjson
-    base64
     eigsep_command
 )
 
