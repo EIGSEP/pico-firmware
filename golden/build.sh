@@ -1,30 +1,61 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-# Ensure PICO_SDK_PATH is defined
-if [ -z "${PICO_SDK_PATH:-}" ]; then
-    echo "Error: PICO_SDK_PATH is not set."
-    echo "Please export PICO_SDK_PATH to point at your pico-sdk clone."
-    exit 1
+# Build script for Pico Multi-App Firmware
+# Creates pico_multi.uf2 with all apps integrated
+
+set -e
+
+echo "==================================="
+echo "Building Pico Multi-App Firmware"
+echo "==================================="
+echo "Target: Raspberry Pi Pico 2 (RP2350)"
+echo "Features:"
+echo "  • Multi-app firmware with DIP switch selection"
+echo "  • Dynamic USB serial numbers (PICO_000, PICO_001, etc.)"
+echo "  • Apps: motor, switch, blink, relay, adc"
+echo "  • Blink app as fallback for DIP 000"
+echo "==================================="
+
+# Check if build directory exists
+if [ ! -d "build" ]; then
+    echo "Creating build directory..."
+    mkdir build
 fi
 
-# Locate script dir and create build folder
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build"
+cd build
 
-echo "=== Building Stage1 in ${BUILD_DIR} ==="
-mkdir -p "${BUILD_DIR}"
-cd "${BUILD_DIR}"
+# Set PICO_SDK_PATH if not already set
+if [ -z "$PICO_SDK_PATH" ]; then
+    if [ -d "../pico-sdk" ]; then
+        export PICO_SDK_PATH="$(realpath ../pico-sdk)"
+        echo "Using local Pico SDK: $PICO_SDK_PATH"
+    elif [ -d "pico-sdk" ]; then
+        export PICO_SDK_PATH="$(realpath pico-sdk)"
+        echo "Using local Pico SDK: $PICO_SDK_PATH"
+    else
+        echo "ERROR: PICO_SDK_PATH not set and no local pico-sdk directory found!"
+        echo "Please set PICO_SDK_PATH or place the pico-sdk in the project directory."
+        exit 1
+    fi
+else
+    echo "Using PICO_SDK_PATH: $PICO_SDK_PATH"
+fi
 
-# Configure
-echo "-- Running CMake"
-cmake ..
+# Configure with CMake for Pico 2 (RP2350)
+echo "Configuring with CMake for Pico 2..."
+PICO_BOARD=pico2 cmake ..
 
-# Compile
-echo "-- Running Make"
-make -j"$(nproc)"
+# Build the project
+echo "Building project..."
+PICO_BOARD=pico2 make -j$(nproc)
 
-# Report artifact
-echo "=== Build complete ==="
-echo "  UF2 output is in: ${BUILD_DIR}/*.uf2"
-
+# Check if the output file was created
+if [ -f "pico_bootloader.uf2" ]; then
+    echo "==================================="
+    echo "✅ Build successful!"
+    echo "==================================="
+    
+else
+    echo "❌ Build failed - pico_multi.uf2 not found"
+    exit 1
+fi
