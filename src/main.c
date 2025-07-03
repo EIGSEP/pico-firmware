@@ -9,22 +9,22 @@
 #include "pico_multi.h"
 
 
-void motor_server(char *cmd_str) {
-    send_json(2, KV_STR,
-            "name", "motor_server",
-            "status", "ok");
-}
-
-void motor_op() {
-    return;
-}
-
-void motor_status() {
-    send_json(2,
-        KV_STR, "name", "motor_status",
-        KV_INT, "value", 17
-    );
-}
+//void motor_server(char *cmd_str) {
+//    send_json(2, KV_STR,
+//            "name", "motor_server",
+//            "status", "ok");
+//}
+//
+//void motor_op() {
+//    return;
+//}
+//
+//void motor_status() {
+//    send_json(2,
+//        KV_STR, "name", "motor_status",
+//        KV_INT, "value", 17
+//    );
+//}
 
 void no_server(char *cmd_str) {
     // We don't have an app for that
@@ -105,6 +105,14 @@ int main(void) {
         KV_STR, "unique_id", uid_str,
         KV_INT, "app_code", app_code
     );
+
+    // Run app-dependent initialization
+    switch (app_code) {
+        case APP_MOTOR:
+            motor_init();
+            break;
+        default:
+    }
    
     while (true) {
         // Process incoming json-formatted commands 
