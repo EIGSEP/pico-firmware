@@ -14,18 +14,13 @@ pico_sdk_init()
 # add executable
 add_executable(pico_multi
     src/main.c
-    src/motor_app.c
-    src/switch_app.c
-    src/blink_app.c
-    src/relay_app.c
-    src/adc_app.c
-    apps/motor/motor.c
+    src/blink_app1.c
+    src/blink_app2.c
 )
 
 # include directories
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
-    ${CMAKE_CURRENT_LIST_DIR}/apps/motor
 )
 
 # link against Pico stdlib and required hardware libraries
