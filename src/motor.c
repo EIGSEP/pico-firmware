@@ -1,5 +1,6 @@
 #include "motor.h"
 #include "pico/stdlib.h"
+#include "cJSON.h"
 
 
 /**
@@ -86,17 +87,26 @@ void stepper_close(Stepper *m) {
 }
 
 // cmd is a JSON command string with pulses and delay_us for az/el
-void motor_server(Stepper *azimuth, Stepper *elevation, const char *cmd_str) {
+void motor_server(Stepper *azimuth, Stepper *elevation, const char *json_str) {
     int32_t pulses_az, pulses_el;
     uint32_t delay_us_az, delay_us_el;
 
-    sscanf(cmd_str, "%d %d %d %d", &pulses_az, &pulses_el, &delay_us_az, &delay_us_el);
+    cJSON *root = cJSON_Parse(json_str);
+    cJSON *pulses_az_json = cJSON_GetObjectItem(root, "pulses_az");
+    cJSON *pulses_el_json = cJSON_GetObjectItem(root, "pulses_el");
+    cJSON *delay_us_az_json = cJSON_GetObjectItem(root, "delay_us_az");
+    cJSON *delay_us_el_json = cJSON_GetObjectItem(root, "delay_us_el");
+
+    pulses_az = pulses_az_json ? pulses_az_json->valueint : 0;
+    pulses_el = pulses_el_json ? pulses_el_json->valueint : 0;
+    delay_us_az = delay_us_az_json ? delay_us_az_json->valueint : 600;
+    delay_us_el = delay_us_el_json ? delay_us_el_json->valueint : 600;
 
     // update the stepper motors
     azimuth->remaining_steps += pulses_az;
     elevation->remaining_steps += pulses_el;
-    azimuth->delay_us = delay_us;
-    elevation->delay_us = delay_us;
+    azimuth->delay_us = delay_us_az;
+    elevation->delay_us = delay_us_el;
 }
 
 
