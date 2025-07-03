@@ -46,7 +46,7 @@ static void init_dip_switches(void) {
     for (int i = 0; i < 3; i++) {
         gpio_init(dip_pins[i]);
         gpio_set_dir(dip_pins[i], GPIO_IN);
-        gpio_pull_up(dip_pins[i]); // XXX is this needed?
+     //   gpio_pull_up(dip_pins[i]); // XXX is this needed?
     }
     sleep_ms(10); // allow switches to settle
 }
@@ -58,31 +58,6 @@ static void init_led(void) {
     gpio_put(LED_PIN, 1); // Turn LED on
 }
 
-// Log the device ID over USB-CDC
-static void log_device_id(uint8_t code) {
-    printf("Device ID: %u\r\n", code);
-}
-
-// Wait for "GO" command from serial
-static void wait_for_go_command(void) {
-    char buffer[10];
-    int pos = 0;
-    
-    while (1) {
-        int c = getchar();
-        if (c != EOF) {
-            if (c == '\r' || c == '\n') {
-                buffer[pos] = '\0';
-                if (strcmp(buffer, "GO") == 0) {
-                    return;
-                }
-                pos = 0;
-            } else if (pos < 9) {
-                buffer[pos++] = (char)c;
-            }
-        }
-    }
-}
 
 int main(void) {
     // 1) Initialize DIP switches before USB init
@@ -97,42 +72,26 @@ int main(void) {
     // Read DIP code early
     uint8_t app_code = read_dip_code() & 0x07;
 
-    // Wait for GO command
-    // wait_for_go_command();
-
     // Get unique board ID
     pico_unique_board_id_t unique_id;
     pico_get_unique_board_id(&unique_id);
-
-    // Send response with unique ID and DIP code
-    printf("ID:");
+    char uid_str[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
     for (int i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
-        printf("%02X", unique_id.id[i]);
+        sprintf(&uid_str[i*2], "%02X", unique_id.id[i]);
     }
-    printf(",DIP:%d\r\n", app_code);
-
-    // Original device ID log
-    log_device_id(app_code);
 
     // Validate app code
-    if (app_code >= MAX_APPS || app_table[app_code].app_func == NULL) {
-        printf("WARNING: invalid or unimplemented code %d, defaulting to blink\r\n", app_code);
-        app_code = 0;
-    }
+//    if (app_code >= MAX_APPS || app_table[app_code].app_func == NULL) {
+  //      printf("WARNING: invalid or unimplemented code %d, defaulting to blink\r\n", app_code);
+    //    app_code = 0;
+   // }
+    
     const AppDescriptor* app = &app_table[app_code];
 
-    // Display startup info
-    printf("\r\n=================================\r\n");
-    printf("PICO Multi-App Firmware v2.0\r\n");
-    printf("=================================\r\n");
-    printf("DIP Switch Code: %d (0b%d%d%d)\r\n",
-           app_code,
-           (app_code >> 2) & 1,
-           (app_code >> 1) & 1,
-           app_code & 1);
-    printf("Starting App: %s\r\n", app->name);
-    printf("=================================\r\n\r\n");
-
+    // emit JSON
+    printf("{\"unique_id\":\"%s\",\"gpio_code\":%d,\"app\":\"%s\"}\n",
+		    uid_str, app_code, app->name);
+   
     // Enable watchdog (8 seconds)
     watchdog_enable(8000, 1);
 
@@ -140,6 +99,7 @@ int main(void) {
     app->app_func();
 
     // Should never return
+    // XXX need better handling here
     printf("ERROR: App returned unexpectedly\r\n");
     while (1) {
         tight_loop_contents();
