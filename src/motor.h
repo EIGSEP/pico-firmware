@@ -16,17 +16,17 @@
 
 // define motor pins
 static const uint el_pins[5] = {
-    21,  // direction pin
-    18,  // pulse pin
-    0,  // enable pin
+    7,  // direction pin
+    5,  // pulse pin
+    6,  // enable pin
     1,  // CW value
     19   // CCW value
 };
 
 static const uint az_pins[5] = {
-    11,  // direction pin
-    12,  // pulse pin
-    0,   // enable pin
+    10,  // direction pin
+    8,  // pulse pin
+    9,   // enable pin
     1,   // CW value
     10    // CCW value
 };
