@@ -48,7 +48,8 @@ static void handle_status_query(void) {
            (g_dip_code >> 1) & 1,
            g_dip_code & 1,
            g_app_name ? g_app_name : "unknown",
-           g_dip_code);
+           g_dip_code,
+           "2.0");
 }
 
 // Background task to check for status queries  
@@ -99,7 +100,7 @@ int main(void) {
 
     // Display startup info
     printf("\r\n=================================\r\n");
-    printf("PICO Multi-App Firmware v1.0\r\n");
+    printf("PICO Multi-App Firmware v2.0\r\n");
     printf("=================================\r\n");
     printf("DIP Switch Code: %d (0b%d%d%d)\r\n",
            app_code,

@@ -12,19 +12,31 @@ void blink_app2(void) {
     // Wait a bit for USB to stabilize
     sleep_ms(100);
     
-    printf("Starting LED blink app 2.\n");
+    printf("Starting LED blink app 2 (v2.0 - SLOW DOUBLE BLINK).\n");
     printf("LED on pin %d\n", LED_PIN);
+    printf("Pattern: Double blink (2x 150ms) then 1s pause\n");
     
-    // Main blink loop
+    // Main blink loop - DOUBLE BLINK pattern
     while (true) {
+        // First blink
         gpio_put(LED_PIN, 1);
-        printf("APP 2 : LED ON\n");
-        sleep_ms(1000);
-        check_for_status_query();  // Check for status requests
+        printf("APP2 v2: LED ON (blink 1)\n");
+        sleep_ms(150);
+        check_for_status_query();
         
         gpio_put(LED_PIN, 0);
-        printf("APP2 : LED OFF\n");
-        sleep_ms(1000);
-        check_for_status_query();  // Check for status requests
+        sleep_ms(150);
+        check_for_status_query();
+        
+        // Second blink
+        gpio_put(LED_PIN, 1);
+        printf("APP2 v2: LED ON (blink 2)\n");
+        sleep_ms(150);
+        check_for_status_query();
+        
+        gpio_put(LED_PIN, 0);
+        printf("APP2 v2: LED OFF (pause)\n");
+        sleep_ms(1000);  // Long pause
+        check_for_status_query();
     }
 }
