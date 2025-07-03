@@ -1,6 +1,7 @@
 #include "pico/stdlib.h"
 #include <stdio.h>
 #include "blink_app2.h"
+#include "app_common.h"
 
 void blink_app2(void) {
     // Initialize LED pin
@@ -19,9 +20,11 @@ void blink_app2(void) {
         gpio_put(LED_PIN, 1);
         printf("APP 2 : LED ON\n");
         sleep_ms(1000);
+        check_for_status_query();  // Check for status requests
         
         gpio_put(LED_PIN, 0);
         printf("APP2 : LED OFF\n");
         sleep_ms(1000);
+        check_for_status_query();  // Check for status requests
     }
 }

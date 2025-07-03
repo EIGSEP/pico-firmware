@@ -82,38 +82,44 @@ def read_device_info(port: str, timeout: float = 2.0) -> Dict[str, str]:
     """
     info = {
         'port': port,
-        'app': 'Unknown',
-        'id': 'Unknown',
+        'app_name': 'Unknown',
+        'dip_code': 'Unknown',
+        'dip_binary': 'Unknown',
+        'app_index': 'Unknown',
+        'firmware_version': 'Unknown',
         'status': 'Unknown'
     }
     
     try:
         # Open serial connection
         ser = serial.Serial(port, 115200, timeout=timeout)
-        time.sleep(0.1)  # Give device time to initialize
+        time.sleep(0.2)  # Give device time to initialize
         
         # Clear any existing data
         ser.reset_input_buffer()
         
-        # Send query command (you may need to adjust this based on your firmware)
-        # For now, we'll just read any initial output
-        ser.write(b'\n')  # Send newline to trigger any welcome message
+        # Send query command
+        ser.write(b'?')  # Send '?' to trigger status response
         time.sleep(0.1)
         
         # Read response
         response = ser.read(ser.in_waiting).decode('utf-8', errors='ignore')
         
-        # Parse response for app name and device ID
-        lines = response.strip().split('\n')
-        for line in lines:
-            if 'app' in line.lower():
-                info['app'] = line.strip()
-            elif 'id' in line.lower() or 'device' in line.lower():
-                info['id'] = line.strip()
-        
-        # If no specific info found, store raw response
-        if info['app'] == 'Unknown' and response:
-            info['app'] = response[:50].strip()  # First 50 chars
+        # Parse JSON response
+        import json
+        for line in response.strip().split('\n'):
+            if line.strip().startswith('{') and line.strip().endswith('}'):
+                try:
+                    data = json.loads(line)
+                    if data.get('type') == 'status':
+                        info['app_name'] = data.get('app_name', 'Unknown')
+                        info['dip_code'] = data.get('dip_code', 'Unknown')
+                        info['dip_binary'] = data.get('dip_binary', 'Unknown')
+                        info['app_index'] = data.get('app_index', 'Unknown')
+                        info['firmware_version'] = data.get('firmware_version', 'Unknown')
+                        break
+                except json.JSONDecodeError:
+                    pass
             
         info['status'] = 'Connected'
         ser.close()
@@ -161,8 +167,10 @@ def scan_all_devices(show_lsusb: bool = False):
         
         print(f"  Status: {info['status']}")
         if info['status'] == 'Connected':
-            print(f"  Running App: {info['app']}")
-            print(f"  Device ID: {info['id']}")
+            print(f"  Running App: {info['app_name']}")
+            print(f"  DIP Switch: {info['dip_code']} ({info['dip_binary']})")
+            print(f"  App Index: {info['app_index']}")
+            print(f"  Firmware Version: {info['firmware_version']}")
         
         print("-" * 70)
 
@@ -184,7 +192,10 @@ def monitor_devices(interval: float = 5.0):
                 if device.device not in known_devices:
                     print(f"\n[NEW] Device connected on {device.device}")
                     info = read_device_info(device.device)
-                    print(f"      App: {info['app']}")
+                    if info['status'] == 'Connected':
+                        print(f"      App: {info['app_name']} (DIP: {info['dip_binary']})")
+                    else:
+                        print(f"      Status: {info['status']}")
                     known_devices.add(device.device)
             
             # Check for removed devices

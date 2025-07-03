@@ -21,6 +21,7 @@ add_executable(pico_multi
 # include directories
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
+    ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
 # link against Pico stdlib and required hardware libraries
