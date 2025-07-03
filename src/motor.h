@@ -14,6 +14,10 @@
 #include <stdint.h>
 #include "hardware/gpio.h"
 
+// report motor status
+void motor_status(int32_t az_postion, int32_t el_position);
+
+
 /**
  * @struct Stepper
  * @brief Represents a stepper motor interface and its current state.
@@ -44,6 +48,7 @@ typedef struct {
     uint32_t delay_us;     /**< Delay in microseconds between steps */    
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
+    int32_t remainig_steps; /**< Remaining steps to move in current operation */
 } Stepper;
 
 /**
@@ -76,7 +81,7 @@ void stepper_init(Stepper *m,
  *
  * @param m Pointer to the Stepper instance representing the motor.
  */
-void stepper_move(Stepper *m);
+void one_step(Stepper *m);
 
 /**
  * @brief Disable the motor driver and clear outputs.
@@ -87,6 +92,13 @@ void stepper_move(Stepper *m);
  * @param m Pointer to the Stepper instance to disable.
  */
 void stepper_close(Stepper *m);
+
+// listen for commands
+void motor_server(Stepper *azimuth, Stepper *elevation);
+
+// main op function, calling one_step repeatedly
+void motor_op(Stepper *azimuth, Stepper *elevation);
+
 
 #endif // MOTOR_H
 
