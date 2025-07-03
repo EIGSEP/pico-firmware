@@ -1,0 +1,9 @@
+[
+  {
+    "unique_id": "DCA8CB7127A7AA6E",
+    "gpio_code": 0,
+    "app": "blink1",
+    "port": "/dev/ttyACM0",
+    "usb_serial": "DCA8CB7127A7AA6E"
+  }
+]
