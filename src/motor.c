@@ -1,6 +1,5 @@
 #include "motor.h"
 #include "pico/stdlib.h"
-#include "cJSON.h"
 
 
 /**
@@ -86,17 +85,11 @@ void stepper_close(Stepper *m) {
 }
 
 // cmd is a JSON command string with pulses and delay_us for az/el
-void motor_server(Stepper *azimuth, Stepper *elevation, const char *json_str) {
+void motor_server(Stepper *azimuth, Stepper *elevation, const char *cmd_str) {
     int32_t pulses_az, pulses_el;
-    uint32_t delay_us;
+    uint32_t delay_us_az, delay_us_el;
 
-    // Parse the JSON command string
-    cJSON *root = cJSON_Parse(json_str);
-    pulses_az = cJSON_GetObjectItem(root, "pulses_az")->valueint;
-    pulses_el = cJSON_GetObjectItem(root, "pulses_el")->valueint;
-    delay_us_az = cJSON_GetObjectItem(root, "delay_us_az")->valueint;
-    delay_us_el = cJSON_GetObjectItem(root, "delay_us_el")->valueint;
-    cJSON_Delete(root);
+    sscanf(cmd_str, "%d %d %d %d", &pulses_az, &pulses_el, &delay_us_az, &delay_us_el);
 
     // update the stepper motors
     azimuth->remaining_steps += pulses_az;
@@ -129,7 +122,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation) {
 		if abs(az_remaining) == 0 {
 		    break;
 		}
-		stepper_move(&azimuth);
+		one_step(&azimuth);
 		az_remaining -= azimuth.dir;
 	}
 	azimuth->remaining_steps = az_remaining;
@@ -139,7 +132,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation) {
 		if abs(el_remaining) == 0 {
 		    break;
 		}
-		stepper_move(&elevation);
+		one_step(&elevation);
 		el_remaining -= elevation.dir;
 	}
 	elevation->remaining_steps = el_remaining;

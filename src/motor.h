@@ -14,6 +14,23 @@
 #include <stdint.h>
 #include "hardware/gpio.h"
 
+// define motor pins
+static const uint el_pins[5] = {
+    21,  // direction pin
+    18,  // pulse pin
+    0,  // enable pin
+    1,  // CW value
+    19   // CCW value
+};
+
+static const uint az_pins[5] = {
+    11,  // direction pin
+    12,  // pulse pin
+    0,   // enable pin
+    1,   // CW value
+    10    // CCW value
+};
+
 // report motor status
 void motor_status(int32_t az_postion, int32_t el_position);
 
@@ -94,7 +111,7 @@ void one_step(Stepper *m);
 void stepper_close(Stepper *m);
 
 // listen for commands
-void motor_server(Stepper *azimuth, Stepper *elevation);
+void motor_server(Stepper *azimuth, Stepper *elevation, const char *cmd_str);
 
 // main op function, calling one_step repeatedly
 void motor_op(Stepper *azimuth, Stepper *elevation);
