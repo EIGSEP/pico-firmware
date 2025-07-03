@@ -7,8 +7,6 @@
 
 // App headers
 #include "pico_multi.h"
-#include "blink_app1.h"
-#include "blink_app2.h"
 
 // DIP switch GPIO pins
 #define DIP0_PIN 2
@@ -18,21 +16,44 @@
 // LED GPIO pin
 #define LED_PIN PICO_DEFAULT_LED_PIN
 
-// Number of supported apps
-#define MAX_APPS 2
 
-// App descriptor structure
-typedef struct {
-    const char* name;
-    void (*app_func)(void);
-} AppDescriptor;
+void motor_server(char *cmd_str) {
+    send_json(2, KV_STR,
+            "name", "motor_server",
+            "status", "ok");
+}
 
-// App dispatch table
-static const AppDescriptor app_table[MAX_APPS] = {
-    {"blink1",  blink_app1},   // 0b000 - LED blink (default)
-    {"blink2",  blink_app2},   // 0b001 - LED blink (default)
-};
+void motor_op() {
+    return;
+}
 
+void motor_status() {
+    send_json(2,
+        KV_STR, "name", "motor_status",
+        KV_INT, "value", 17
+    );
+}
+
+void no_server(char *cmd_str) {
+    // We don't have an app for that
+    send_json(2,
+        KV_STR, "status", "error",
+        KV_STR, "value", "Unknown app_code"
+    );
+    return;
+}
+
+void no_op() {
+    return;
+}
+
+void no_status(app_code) {
+    send_json(3,
+        KV_STR, "name", "no_status",
+        KV_STR, "status", "error",
+        KV_INT, "value", app_code
+    );
+}
 
 // Read 3-bit DIP switch code
 static uint8_t read_dip_code(void) {
@@ -61,6 +82,12 @@ static void init_led(void) {
 
 
 int main(void) {
+    char line[BUFFER_SIZE];  // buffer to hold input command
+    uint32_t cadence_ms = 300;  //cadence for loop?
+    int index = 0;
+    bool led_state=1;
+    absolute_time_t next_sample = make_timeout_time_ms(cadence_ms);
+
     // 1) Initialize DIP switches before USB init
     init_dip_switches();
     // 2) Initialize LED and turn it on
@@ -72,6 +99,7 @@ int main(void) {
 
     // Read DIP code early
     uint8_t app_code = read_dip_code() & 0x07;
+    printf("%d\n", app_code);
 
     // Get unique board ID
     pico_unique_board_id_t unique_id;
@@ -81,33 +109,57 @@ int main(void) {
         sprintf(&uid_str[i*2], "%02X", unique_id.id[i]);
     }
 
-    // Validate app code
-//    if (app_code >= MAX_APPS || app_table[app_code].app_func == NULL) {
-  //      printf("WARNING: invalid or unimplemented code %d, defaulting to blink\r\n", app_code);
-    //    app_code = 0;
-   // }
-    
-    const AppDescriptor* app = &app_table[app_code];
-
-    // emit JSON
-    send_json(3,
+    // emit JSON identifier for panda to keep track
+    send_json(2,
         KV_STR, "unique_id", uid_str,
-        KV_UINT8, "gpio_code", app_code,
-        KV_STR, "app", app->name
+        KV_INT, "app_code", app_code
     );
    
-    // Enable watchdog (8 seconds)
-    watchdog_enable(8000, 1);
+    while (true) {
+        // Process incoming json-formatted commands 
+        int c = getchar_timeout_us(0);
+        if (c != PICO_ERROR_TIMEOUT) {
+            // Dispatch a complete command
+            if (c == '\n') {
+                line[index] = '\0';
+                index = 0;
+                // Dispatch command to appropriate app
+                switch (app_code) {
+                    case APP_MOTOR:
+                        motor_server(line);
+                        break;
+                    default:
+                        no_server(line);
+                }
+            // Otherwise add incoming character to buffer
+            } else {
+                if (index < BUFFER_SIZE - 1) {
+                    line[index++] = (char)c;
+                }
+            }
+        }
 
-    // Launch the selected app
-    app->app_func();
+        switch (app_code) {
+            case APP_MOTOR:
+                motor_op();
+                break;
+            default:
+                no_op();
+        }
 
-    // Should never return
-    // XXX need better handling here
-    printf("ERROR: App returned unexpectedly\r\n");
-    while (1) {
-        tight_loop_contents();
+        // Perform scheduled tasks
+        if (absolute_time_diff_us(get_absolute_time(), next_sample) <= 0) {
+            gpio_put(LED_PIN, led_state);
+            led_state = !led_state;
+            switch (app_code) {
+                case APP_MOTOR:
+                    motor_status();
+                    break;
+                default:
+                    no_status(app_code);
+            }
+            next_sample = make_timeout_time_ms(cadence_ms);
+        }
     }
-    return 0;
 }
 

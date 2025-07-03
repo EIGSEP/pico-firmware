@@ -107,7 +107,7 @@ def main():
             continue
 
         # give the Pico a moment to reboot into user code
-        time.sleep(1)
+        time.sleep(2)
 
         try:
             data = read_json_from_serial(port_dev, args.baud, args.timeout)

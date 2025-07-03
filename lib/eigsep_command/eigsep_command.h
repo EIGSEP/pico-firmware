@@ -11,9 +11,7 @@
 
 typedef enum {
     KV_STR,
-    KV_UINT8,
-    KV_UINT16,
-    KV_UINT32,
+    KV_INT,
     KV_FLOAT,
     KV_BYTES
 } kv_type_t;
