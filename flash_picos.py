@@ -31,20 +31,7 @@ def flash_uf2(uf2_path, serial):
     Flash the UF2 onto the Pico whose USB serial number is `serial`,
     using picotool’s --ser selector.
     """
-    _cmd = [
-        "picotool",
-        "load",
-#        "--vid",
-#        hex(PICO_VID),
-#        "--pid",
-#        hex(PICO_PID_BOOTSEL),
-        "--ser",
-        serial,
-        "-x",
-        uf2_path,
-        "-f",
-    ]
-    cmd = f"picotool load --ser {serial} -x {uf2_path} -f".split()
+    cmd = f"picotool load -f --ser {serial} -x {uf2_path}".split()
     print(f"Flashing {uf2_path} → serial={serial}")
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -121,12 +108,12 @@ def main():
         time.sleep(1)
 
         try:
-            data = read_json_from_serial(port_serial, args.baud, args.timeout)
+            data = read_json_from_serial(port_dev, args.baud, args.timeout)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
 
-        uid = data.get("unique_id") or port_dev
+        uid = data.get("unique_id") or port_serial
         out_file = f"{args.out_prefix}_{uid}.json"
         with open(out_file, "w") as f:
             json.dump(data, f, indent=2)
