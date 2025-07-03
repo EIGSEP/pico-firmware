@@ -19,6 +19,12 @@ add_executable(pico_multi
 )
 
 # include directories
+add_library(cjson STATIC lib/cJSON/cJSON.c)
+target_include_directories(cjson PUBLIC lib/cJSON)
+
+add_library(base64 STATIC lib/base64/base64.c)
+target_include_directories(base64 PUBLIC lib/base64)
+
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/include
@@ -31,6 +37,8 @@ target_link_libraries(pico_multi
     hardware_watchdog
     hardware_timer
     pico_unique_id
+    cjson
+    base64
 )
 
 # enable USB CDC for stdio

@@ -50,6 +50,7 @@ cd pico-firmware
 
 # Initialize the pico-sdk submodule
 git submodule update --init pico-sdk
+git submodule update --init lib/cJSON
 
 # Build the firmware
 ./build.sh

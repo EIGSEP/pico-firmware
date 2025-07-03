@@ -2,3 +2,6 @@
 	path = pico-sdk
 	url = https://github.com/raspberrypi/pico-sdk.git
 	branch = master
+[submodule "lib/cJSON"]
+	path = lib/cJSON
+	url = git@github.com:DaveGamble/cJSON.git
