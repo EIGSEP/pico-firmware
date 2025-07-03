@@ -42,8 +42,7 @@ void stepper_init(Stepper *m,
     gpio_set_dir(enable_pin, GPIO_OUT);
 
     /* Disable motor by default and ensure pulse pin is low */
-    gpio_put(enable_pin, 1);
-    gpio_put(pulse_pin, 0);
+    stepper_close(m);
 }
 
 /**
@@ -110,22 +109,25 @@ void motor_server(Stepper *azimuth, Stepper *elevation, const char *json_str) {
 void motor_status(long azimuth_pos, long elevation_pos) {
 	pos_az = "%ld", azimuth_pos;
 	pos_el = "%ld", elevation_pos;
-	send_json(2, KV_STR, "azimuth_pos", pos_az,
-		  KV_STR, "elevation_pos", pos_el);
+	send_json(2,
+        KV_STR, "azimuth_pos", pos_az,
+		KV_STR, "elevation_pos", pos_el
+    );
 }
 
-void motor_op(Stepper *azimuth, Stepper *elevation} {
+void motor_op(Stepper *azimuth, Stepper *elevation) {
 	
 	uint32_t az_remaining = azimuth.remaining_steps;
 	uint32_t el_remaining = elevation.remaining_steps;
+
 	// move the stepper motors max_move steps
-        elevation.dir = el_remaining > 0 ? 1 : -1;
-        azimuth.dir = az_remaining > 0 ? 1 : -1;
+    elevation.dir = el_remaining > 0 ? 1 : -1;
+    azimuth.dir = az_remaining > 0 ? 1 : -1;
 
 	// azimuth loop
 	for (int i = 0; i < azimuth.max_pulses; i++} {
 		if abs(az_remaining) == 0 {
-		break;
+		    break;
 		}
 		stepper_move(&azimuth);
 		az_remaining -= azimuth.dir;
@@ -135,7 +137,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation} {
 	// elevation loop
 	for (int i = 0; i < elevation.max_pulses; i++} {
 		if abs(el_remaining) == 0 {
-		break;
+		    break;
 		}
 		stepper_move(&elevation);
 		el_remaining -= elevation.dir;
@@ -145,7 +147,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation} {
 	// report position
 	motor_status(long azimuth.position, long elevation.position);
 	
-        // Disable coils until next command
-        stepper_close(&elevation);
-        stepper_close(&azimuth);
-
+    // Disable coils until next command
+    stepper_close(&elevation);
+    stepper_close(&azimuth);
+}
