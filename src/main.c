@@ -6,6 +6,7 @@
 #include <string.h>
 
 // App headers
+#include "pico_multi.h"
 #include "blink_app1.h"
 #include "blink_app2.h"
 
@@ -89,8 +90,11 @@ int main(void) {
     const AppDescriptor* app = &app_table[app_code];
 
     // emit JSON
-    printf("{\"unique_id\":\"%s\",\"gpio_code\":%d,\"app\":\"%s\"}\n",
-		    uid_str, app_code, app->name);
+    send_json(3,
+        KV_STR, "unique_id", uid_str,
+        KV_UINT8, "gpio_code", app_code,
+        KV_STR, "app", app->name
+    );
    
     // Enable watchdog (8 seconds)
     watchdog_enable(8000, 1);
