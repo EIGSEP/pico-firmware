@@ -28,37 +28,12 @@ static const AppDescriptor app_table[MAX_APPS] = {
     {"blink2",  blink_app2},   // 0b001 - LED blink (default)
 };
 
-// Global variables for status reporting
-static uint8_t g_dip_code = 0;
-static const char* g_app_name = NULL;
 
 // Read 3-bit DIP switch code
 static uint8_t read_dip_code(void) {
     return (gpio_get(DIP2_PIN) << 2) |
            (gpio_get(DIP1_PIN) << 1) |
            gpio_get(DIP0_PIN);
-}
-
-// Handle status query command
-static void handle_status_query(void) {
-    // Send JSON-formatted status response
-    printf("{{\"type\":\"status\",\"dip_code\":%d,\"dip_binary\":\"0b%d%d%d\",\"app_name\":\"%s\",\"app_index\":%d,\"firmware_version\":\"1.0\"}}\r\n",
-           g_dip_code,
-           (g_dip_code >> 2) & 1,
-           (g_dip_code >> 1) & 1,
-           g_dip_code & 1,
-           g_app_name ? g_app_name : "unknown",
-           g_dip_code,
-           "2.0");
-}
-
-// Background task to check for status queries  
-// This is exposed to apps via app_common.h
-void check_for_status_query(void) {
-    int c = getchar_timeout_us(0);
-    if (c == '?' || c == 'q' || c == 'Q') {
-        handle_status_query();
-    }
 }
 
 // Initialize DIP switch GPIOs (pull-ups for default HIGH)
@@ -87,7 +62,6 @@ int main(void) {
 
     // Read DIP code and log as device identifier
     uint8_t app_code = read_dip_code() & 0x07;
-    g_dip_code = app_code; // Store globally for status queries
     log_device_id(app_code);
 
     // Validate app code
@@ -96,7 +70,6 @@ int main(void) {
         app_code = 0;
     }
     const AppDescriptor* app = &app_table[app_code];
-    g_app_name = app->name; // Store globally for status queries
 
     // Display startup info
     printf("\r\n=================================\r\n");
