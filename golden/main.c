@@ -15,11 +15,22 @@ static void __attribute__((noreturn)) jump_to_stage2(void) {
 }
 
 int main() {
+    // Initialize LED first for immediate feedback
+    const uint LED_PIN = PICO_DEFAULT_LED_PIN;
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+    
+    // Quick blink to show we're alive
+    gpio_put(LED_PIN, 1);
+    sleep_ms(200);
+    gpio_put(LED_PIN, 0);
+    sleep_ms(200);
+
     // 1) USB CDC
     stdio_init_all();
 
     // 2) Unique ID
-    ch id_str[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+    char id_str[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
     pico_get_unique_board_id_string(id_str, sizeof(id_str));
     printf("Pico Bootloader - Unique ID: %s\r\n", id_str);
 
@@ -29,12 +40,9 @@ int main() {
         gpio_set_dir(pin, GPIO_IN);
     }
 
-    // 4) LED so you know you're in bootloader
-    const uint LED_PIN = PICO_DEFAULT_LED_PIN;
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-
+    // 4) Main loop
     char buf[16];
+    int idx = 0;
     while (true) {
         // Blink LED once per loop
         gpio_put(LED_PIN, 1);
@@ -51,10 +59,13 @@ int main() {
 	pico_get_unique_board_id_string(id_str, sizeof(id_str));
 	printf("Unique ID: %s\r\n", id_str);
         // Check for a “GO” command from the host
-        // non-blocking read of up to 15 chars
-        int len = fread(buf, 1, sizeof(buf)-1, stdin);
-        if (len > 0) {
-            buf[len] = '\0';
+	int c = getchar_timeout_us(0);
+        if (c >= 0) {
+	    buf[idx++] = (char)c;
+	    if (idx >= sizeof(buf) - 1 || c == '\n' || c == '\r') {
+		buf[idx] = '\0';
+		idx = 0; // reset index for next command
+	    }
             if (strcmp(buf, "GO\n") == 0 || strcmp(buf, "GO\r\n") == 0) {
                 printf("Jumping to Stage 2…\r\n");
                 sleep_ms(100);
