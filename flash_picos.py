@@ -8,35 +8,57 @@ from serial import Serial
 from serial.tools import list_ports
 
 PICO_VID = 0x2E8A  # Raspberry Pi Foundation USB vendor ID
+PICO_PID_BOOTSEL = 0x0003  # BOOTSEL-mode PID
+PICO_PID_CDC = 0x0009  # CDC serial mode PID
 
 
 def find_pico_ports():
     """
-    Return a list of device paths for all serial ports whose USB VID
-    matches Raspberry Pi.
+    Return a list of (device, serial, is_bootsel) tuples for all ttyACM*/ttyUSB* ports
+    whose USB VID/PID matches the Pico in either BOOTSEL or CDC mode.
     """
-    pico_ports = []
+    ports = []
     for info in list_ports.comports():
         if info.vid == PICO_VID:
-            pico_ports.append(info.device)
-    return pico_ports
+            if info.pid == PICO_PID_BOOTSEL:
+                ports.append((info.device, info.serial_number, True))
+            elif info.pid == PICO_PID_CDC:
+                ports.append((info.device, info.serial_number, False))
+    return ports
 
 
-def flash_uf2(uf2_path, port):
-    """Flash the UF2 onto a single Pico at `port` using picotool."""
-    cmd = ["picotool", "load", "--port", port, "-x", uf2_path, "-f"]
-    print(f"Flashing {uf2_path} → {port}")
+def flash_uf2(uf2_path, serial):
+    """
+    Flash the UF2 onto the Pico whose USB serial number is `serial`,
+    using picotool’s --ser selector.
+    """
+    cmd = [
+        "picotool",
+        "load",
+        "--vid",
+        hex(PICO_VID),
+        "--pid",
+        hex(PICO_PID_BOOTSEL),
+        "--ser",
+        serial,
+        "-x",
+        uf2_path,
+        "-f",
+    ]
+    print(f"Flashing {uf2_path} → serial={serial}")
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     if res.returncode != 0:
         print(res.stdout, file=sys.stderr)
-        raise RuntimeError(f"picotool failed on {port}")
+        raise RuntimeError(f"picotool failed on serial={serial}")
     print(res.stdout, end="")
 
 
 def read_json_from_serial(port, baud, timeout):
-    """Open the serial port, read until a valid JSON line appears or timeout."""
+    """
+    Open the serial port, read until a valid JSON line appears or timeout.
+    """
     with Serial(port, baudrate=baud, timeout=1) as ser:
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -44,9 +66,7 @@ def read_json_from_serial(port, baud, timeout):
             if not line:
                 continue
             try:
-                obj = json.loads(line)
-                print(f"[{port}] Received JSON: {obj}")
-                return obj
+                return json.loads(line)
             except json.JSONDecodeError:
                 continue
     raise RuntimeError(f"[{port}] Timed out waiting for JSON")
@@ -78,27 +98,30 @@ def main():
 
     ports = find_pico_ports()
     if not ports:
-        print("❌ No Raspberry Pi Pico serial ports found.", file=sys.stderr)
+        print(
+            "❌ No Raspberry Pi Pico serial ports found.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"Found Picos on: {', '.join(ports)}")
     for port in ports:
         try:
-            flash_uf2(args.uf2, port)
+            flash_uf2(args.uf2, serial)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
+
         # give the Pico a moment to reboot into user code
         time.sleep(1)
 
         try:
-            data = read_json_from_serial(port, args.baud, args.timeout)
+            data = read_json_from_serial(device, args.baud, args.timeout)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
 
-        # name file by unique_id if present, else by port name
-        uid = data.get("unique_id") or port.replace("/dev/", "")
+        uid = data.get("unique_id") or serial
         out_file = f"{args.out_prefix}_{uid}.json"
         with open(out_file, "w") as f:
             json.dump(data, f, indent=2)
