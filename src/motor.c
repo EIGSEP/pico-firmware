@@ -120,7 +120,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation} {
 		if abs(az_remaining) == 0 {
 		break;
 		}
-		stepper_move(&azimuth);
+		one_step(&azimuth);
 		az_remaining -= azimuth.dir;
 	}
 	azimuth->remaining_steps = az_remaining;
@@ -130,7 +130,7 @@ void motor_op(Stepper *azimuth, Stepper *elevation} {
 		if abs(el_remaining) == 0 {
 		break;
 		}
-		stepper_move(&elevation);
+		one_step(&elevation);
 		el_remaining -= elevation.dir;
 	}
 	elevation->remaining_steps = el_remaining;
