@@ -10,6 +10,7 @@
 #include "motor.h"
 #include "rfswitch.h"
 #include "tempctrl.h"
+#include "tempmon.h"
 #include "imu.h"
 
 
@@ -69,6 +70,7 @@ int main(void) {
         case APP_MOTOR: motor_init(app_id); break;
         case APP_RFSWITCH: rfswitch_init(app_id); break;
         case APP_TEMPCTRL: tempctrl_init(app_id); break;
+        case APP_TEMPMON: tempmon_init(app_id); break;
         case APP_IMU: imu_init(app_id); break;
         default: break;
     }
@@ -86,6 +88,7 @@ int main(void) {
                     case APP_MOTOR: motor_server(app_id, line); break;
                     case APP_RFSWITCH: rfswitch_server(app_id, line); break;
                     case APP_TEMPCTRL: tempctrl_server(app_id, line); break;
+                    case APP_TEMPMON: tempmon_server(app_id, line); break;
                     case APP_IMU: imu_server(app_id, line); break;
                     default:
                         send_json(2,
@@ -108,6 +111,7 @@ int main(void) {
             case APP_MOTOR: motor_op(app_id); break;
             case APP_RFSWITCH: rfswitch_op(app_id); break;
             case APP_TEMPCTRL: tempctrl_op(app_id); break;
+            case APP_TEMPMON: tempmon_op(app_id); break;
             case APP_IMU: imu_op(app_id); break;
             default:
                 break;
@@ -121,6 +125,7 @@ int main(void) {
                 case APP_MOTOR: motor_status(app_id); break;
                 case APP_RFSWITCH: rfswitch_status(app_id); break;
                 case APP_TEMPCTRL: tempctrl_status(app_id); break;
+                case APP_TEMPMON: tempmon_status(app_id); break;
                 case APP_IMU: imu_status(app_id); break;
                 default:
                     send_json(2,

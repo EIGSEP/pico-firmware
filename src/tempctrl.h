@@ -6,6 +6,7 @@
 #include <time.h>
 #include "hardware/gpio.h"
 #include "eigsep_command.h"
+#include "tempmon.h"
 
 // Temperature Control 1 configuration
 #define PELTIER1_PWM_PIN    16

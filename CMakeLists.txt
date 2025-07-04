@@ -17,6 +17,8 @@ add_executable(pico_multi
     src/motor.c
     src/rfswitch.c
     src/tempctrl.c
+    src/tempmon.c
+    src/temp_shared.c
     src/imu.cpp
 )
 

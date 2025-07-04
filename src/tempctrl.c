@@ -1,23 +1,16 @@
 #include "tempctrl.h"
+#include "temp_shared.h"
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/pwm.h"
-#include "hardware/pio.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-// OneWire includes
-#include "onewire_library.h"
-#include "onewire_library.pio.h"
-#include "ds18b20.h"
-#include "ow_rom.h"
-
 // Static instances
 static TempControl tempctrl1;
 static TempControl tempctrl2;
-static OW ow;
 static volatile bool temperature_reading_active = false;
 static volatile float last_temp1 = 25.0;
 static volatile float last_temp2 = 25.0;
@@ -26,7 +19,6 @@ static volatile float last_temp2 = 25.0;
 static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level);
 static void tempctrl_hysteresis_drive(TempControl *pc);
 static void tempctrl_update_temperature(TempControl *pc, time_t t_now, float T_now);
-static float read_ds18b20_by_rom(uint64_t rom);
 
 void tempctrl_init(uint8_t app_id) {
     // Initialize GPIO for Peltier 1
@@ -77,30 +69,26 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl2.T_prev = tempctrl2.T_target;
     tempctrl2.drive = 0.0;
     
-    // Initialize OneWire and find sensors
-    uint offset = pio_add_program(pio0, &onewire_program);
-    ow_init(&ow, pio0, offset, DS_PIN);
-    
-    uint64_t rom_codes[2];
-    int count = ow_romsearch(&ow, rom_codes, 2, OW_SEARCH_ROM);
-    if (count >= 2) {
-        tempctrl1.sensor_rom = rom_codes[0];
-        tempctrl2.sensor_rom = rom_codes[1];
-        temperature_reading_active = true;
+    // Initialize shared temperature system and find sensors
+    if (temp_shared_init()) {
+        int count = temp_shared_get_sensor_count();
+        if (count >= 2) {
+            tempctrl1.sensor_rom = temp_shared_get_rom_by_index(0);
+            tempctrl2.sensor_rom = temp_shared_get_rom_by_index(1);
+            temperature_reading_active = true;
+        } else {
+            // Fallback if not enough sensors - disable temperature reading
+            temperature_reading_active = false;
+            send_json(2,
+                KV_STR, "error", "Need at least 2 DS18B20 sensors",
+                KV_INT, "found", count
+            );
+        }
     } else {
-        // Fallback if sensors not found - disable temperature reading
         temperature_reading_active = false;
-        send_json(2,
-            KV_STR, "error", "DS18B20 sensors not found",
-            KV_INT, "found", count
+        send_json(1,
+            KV_STR, "error", "Failed to initialize temperature system"
         );
-    }
-    
-    // Start initial temperature conversion if sensors found
-    if (temperature_reading_active) {
-        ow_reset(&ow);
-        ow_send(&ow, OW_SKIP_ROM);
-        ow_send(&ow, DS18B20_CONVERT_T);
     }
 }
 
@@ -185,35 +173,35 @@ void tempctrl_op(uint8_t app_id) {
     if (temperature_reading_active && (now - last_temp_read) >= 750) {
         last_temp_read = now;
         
-        // Read temperatures from sensors
-        float temp1 = read_ds18b20_by_rom(tempctrl1.sensor_rom);
-        float temp2 = read_ds18b20_by_rom(tempctrl2.sensor_rom);
-        
-        // Update temperature readings if valid
-        if (temp1 > -100.0 && temp1 < 100.0) {
-            last_temp1 = temp1;
-        }
-        if (temp2 > -100.0 && temp2 < 100.0) {
-            last_temp2 = temp2;
-        }
-        
-        // Update control structures
-        time_t current_time = time(NULL);
-        tempctrl_update_temperature(&tempctrl1, current_time, last_temp1);
-        tempctrl_update_temperature(&tempctrl2, current_time, last_temp2);
-        
-        // Drive Peltiers based on hysteresis control
-        if (tempctrl1.enabled) {
-            tempctrl_hysteresis_drive(&tempctrl1);
-        }
-        if (tempctrl2.enabled) {
-            tempctrl_hysteresis_drive(&tempctrl2);
+        // Read temperatures from shared system
+        if (temp_shared_read_all()) {
+            float temp1 = temp_shared_read_by_rom(tempctrl1.sensor_rom);
+            float temp2 = temp_shared_read_by_rom(tempctrl2.sensor_rom);
+            
+            // Update temperature readings if valid
+            if (temp1 > -55.0 && temp1 < 125.0) {
+                last_temp1 = temp1;
+            }
+            if (temp2 > -55.0 && temp2 < 125.0) {
+                last_temp2 = temp2;
+            }
+            
+            // Update control structures
+            time_t current_time = time(NULL);
+            tempctrl_update_temperature(&tempctrl1, current_time, last_temp1);
+            tempctrl_update_temperature(&tempctrl2, current_time, last_temp2);
+            
+            // Drive Peltiers based on hysteresis control
+            if (tempctrl1.enabled) {
+                tempctrl_hysteresis_drive(&tempctrl1);
+            }
+            if (tempctrl2.enabled) {
+                tempctrl_hysteresis_drive(&tempctrl2);
+            }
         }
         
         // Start new temperature conversion for next cycle
-        ow_reset(&ow);
-        ow_send(&ow, OW_SKIP_ROM);
-        ow_send(&ow, DS18B20_CONVERT_T);
+        temp_shared_start_conversion();
     }
 }
 
@@ -269,25 +257,3 @@ static void tempctrl_update_temperature(TempControl *pc, time_t t_now, float T_n
     pc->T_now = T_now;
 }
 
-static float read_ds18b20_by_rom(uint64_t rom) {
-    if (!temperature_reading_active) {
-        return 25.0;  // Default temperature if sensors not active
-    }
-    
-    // Read scratchpad from specific sensor
-    ow_reset(&ow);
-    ow_send(&ow, OW_MATCH_ROM);
-    for (int i = 0; i < 8; i++) {
-        ow_send(&ow, (rom >> (i * 8)) & 0xFF);
-    }
-    ow_send(&ow, DS18B20_READ_SCRATCHPAD);
-    
-    uint8_t data[9];
-    for (int i = 0; i < 9; i++) {
-        data[i] = ow_read(&ow);
-    }
-    
-    // Convert to temperature
-    int16_t raw_temp = (data[1] << 8) | data[0];
-    return raw_temp / 16.0;
-}
