@@ -13,27 +13,31 @@
 
 #include <stdint.h>
 #include "hardware/gpio.h"
+#include "eigsep_command.h"
+
+/**
+ * @param m Pointer to the Stepper instance to initialize.
+ * @param dir_pin GPIO pin for direction control.
+ * @param pulse_pin GPIO pin for step pulses.
+ * @param cw_val Logic level for clockwise rotation.
+ * @param ccw_val Logic level for counter-clockwise rotation.
+ * @param enable_pin GPIO pin to enable/disable the motor driver.
+ */
 
 // define motor pins
-static const uint el_pins[5] = {
-    21,  // direction pin
-    18,  // pulse pin
-    0,  // enable pin
-    1,  // CW value
-    19   // CCW value
-};
+#define  EL_EN_PIN 5
+#define EL_DIR_PIN 6
+#define EL_PUL_PIN 7
+#define  EL_CW_VAL 1
+#define EL_CCW_VAL 19
 
-static const uint az_pins[5] = {
-    11,  // direction pin
-    12,  // pulse pin
-    0,   // enable pin
-    1,   // CW value
-    10    // CCW value
-};
+#define  AZ_EN_PIN 8
+#define AZ_DIR_PIN 9
+#define AZ_PUL_PIN 10
+#define  AZ_CW_VAL 1
+#define AZ_CCW_VAL 10
 
-// report motor status
-void motor_status(int32_t az_postion, int32_t el_position);
-
+#define DEFAULT_DELAY_US 600
 
 /**
  * @struct Stepper
@@ -65,57 +69,18 @@ typedef struct {
     uint32_t delay_us;     /**< Delay in microseconds between steps */    
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
-    int32_t remainig_steps; /**< Remaining steps to move in current operation */
+    int32_t remaining_steps; /**< Remaining steps to move in current operation */
+    int32_t max_pulses;    /**< Maximum steps to move in current operation */
 } Stepper;
 
-/**
- * @brief Initialize the stepper motor interface.
- *
- * Sets up GPIO pins according to the provided parameters
- * and initializes the Stepper state to defaults (position = 0,
- * direction = CW, delay = 0).
- *
- * @param m Pointer to the Stepper instance to initialize.
- * @param dir_pin GPIO pin for direction control.
- * @param pulse_pin GPIO pin for step pulses.
- * @param cw_val Logic level for clockwise rotation.
- * @param ccw_val Logic level for counter-clockwise rotation.
- * @param enable_pin GPIO pin to enable/disable the motor driver.
- */
-void stepper_init(Stepper *m,
-                  uint dir_pin,
-                  uint pulse_pin,
-                  uint8_t cw_val,
-                  uint8_t ccw_val,
-                  uint enable_pin);
-
-/**
- * @brief Advance the motor one step in the current direction.
- *
- * Toggles the pulse pin to generate one step pulse,
- * updates the position counter, and ensures the driver
- * is enabled during stepping.
- *
- * @param m Pointer to the Stepper instance representing the motor.
- */
-void one_step(Stepper *m);
-
-/**
- * @brief Disable the motor driver and clear outputs.
- *
- * Sets the pulse output low and disables the driver to
- * reduce power consumption and prevent further steps.
- *
- * @param m Pointer to the Stepper instance to disable.
- */
-void stepper_close(Stepper *m);
-
-// listen for commands
-void motor_server(Stepper *azimuth, Stepper *elevation, const char *cmd_str);
-
-// main op function, calling one_step repeatedly
-void motor_op(Stepper *azimuth, Stepper *elevation);
-
+// report motor status
+void motor_init(uint8_t);
+void motor_server(uint8_t, const char *);
+void motor_op(uint8_t);
+void motor_status(uint8_t);
+void stepper_op(Stepper *);
+void stepper_disable(Stepper *);
+void stepper_enable(Stepper *);
 
 #endif // MOTOR_H
 

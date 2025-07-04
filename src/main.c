@@ -7,45 +7,8 @@
 
 // App headers
 #include "pico_multi.h"
+#include "motor.h"
 
-
-//void motor_server(char *cmd_str) {
-//    send_json(2, KV_STR,
-//            "name", "motor_server",
-//            "status", "ok");
-//}
-//
-//void motor_op() {
-//    return;
-//}
-//
-//void motor_status() {
-//    send_json(2,
-//        KV_STR, "name", "motor_status",
-//        KV_INT, "value", 17
-//    );
-//}
-
-void no_server(char *cmd_str) {
-    // We don't have an app for that
-    send_json(2,
-        KV_STR, "status", "error",
-        KV_STR, "value", "Unknown app_code"
-    );
-    return;
-}
-
-void no_op() {
-    return;
-}
-
-void no_status(app_code) {
-    send_json(3,
-        KV_STR, "name", "no_status",
-        KV_STR, "status", "error",
-        KV_INT, "value", app_code
-    );
-}
 
 // Read 3-bit DIP switch code
 static uint8_t read_dip_code(void) {
@@ -89,8 +52,7 @@ int main(void) {
     sleep_ms(1000);
 
     // Read DIP code early
-    uint8_t app_code = read_dip_code() & 0x07;
-    printf("%d\n", app_code);
+    uint8_t app_id = read_dip_code();
 
     // Get unique board ID
     pico_unique_board_id_t unique_id;
@@ -100,18 +62,13 @@ int main(void) {
         sprintf(&uid_str[i*2], "%02X", unique_id.id[i]);
     }
 
-    // emit JSON identifier for panda to keep track
-    send_json(2,
-        KV_STR, "unique_id", uid_str,
-        KV_INT, "app_code", app_code
-    );
-
     // Run app-dependent initialization
-    switch (app_code) {
+    switch (app_id) {
         case APP_MOTOR:
-            motor_init();
+            motor_init(app_id);
             break;
         default:
+            break;
     }
    
     while (true) {
@@ -123,40 +80,48 @@ int main(void) {
                 line[index] = '\0';
                 index = 0;
                 // Dispatch command to appropriate app
-                switch (app_code) {
+                switch (app_id) {
                     case APP_MOTOR:
-                        motor_server(line);
+                        motor_server(app_id, line);
                         break;
                     default:
-                        no_server(line);
+                        send_json(2,
+                            KV_STR, "status", "error",
+                            KV_INT, "app_id", app_id
+                        );
                 }
             // Otherwise add incoming character to buffer
             } else {
                 if (index < BUFFER_SIZE - 1) {
                     line[index++] = (char)c;
                 }
+                // prioritize reading a command before operations
+                continue;
             }
         }
 
         // Perform every-loop operations
-        switch (app_code) {
+        switch (app_id) {
             case APP_MOTOR:
-                motor_op();
+                motor_op(app_id);
                 break;
             default:
-                no_op();
+                break;
         }
 
         // Perform scheduled status reporting
         if (absolute_time_diff_us(get_absolute_time(), next_sample) <= 0) {
             gpio_put(LED_PIN, led_state);
             led_state = !led_state;
-            switch (app_code) {
+            switch (app_id) {
                 case APP_MOTOR:
-                    motor_status();
+                    motor_status(app_id);
                     break;
                 default:
-                    no_status(app_code);
+                    send_json(2,
+                        KV_STR, "status", "error",
+                        KV_INT, "app_id", app_id
+                    );
             }
             next_sample = make_timeout_time_ms(STATUS_CADENCE_MS);
         }

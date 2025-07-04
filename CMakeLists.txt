@@ -14,8 +14,7 @@ pico_sdk_init()
 # add executable
 add_executable(pico_multi
     src/main.c
-    src/blink_app1.c
-    src/blink_app2.c
+    src/motor.c
 )
 
 # include directories

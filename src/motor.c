@@ -1,8 +1,14 @@
 #include "motor.h"
 #include "pico/stdlib.h"
+#include "cJSON.h"
+#include <stdlib.h>
 
-Stepper azimuth;
-Stepper elevation;
+#ifndef MIN                   // avoid double-definition
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+static Stepper azimuth;
+static Stepper elevation;
 
 /**
  * @brief Initialize a stepper motor interface.
@@ -26,7 +32,7 @@ void stepper_init(Stepper *m,
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
     m->ccw_val       = ccw_val;
-    m->delay_us      = 600;  // pause between delays 
+    m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
     m->position      = 0;
     m->dir           = 1;
     // controlling steps
@@ -47,9 +53,9 @@ void stepper_init(Stepper *m,
     stepper_disable(m);
 }
 
-void motor_init() {
-    stepper_init(&azimuth);
-    stepper_init(&elevation);
+void motor_init(uint8_t app_id) {
+    stepper_init(&azimuth, AZ_DIR_PIN, AZ_PUL_PIN, AZ_EN_PIN, AZ_CW_VAL, AZ_CCW_VAL);
+    stepper_init(&elevation, EL_DIR_PIN, EL_PUL_PIN, EL_EN_PIN, EL_CW_VAL, EL_CCW_VAL);
 }
 
 /**
@@ -61,12 +67,35 @@ void motor_init() {
  *
  * @param m Pointer to the Stepper instance representing the motor.
  */
-void one_step(Stepper *m) {
+void stepper_tick(Stepper *m) {
     gpio_put(m->pulse_pin, 1);
     sleep_us(m->delay_us);
     gpio_put(m->pulse_pin, 0);
     sleep_us(m->delay_us);
+    // Update position
+    m->position += m->dir;
 }
+
+void stepper_op(Stepper *m) {
+    if (m->remaining_steps > 0) {
+        m->dir = 1;
+        gpio_put(m->direction_pin, m->cw_val);
+    } else if (m->remaining_steps < 0) {
+        m->dir = -1;
+        gpio_put(m->direction_pin, m->ccw_val);
+    } else {
+        return;
+    }
+
+    int nsteps = MIN(m->max_pulses, abs(m->remaining_steps));
+    stepper_enable(m);
+    for (int i = 0; i < nsteps; i++) {
+        stepper_tick(m);
+    }
+    stepper_disable(m);
+    m->remaining_steps -= nsteps * m->dir;
+}
+	
 
 /**
  * @brief Disable the stepper motor and clear outputs.
@@ -77,15 +106,6 @@ void one_step(Stepper *m) {
  * @param m Pointer to the Stepper instance to disable.
  */
 void stepper_enable(Stepper *m) {
-    /* Set direction pin and update position */
-    if (m->dir > 0) {
-        gpio_put(m->direction_pin, m->cw_val);
-        m->position++;
-    } else {
-        gpio_put(m->direction_pin, m->ccw_val);
-        m->position--;
-    }
-
     gpio_put(m->enable_pin, 0);
 }
 
@@ -94,54 +114,46 @@ void stepper_disable(Stepper *m) {
 }
 
 // cmd is a JSON command string with pulses and delay_us for az/el
-void motor_server(const char *cmd_str) {
+void motor_server(uint8_t app_id, const char *json_str) {
     int32_t pulses_az, pulses_el;
     uint32_t delay_us_az, delay_us_el;
 
-    sscanf(cmd_str, "%d %d %d %d", &pulses_az, &pulses_el, &delay_us_az, &delay_us_el);
+    cJSON *root = cJSON_Parse(json_str);
+    cJSON *pul_az_json = cJSON_GetObjectItem(root, "pulses_az");
+    cJSON *pul_el_json = cJSON_GetObjectItem(root, "pulses_el");
+    cJSON *dly_us_az_json = cJSON_GetObjectItem(root, "delay_us_az");
+    cJSON *dly_us_el_json = cJSON_GetObjectItem(root, "delay_us_el");
+
+    pulses_az = pul_az_json ? pul_az_json->valueint : 0;
+    pulses_el = pul_el_json ? pul_el_json->valueint : 0;
+    delay_us_az = dly_us_az_json ? dly_us_az_json->valueint : azimuth.delay_us;
+    delay_us_el = dly_us_el_json ? dly_us_el_json->valueint : elevation.delay_us;
 
     // update the stepper motors
     azimuth.remaining_steps += pulses_az;
     elevation.remaining_steps += pulses_el;
-    azimuth.delay_us = delay_us;
-    elevation.delay_us = delay_us;
+    azimuth.delay_us = delay_us_az;
+    elevation.delay_us = delay_us_el;
 }
 
 
-void motor_status() {
-	pos_az = "%d", azimuth.position;
-	pos_el = "%d", elevation.position;
-	send_json(2,
-        KV_STR, "azimuth_pos", pos_az,
-		KV_STR, "elevation_pos", pos_el
+void motor_status(uint8_t app_id) {
+	send_json(10,
+        KV_STR, "status", "update",
+        KV_INT, "app_id", app_id,
+        KV_INT, "az_pos", azimuth.position,
+        KV_INT, "az_dir", azimuth.dir,
+        KV_INT, "az_remaining_steps", azimuth.remaining_steps,
+        KV_INT, "az_max_pulses", azimuth.max_pulses,
+        KV_INT, "el_pos", elevation.position,
+        KV_INT, "el_dir", elevation.dir,
+        KV_INT, "el_remaining_steps", elevation.remaining_steps,
+        KV_INT, "el_max_pulses", elevation.max_pulses
     );
 }
 
-void motor_op() {
-    int nsteps;
-	
+void motor_op(uint8_t app_id) {
 	// move the stepper motors max_move steps
-    elevation.dir = el_remaining > 0 ? 1 : -1;
-    azimuth.dir = az_remaining > 0 ? 1 : -1;
-
-	// azimuth loop
-    nsteps = min(azimuth.max_pulses, abs(azimuth.remaining_steps));
-    if (nsteps > 0) stepper_enable(&azimuth);
-	for (int i = 0; i < nsteps; i++} {
-		one_step(&azimuth);
-	}
-    stepper_disable(&azimuth);
-    azimuth.remaining_steps -= nsteps * azimuth.dir;
-	
-	// elevation loop
-    nsteps = min(elevation.max_pulses, abs(elevation.remaining_steps));
-    if (nsteps > 0) stepper_enable(&elevation);
-	for (int i = 0; i < elevation.max_pulses; i++} {
-		one_step(&elevation);
-	}
-    stepper_disable(&elevation);
-    elevation.remaining_steps -= nsteps * elevation.dir;
-
-	// report position
-	motor_status();
+    stepper_op(&elevation);
+    stepper_op(&azimuth);
 }
