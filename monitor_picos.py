@@ -18,7 +18,7 @@ def watch_json_from_serial(port, baud):
                 continue
             try:
                 data = json.loads(line)
-                print(data)
+                print(json.dumps(data, indent=2, sort_keys=False))
             except json.JSONDecodeError:
                 continue
 

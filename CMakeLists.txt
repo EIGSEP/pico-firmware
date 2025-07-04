@@ -20,6 +20,7 @@ add_executable(pico_multi
     src/tempmon.c
     src/temp_shared.c
     src/imu.cpp
+    src/lidar.c
 )
 
 

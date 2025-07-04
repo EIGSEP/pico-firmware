@@ -15,6 +15,10 @@ void rfswitch_init(uint8_t app_id) {
     rfswitch.pins[5] = RFSWITCH5_PIN;
     rfswitch.pins[6] = RFSWITCH6_PIN;
     rfswitch.pins[7] = RFSWITCH7_PIN;
+    for (int i = 0; i < 8; i++) {
+        gpio_init(rfswitch.pins[i]);
+        gpio_set_dir(rfswitch.pins[i], GPIO_OUT);
+    }
 }
 
 

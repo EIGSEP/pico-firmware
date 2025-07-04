@@ -49,9 +49,15 @@ def main():
     try:
         while True:
             for i in range(8):
-                payload['sw_state'] = i
+                sw_state = input('Enter sw_state:')
+                payload['sw_state'] = int(sw_state)
                 ms.command(payload)
-                time.sleep(1)
+            #payload['sw_state'] = 255
+            #ms.command(payload)
+            #time.sleep(2)
+            #payload['sw_state'] = 0
+            #ms.command(payload)
+            #time.sleep(2)
     finally:
         ms.stop()
         

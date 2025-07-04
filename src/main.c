@@ -12,6 +12,7 @@
 #include "tempctrl.h"
 #include "tempmon.h"
 #include "imu.h"
+#include "lidar.h"
 
 
 // Read 3-bit DIP switch code
@@ -27,7 +28,7 @@ static void init_dip_switches(void) {
     for (int i = 0; i < 3; i++) {
         gpio_init(dip_pins[i]);
         gpio_set_dir(dip_pins[i], GPIO_IN);
-     //   gpio_pull_up(dip_pins[i]); // XXX is this needed?
+        gpio_pull_up(dip_pins[i]);
     }
     sleep_ms(10); // allow switches to settle
 }
@@ -74,6 +75,7 @@ int main(void) {
         case APP_TEMPCTRL: tempctrl_init(app_id); break;
         case APP_TEMPMON: tempmon_init(app_id); break;
         case APP_IMU: imu_init(app_id); break;
+        case APP_LIDAR: lidar_init(app_id); break;
         default: break;
     }
    
@@ -92,6 +94,7 @@ int main(void) {
                     case APP_TEMPCTRL: tempctrl_server(app_id, line); break;
                     case APP_TEMPMON: tempmon_server(app_id, line); break;
                     case APP_IMU: imu_server(app_id, line); break;
+                    case APP_LIDAR: lidar_server(app_id, line); break;
                     default:
                         send_json(2,
                             KV_STR, "status", "error",
@@ -123,6 +126,7 @@ int main(void) {
                 break;
             }
             case APP_IMU: imu_op(app_id); break;
+            case APP_LIDAR: lidar_op(app_id); break;
             default:
                 break;
         }
@@ -137,6 +141,7 @@ int main(void) {
                 case APP_TEMPCTRL: tempctrl_status(app_id); break;
                 case APP_TEMPMON: tempmon_status(app_id); break;
                 case APP_IMU: imu_status(app_id); break;
+                case APP_LIDAR: lidar_status(app_id); break;
                 default:
                     send_json(2,
                         KV_STR, "status", "error",
