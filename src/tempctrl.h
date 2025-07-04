@@ -19,8 +19,8 @@
 #define PELTIER2_DIR_PIN4   12
 
 // Temperature sensor pins
-#define TEMP_SENSOR1_PIN    22
-#define TEMP_SENSOR2_PIN    27
+#define TEMP_SENSOR1_PIN    21
+#define TEMP_SENSOR2_PIN    22
 
 // PWM configuration
 #define PWM_WRAP            1000
