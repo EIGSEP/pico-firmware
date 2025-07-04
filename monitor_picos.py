@@ -5,25 +5,6 @@ import time
 import sys
 import json
 from serial import Serial
-import struct
-import base64
-
-
-def decode_uint16(b64: str) -> int:
-    raw = base64.b64decode(b64)     # returns a bytes object
-    # < = little-endian, H = uint16
-    return struct.unpack('<H', raw)[0]
-
-def decode_uint32(b64: str) -> int:
-    raw = base64.b64decode(b64)
-    return struct.unpack('<I', raw)[0]   # <I = little-endian uint32
-
-def decode_float(b64: str) -> float:
-    raw = base64.b64decode(b64)
-    return struct.unpack('<f', raw)[0]   # <f = little-endian 32-bit float
-
-def decode_bytes(b64: str) -> bytes:
-    return base64.b64decode(b64)         # raw binary payload
 
 
 def watch_json_from_serial(port, baud):

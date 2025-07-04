@@ -8,6 +8,7 @@
 // App headers
 #include "pico_multi.h"
 #include "motor.h"
+#include "rfswitch.h"
 
 
 // Read 3-bit DIP switch code
@@ -48,11 +49,10 @@ int main(void) {
     init_led();
     // 3) Bring up USB CDC (stdio)
     stdio_init_all();
-    // allow host to enumerate
-    sleep_ms(1000);
 
     // Read DIP code early
     uint8_t app_id = read_dip_code();
+    //uint8_t app_id = APP_RFSWITCH;
 
     // Get unique board ID
     pico_unique_board_id_t unique_id;
@@ -64,11 +64,9 @@ int main(void) {
 
     // Run app-dependent initialization
     switch (app_id) {
-        case APP_MOTOR:
-            motor_init(app_id);
-            break;
-        default:
-            break;
+        case APP_MOTOR: motor_init(app_id); break;
+        case APP_RFSWITCH: rfswitch_init(app_id); break;
+        default: break;
     }
    
     while (true) {
@@ -81,9 +79,8 @@ int main(void) {
                 index = 0;
                 // Dispatch command to appropriate app
                 switch (app_id) {
-                    case APP_MOTOR:
-                        motor_server(app_id, line);
-                        break;
+                    case APP_MOTOR: motor_server(app_id, line); break;
+                    case APP_RFSWITCH: rfswitch_server(app_id, line); break;
                     default:
                         send_json(2,
                             KV_STR, "status", "error",
@@ -102,9 +99,8 @@ int main(void) {
 
         // Perform every-loop operations
         switch (app_id) {
-            case APP_MOTOR:
-                motor_op(app_id);
-                break;
+            case APP_MOTOR: motor_op(app_id); break;
+            case APP_RFSWITCH: rfswitch_op(app_id); break;
             default:
                 break;
         }
@@ -114,9 +110,8 @@ int main(void) {
             gpio_put(LED_PIN, led_state);
             led_state = !led_state;
             switch (app_id) {
-                case APP_MOTOR:
-                    motor_status(app_id);
-                    break;
+                case APP_MOTOR: motor_status(app_id); break;
+                case APP_RFSWITCH: rfswitch_status(app_id); break;
                 default:
                     send_json(2,
                         KV_STR, "status", "error",

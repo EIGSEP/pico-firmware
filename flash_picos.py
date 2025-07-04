@@ -106,25 +106,25 @@ def main():
             print(e, file=sys.stderr)
             continue
 
-        # give the Pico a moment to reboot into user code
-        time.sleep(2)
+    #    # give the Pico a moment to reboot into user code
+    #    time.sleep(2)
 
-        try:
-            data = read_json_from_serial(port_dev, args.baud, args.timeout)
-        except RuntimeError as e:
-            print(e, file=sys.stderr)
-            continue
+    #    try:
+    #        data = read_json_from_serial(port_dev, args.baud, args.timeout)
+    #    except RuntimeError as e:
+    #        print(e, file=sys.stderr)
+    #        continue
 
-        # Add port and serial info to the device data
-        data["port"] = port_dev
-        data["usb_serial"] = port_serial
-        all_devices.append(data)
-        print(f"✔ Read device info from {port_dev}")
+    #    # Add port and serial info to the device data
+    #    data["port"] = port_dev
+    #    data["usb_serial"] = port_serial
+    #    all_devices.append(data)
+    #    print(f"✔ Read device info from {port_dev}")
     
-    # Write all device info to a single file
-    with open(args.output, "w") as f:
-        json.dump(all_devices, f, indent=2)
-    print(f"\n✔ Wrote all device information to {args.output} ({len(all_devices)} devices)")
+    ## Write all device info to a single file
+    #with open(args.output, "w") as f:
+    #    json.dump(all_devices, f, indent=2)
+    #print(f"\n✔ Wrote all device information to {args.output} ({len(all_devices)} devices)")
 
 
 if __name__ == "__main__":

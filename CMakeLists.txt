@@ -15,6 +15,7 @@ pico_sdk_init()
 add_executable(pico_multi
     src/main.c
     src/motor.c
+    src/rfswitch.c
 )
 
 # include directories
