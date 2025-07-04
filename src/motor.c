@@ -20,18 +20,15 @@ static Stepper elevation;
  * @param dir_pin GPIO pin number used for direction control.
  * @param pulse_pin GPIO pin number used for pulse (step) control.
  * @param cw_val Logical value to set on dir_pin for clockwise rotation.
- * @param ccw_val Logical value to set on dir_pin for counter-clockwise rotation.
  * @param enable_pin GPIO pin number used to enable or disable the driver.
  */
 void stepper_init(Stepper *m,
-                uint dir_pin, uint pulse_pin,
-                uint8_t cw_val, uint8_t ccw_val,
-                uint enable_pin) {
+                uint dir_pin, uint pulse_pin, uint enable_pin,
+                uint8_t cw_val) {
     m->direction_pin = dir_pin;
     m->pulse_pin     = pulse_pin;
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
-    m->ccw_val       = ccw_val;
     m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
     m->position      = 0;
     m->dir           = 1;
@@ -54,8 +51,8 @@ void stepper_init(Stepper *m,
 }
 
 void motor_init(uint8_t app_id) {
-    stepper_init(&azimuth, AZ_DIR_PIN, AZ_PUL_PIN, AZ_EN_PIN, AZ_CW_VAL, AZ_CCW_VAL);
-    stepper_init(&elevation, EL_DIR_PIN, EL_PUL_PIN, EL_EN_PIN, EL_CW_VAL, EL_CCW_VAL);
+    stepper_init(&azimuth, AZ_DIR_PIN, AZ_PUL_PIN, AZ_EN_PIN, AZ_CW_VAL);
+    stepper_init(&elevation, EL_DIR_PIN, EL_PUL_PIN, EL_EN_PIN, EL_CW_VAL);
 }
 
 /**
@@ -82,7 +79,7 @@ void stepper_op(Stepper *m) {
         gpio_put(m->direction_pin, m->cw_val);
     } else if (m->remaining_steps < 0) {
         m->dir = -1;
-        gpio_put(m->direction_pin, m->ccw_val);
+        gpio_put(m->direction_pin, !m->cw_val);
     } else {
         return;
     }

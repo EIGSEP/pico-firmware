@@ -49,6 +49,12 @@ void send_json(unsigned count, ...)
                 /* For bytes, we expect a pointer to data and length */
                 str = va_arg(ap, const char *);
                 break;
+
+            case KV_FLOAT:
+                /* float is promoted to double in varargs */
+                sprintf(buf, "%.6f", va_arg(ap, double));
+                str = buf;
+                break;
         }
 
         if (str != NULL) {

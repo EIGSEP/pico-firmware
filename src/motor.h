@@ -28,14 +28,12 @@
 #define  EL_EN_PIN 5
 #define EL_DIR_PIN 6
 #define EL_PUL_PIN 7
-#define  EL_CW_VAL 1
-#define EL_CCW_VAL 19
+#define  EL_CW_VAL 0
 
 #define  AZ_EN_PIN 8
 #define AZ_DIR_PIN 9
 #define AZ_PUL_PIN 10
-#define  AZ_CW_VAL 1
-#define AZ_CCW_VAL 10
+#define  AZ_CW_VAL 0
 
 #define DEFAULT_DELAY_US 600
 
@@ -65,7 +63,6 @@ typedef struct {
     uint    pulse_pin;     /**< GPIO pin for step pulses */  
     uint    enable_pin;    /**< GPIO pin for driver enable */   
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
-    uint8_t ccw_val;       /**< Logic level for counter-clockwise direction */      
     uint32_t delay_us;     /**< Delay in microseconds between steps */    
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
