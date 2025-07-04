@@ -45,6 +45,8 @@ int main(void) {
     int index = 0;
     bool led_state=1;
     absolute_time_t next_sample = make_timeout_time_ms(STATUS_CADENCE_MS);
+    static uint32_t last_tempmon_read = 0;
+    static const uint32_t TEMPMON_READ_INTERVAL_MS = 1000;  // 1 second interval
 
     // 1) Initialize DIP switches before USB init
     init_dip_switches();
@@ -111,7 +113,15 @@ int main(void) {
             case APP_MOTOR: motor_op(app_id); break;
             case APP_RFSWITCH: rfswitch_op(app_id); break;
             case APP_TEMPCTRL: tempctrl_op(app_id); break;
-            case APP_TEMPMON: tempmon_op(app_id); break;
+            case APP_TEMPMON: {
+                // Control tempmon reading interval from main.c
+                uint32_t now = to_ms_since_boot(get_absolute_time());
+                if ((now - last_tempmon_read) >= TEMPMON_READ_INTERVAL_MS) {
+                    last_tempmon_read = now;
+                    tempmon_op(app_id);
+                }
+                break;
+            }
             case APP_IMU: imu_op(app_id); break;
             default:
                 break;

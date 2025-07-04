@@ -24,8 +24,6 @@ typedef struct {
     TempSensor sensors[8];  // Support up to 8 sensors
     int sensor_count;
     bool initialized;
-    uint32_t read_interval_ms;
-    uint32_t last_read_time;
 } TempMonitor;
 
 // Standard app interface functions
