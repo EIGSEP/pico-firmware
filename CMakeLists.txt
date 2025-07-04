@@ -16,7 +16,9 @@ add_executable(pico_multi
     src/main.c
     src/motor.c
     src/rfswitch.c
+    src/tempctrl.c
 )
+
 
 # include directories
 add_library(cjson STATIC lib/cJSON/cJSON.c)
@@ -32,6 +34,15 @@ target_link_libraries(eigsep_command
     cjson
 )
 
+add_library(onewire STATIC lib/onewire/onewire_library.c)
+target_include_directories(onewire PUBLIC lib/onewire)
+target_link_libraries(onewire PUBLIC
+    pico_stdlib
+    hardware_pio
+)
+# Generate PIO header for the onewire library
+pico_generate_pio_header(onewire ${CMAKE_CURRENT_LIST_DIR}/lib/onewire/onewire_library.pio)
+
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/include
@@ -43,9 +54,14 @@ target_link_libraries(pico_multi
     hardware_gpio
     hardware_watchdog
     hardware_timer
+    hardware_pwm
+    hardware_pio
+    pico_multicore
+    pico_time
     pico_unique_id
     cjson
     eigsep_command
+    onewire
 )
 
 # enable USB CDC for stdio

@@ -22,13 +22,38 @@ void send_json(unsigned count, ...)
                 break;
 
             case KV_INT: 
-                /* uint16_t is promoted to int as well */
-                sprintf(buf, "%d", va_arg(ap, int));
-                str = buf;
+                {
+                    int int_val = va_arg(ap, int);
+                    cJSON_AddNumberToObject(reply, key, int_val);
+                    str = NULL; /* Skip the string addition */
+                }
+                break;
+
+            case KV_FLOAT:
+                {
+                    double float_val = va_arg(ap, double);
+                    cJSON_AddNumberToObject(reply, key, float_val);
+                    str = NULL; /* Skip the string addition */
+                }
+                break;
+
+            case KV_BOOL:
+                {
+                    int bool_val = va_arg(ap, int);
+                    cJSON_AddBoolToObject(reply, key, bool_val);
+                    str = NULL; /* Skip the string addition */
+                }
+                break;
+
+            case KV_BYTES:
+                /* For bytes, we expect a pointer to data and length */
+                str = va_arg(ap, const char *);
                 break;
         }
 
-        cJSON_AddStringToObject(reply, key, str);
+        if (str != NULL) {
+            cJSON_AddStringToObject(reply, key, str);
+        }
     }
     va_end(ap);
 
