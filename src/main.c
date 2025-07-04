@@ -24,7 +24,7 @@ static void init_dip_switches(void) {
     for (int i = 0; i < 3; i++) {
         gpio_init(dip_pins[i]);
         gpio_set_dir(dip_pins[i], GPIO_IN);
-     //   gpio_pull_up(dip_pins[i]); // XXX is this needed?
+        gpio_pull_up(dip_pins[i]);
     }
     sleep_ms(10); // allow switches to settle
 }
