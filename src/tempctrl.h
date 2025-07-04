@@ -28,11 +28,7 @@
 typedef struct {
     uint pwm_slice;
     float T_now;
-    time_t t_now;
-    float T_prev;
-    time_t t_prev;
     float T_target;
-    float t_target;
     float drive;
     float gain;
     float hysteresis;
