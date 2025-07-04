@@ -33,28 +33,17 @@ void tempmon_init(uint8_t app_id) {
         }
         
         tempmon.initialized = true;
-        send_json(3,
-            KV_STR, "status", "initialized",
-            KV_INT, "app_id", app_id,
-            KV_INT, "sensor_count", tempmon.sensor_count
-        );
-    } else {
-        send_json(2,
-            KV_STR, "error", "No DS18B20 sensors found",
-            KV_INT, "app_id", app_id
-        );
     }
 }
 
 void tempmon_server(uint8_t app_id, const char *json_str) {
-    // Simplified tempmon does not handle commands
-    // All timing and control is handled by main.c
+    // tempmon does not handle commands
 }
 
 void tempmon_status(uint8_t app_id) {
     if (!tempmon.initialized) {
         send_json(3,
-            KV_STR, "status", "not_initialized",
+            KV_STR, "status", "error",
             KV_INT, "app_id", app_id,
             KV_BOOL, "initialized", false
         );
