@@ -17,6 +17,7 @@ add_executable(pico_multi
     src/motor.c
     src/rfswitch.c
     src/imu.cpp
+    src/lidar.c
 )
 
 # include directories

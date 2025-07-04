@@ -2,6 +2,7 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "cJSON.h"
+#include "eigsep_command.h"
 #include <stdio.h>
 
 #define I2C_PORT i2c0
