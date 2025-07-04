@@ -11,6 +11,7 @@
 
 static BNO08x imu1;
 static bool imu_initialized = false;
+static bool calibration_requested = false;
 
 // Last sensor data
 static struct {
@@ -80,18 +81,26 @@ void calibrate_imu() {
 }
 
 // calibrate if user sends {calibrate: true} in JSON
-// else just wait
 void imu_server(uint8_t app_id, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
     cJSON *cal = cJSON_GetObjectItem(root, "calibrate");
     if (cal && cJSON_IsTrue(cal)) {
-	    calibrate_imu();
+	    calibration_requested = true;
+    }
+    else {
+        calibration_requested = false;
     } 
     cJSON_Delete(root);
 }
 
 void imu_op(uint8_t app_id) {
     if (!imu_initialized) return;
+    
+    // Handle calibration request
+    if (calibration_requested) {
+        calibrate_imu();
+        calibration_requested = false;
+    }
     
     // Read sensor events
     if (imu1.getSensorEvent()) {
@@ -136,16 +145,14 @@ void imu_op(uint8_t app_id) {
 
 void imu_status(uint8_t app_id) {
     if (!imu_initialized) {
-        send_json(3,
-            KV_STR, "status", "error",
-            KV_INT, "app_id", app_id,
-            KV_STR, "message", "IMU not initialized"
-        );
-        return;
+        const char *status = "error";
+    }
+    else {
+        const char status = "update;
     }
     
     send_json(20,
-        KV_STR, "status", "update",
+        KV_STR, "status", status,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "quat_i", sensor_data.q[0],
         KV_FLOAT, "quat_j", sensor_data.q[1],
