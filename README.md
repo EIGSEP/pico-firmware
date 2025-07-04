@@ -50,6 +50,7 @@ cd pico-firmware
 
 # Initialize the pico-sdk submodule
 git submodule update --init lib/cJSON
+git submodule update --init lib/BNO08x_Pico_Library
 git submodule update --init pico-sdk
 cd pico-sdk
 git submodule update --init
