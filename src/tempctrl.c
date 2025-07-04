@@ -1,7 +1,6 @@
 #include "tempctrl.h"
 #include "temp_shared.h"
 #include "pico/stdlib.h"
-#include "pico/multicore.h"
 #include "hardware/pwm.h"
 #include "cJSON.h"
 #include <stdlib.h>
@@ -18,7 +17,6 @@ static volatile float last_temp2 = 25.0;
 // Forward declarations
 static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level);
 static void tempctrl_hysteresis_drive(TempControl *pc);
-static void tempctrl_update_temperature(TempControl *pc, time_t t_now, float T_now);
 
 void tempctrl_init(uint8_t app_id) {
     // Initialize GPIO for Peltier 1
@@ -47,26 +45,22 @@ void tempctrl_init(uint8_t app_id) {
     
     // Initialize Temperature Control 1 structure
     tempctrl1.T_target = 30.0;
-    tempctrl1.t_target = 10.0;
     tempctrl1.gain = 0.2;
     tempctrl1.hysteresis = 0.5;
     tempctrl1.enabled = true;
     tempctrl1.active = true;
     tempctrl1.channel = 1;
     tempctrl1.T_now = tempctrl1.T_target;
-    tempctrl1.T_prev = tempctrl1.T_target;
     tempctrl1.drive = 0.0;
     
     // Initialize Temperature Control 2 structure
     tempctrl2.T_target = 32.0;
-    tempctrl2.t_target = 10.0;
     tempctrl2.gain = 0.2;
     tempctrl2.hysteresis = 0.5;
     tempctrl2.enabled = true;
     tempctrl2.active = true;
     tempctrl2.channel = 2;
     tempctrl2.T_now = tempctrl2.T_target;
-    tempctrl2.T_prev = tempctrl2.T_target;
     tempctrl2.drive = 0.0;
     
     // Initialize shared temperature system and find sensors
@@ -76,19 +70,7 @@ void tempctrl_init(uint8_t app_id) {
             tempctrl1.sensor_rom = temp_shared_get_rom_by_index(0);
             tempctrl2.sensor_rom = temp_shared_get_rom_by_index(1);
             temperature_reading_active = true;
-        } else {
-            // Fallback if not enough sensors - disable temperature reading
-            temperature_reading_active = false;
-            send_json(2,
-                KV_STR, "error", "Need at least 2 DS18B20 sensors",
-                KV_INT, "found", count
-            );
         }
-    } else {
-        temperature_reading_active = false;
-        send_json(1,
-            KV_STR, "error", "Failed to initialize temperature system"
-        );
     }
 }
 
@@ -186,10 +168,9 @@ void tempctrl_op(uint8_t app_id) {
                 last_temp2 = temp2;
             }
             
-            // Update control structures
-            time_t current_time = time(NULL);
-            tempctrl_update_temperature(&tempctrl1, current_time, last_temp1);
-            tempctrl_update_temperature(&tempctrl2, current_time, last_temp2);
+            // update temperature
+            tempctrl1.T_now = last_temp1;
+            tempctrl2.T_now = last_temp2;
             
             // Drive Peltiers based on hysteresis control
             if (tempctrl1.enabled) {
@@ -249,11 +230,3 @@ static void tempctrl_hysteresis_drive(TempControl *pc) {
         tempctrl_drive_raw(pc, false, (uint32_t)(-pc->drive * PWM_WRAP));
     }
 }
-
-static void tempctrl_update_temperature(TempControl *pc, time_t t_now, float T_now) {
-    pc->t_prev = pc->t_now;
-    pc->T_prev = pc->T_now;
-    pc->t_now = t_now;
-    pc->T_now = T_now;
-}
-
