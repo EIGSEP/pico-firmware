@@ -16,9 +16,13 @@ add_executable(pico_multi
     src/main.c
     src/motor.c
     src/rfswitch.c
+    src/tempctrl.c
+    src/tempmon.c
+    src/temp_simple.c
     src/imu.cpp
     src/lidar.c
 )
+
 
 # include directories
 add_library(cjson STATIC lib/cJSON/cJSON.c)
@@ -34,6 +38,15 @@ target_link_libraries(eigsep_command
     cjson
 )
 
+add_library(onewire STATIC lib/onewire/onewire_library.c)
+target_include_directories(onewire PUBLIC lib/onewire)
+target_link_libraries(onewire PUBLIC
+    pico_stdlib
+    hardware_pio
+)
+# Generate PIO header for the onewire library
+pico_generate_pio_header(onewire ${CMAKE_CURRENT_LIST_DIR}/lib/onewire/onewire_library.pio)
+
 # Add BNO08x library
 add_subdirectory(lib/BNO08x_Pico_Library)
 
@@ -47,12 +60,13 @@ target_include_directories(pico_multi PRIVATE
 target_link_libraries(pico_multi
     pico_stdlib
     hardware_gpio
-    hardware_watchdog
-    hardware_timer
-    hardware_i2c
+    hardware_pwm
+    hardware_pio
     pico_unique_id
     cjson
     eigsep_command
+    onewire
+    hardware_i2c
     BNO08x_Pico_Library
 )
 

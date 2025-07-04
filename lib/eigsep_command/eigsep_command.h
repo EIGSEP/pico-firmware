@@ -17,7 +17,8 @@ typedef enum {
     KV_STR,
     KV_INT,
     KV_FLOAT,
-    KV_BYTES
+    KV_BYTES,
+    KV_BOOL
 } kv_type_t;
 
 void handle_json_command(const char *line, uint32_t *cadence_ms);

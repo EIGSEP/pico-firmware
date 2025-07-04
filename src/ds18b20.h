@@ -1,4 +1,4 @@
-// Function commands for d218b20 1-Wire temperature sensor 
+// Function commands for ds18b20 1-Wire temperature sensor 
 // https://www.analog.com/en/products/ds18b20.html
 //
 #define DS18B20_CONVERT_T           0x44
