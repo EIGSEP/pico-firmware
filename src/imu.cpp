@@ -144,11 +144,12 @@ void imu_op(uint8_t app_id) {
 }
 
 void imu_status(uint8_t app_id) {
+    const char *status;
     if (!imu_initialized) {
-        const char *status = "error";
+        status = "error";
     }
     else {
-        const char status = "update;
+        status = "update";
     }
     
     send_json(20,

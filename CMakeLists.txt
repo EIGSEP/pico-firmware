@@ -16,7 +16,7 @@ add_executable(pico_multi
     src/main.c
     src/motor.c
     src/rfswitch.c
-    src/imu.c
+    src/imu.cpp
 )
 
 # include directories
