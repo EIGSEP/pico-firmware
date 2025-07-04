@@ -135,14 +135,16 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    send_json(11,
+    send_json(13,
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temp1", tempctrl1.T_now,
+        KV_INT, "temp1_gpio", TEMP_SENSOR1_PIN,
         KV_FLOAT, "target1", tempctrl1.T_target,
         KV_FLOAT, "drive1", tempctrl1.drive,
         KV_BOOL, "enabled1", tempctrl1.enabled,
         KV_FLOAT, "temp2", tempctrl2.T_now,
+        KV_INT, "temp2_gpio", TEMP_SENSOR2_PIN,
         KV_FLOAT, "target2", tempctrl2.T_target,
         KV_FLOAT, "drive2", tempctrl2.drive,
         KV_BOOL, "enabled2", tempctrl2.enabled,

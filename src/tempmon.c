@@ -45,11 +45,13 @@ void tempmon_status(uint8_t app_id) {
         return;
     }
     
-    send_json(7,
+    send_json(9,
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temperature1", tempmon.temperature1,
+        KV_INT, "temperature1_gpio", TEMPMON_SENSOR1_PIN,
         KV_FLOAT, "temperature2", tempmon.temperature2,
+        KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
         KV_BOOL, "sensor1_valid", tempmon.sensor1_valid,
         KV_BOOL, "sensor2_valid", tempmon.sensor2_valid,
         KV_INT, "last_read", (int)tempmon.last_read
