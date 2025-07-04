@@ -1,7 +1,9 @@
 #include "tempctrl.h"
-#include "temp_shared.h"
+#include "temp_simple.h"
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
+#include "hardware/pio.h"
+#include "onewire_library.pio.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,8 @@
 // Static instances
 static TempControl tempctrl1;
 static TempControl tempctrl2;
+static TempSensor temp_sensor1;
+static TempSensor temp_sensor2;
 static volatile bool temperature_reading_active = false;
 static volatile float last_temp1 = 25.0;
 static volatile float last_temp2 = 25.0;
@@ -63,14 +67,13 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl2.T_now = tempctrl2.T_target;
     tempctrl2.drive = 0.0;
     
-    // Initialize shared temperature system and find sensors
-    if (temp_shared_init()) {
-        int count = temp_shared_get_sensor_count();
-        if (count >= 2) {
-            tempctrl1.sensor_rom = temp_shared_get_rom_by_index(0);
-            tempctrl2.sensor_rom = temp_shared_get_rom_by_index(1);
-            temperature_reading_active = true;
-        }
+    // Initialize temperature sensors on separate pins
+    uint offset1 = pio_add_program(pio0, &onewire_program);
+    uint offset2 = pio_add_program(pio1, &onewire_program);
+    
+    if (temp_sensor_init(&temp_sensor1, TEMP_SENSOR1_PIN, pio0, offset1) &&
+        temp_sensor_init(&temp_sensor2, TEMP_SENSOR2_PIN, pio1, offset2)) {
+        temperature_reading_active = true;
     }
 }
 
@@ -155,34 +158,37 @@ void tempctrl_op(uint8_t app_id) {
     if (temperature_reading_active && (now - last_temp_read) >= 750) {
         last_temp_read = now;
         
-        // Read temperatures from shared system
-        if (temp_shared_read_all()) {
-            float temp1 = temp_shared_read_by_rom(tempctrl1.sensor_rom);
-            float temp2 = temp_shared_read_by_rom(tempctrl2.sensor_rom);
-            
-            // Update temperature readings if valid
-            if (temp1 > -55.0 && temp1 < 125.0) {
+        // Read temperatures from individual sensors
+        bool read1 = temp_sensor_read(&temp_sensor1);
+        bool read2 = temp_sensor_read(&temp_sensor2);
+        
+        if (read1) {
+            float temp1 = temp_sensor_get_temp(&temp_sensor1);
+            if (!isnan(temp1)) {
                 last_temp1 = temp1;
-            }
-            if (temp2 > -55.0 && temp2 < 125.0) {
-                last_temp2 = temp2;
-            }
-            
-            // update temperature
-            tempctrl1.T_now = last_temp1;
-            tempctrl2.T_now = last_temp2;
-            
-            // Drive Peltiers based on hysteresis control
-            if (tempctrl1.enabled) {
-                tempctrl_hysteresis_drive(&tempctrl1);
-            }
-            if (tempctrl2.enabled) {
-                tempctrl_hysteresis_drive(&tempctrl2);
+                tempctrl1.T_now = temp1;
             }
         }
         
+        if (read2) {
+            float temp2 = temp_sensor_get_temp(&temp_sensor2);
+            if (!isnan(temp2)) {
+                last_temp2 = temp2;
+                tempctrl2.T_now = temp2;
+            }
+        }
+        
+        // Drive Peltiers based on hysteresis control
+        if (tempctrl1.enabled) {
+            tempctrl_hysteresis_drive(&tempctrl1);
+        }
+        if (tempctrl2.enabled) {
+            tempctrl_hysteresis_drive(&tempctrl2);
+        }
+        
         // Start new temperature conversion for next cycle
-        temp_shared_start_conversion();
+        temp_sensor_start_conversion(&temp_sensor1);
+        temp_sensor_start_conversion(&temp_sensor2);
     }
 }
 
