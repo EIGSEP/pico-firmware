@@ -11,6 +11,12 @@ This is a Raspberry Pi Pico 2 (RP2350) firmware project implementing a multi-app
 ### Building the Firmware
 
 ```bash
+# Initialize submodules first (if not already done)
+git submodule update --init lib/cJSON
+git submodule update --init lib/BNO08x_Pico_Library
+git submodule update --init pico-sdk
+cd pico-sdk && git submodule update --init && cd ..
+
 # Build for Pico 2 (default target)
 ./build.sh
 
@@ -48,42 +54,55 @@ export PICO_SDK_PATH=/path/to/pico-sdk
 The firmware implements a multi-app dispatch system in `src/main.c`:
 
 1. **DIP Switch Selection**: GPIO pins 2, 3, 4 read a 3-bit value (0-7) to select the active application
-2. **App Registry**: Applications are registered in the `app_table` array with name and function pointer
-3. **Execution Model**: Selected app runs in an infinite loop with USB serial communication
+2. **App Dispatch**: Applications are selected via switch statement with defined app IDs
+3. **Execution Model**: Selected app runs with three phases:
+   - `app_init()` - One-time initialization
+   - `app_server()` - Command processing from JSON input
+   - `app_op()` - Continuous operations in main loop
+   - `app_status()` - Periodic status reporting
 
 ### Adding New Applications
 
 1. Create app source files following the pattern:
    ```c
    // app_name.h
-   void app_name(void);
+   void app_name_init(uint8_t app_id);
+   void app_name_server(uint8_t app_id, const char *line);
+   void app_name_op(uint8_t app_id);
+   void app_name_status(uint8_t app_id);
    
    // app_name.c
-   void app_name(void) {
-       // Initialize hardware
-       // Wait for USB if needed
-       while (1) {
-           // App logic
-       }
+   void app_name_init(uint8_t app_id) {
+       // Initialize hardware for this app
+   }
+   void app_name_server(uint8_t app_id, const char *line) {
+       // Process JSON commands
+   }
+   void app_name_op(uint8_t app_id) {
+       // Continuous operations
+   }
+   void app_name_status(uint8_t app_id) {
+       // Send status updates
    }
    ```
 
-2. Add app to `app_table` in `src/main.c:29-33`:
-   ```c
-   {"app_name", app_name}
-   ```
+2. Add app ID to `src/pico_multi.h` (e.g., `#define APP_NEWAPP 6`)
 
-3. Update `CMakeLists.txt` to include new source files
+3. Add app to dispatch switches in `src/main.c` (init, server, op, status)
 
-4. Increase `MAX_APPS` in `src/main.c` if needed (currently 2)
+4. Update `CMakeLists.txt` to include new source files
 
 ### Key Components
 
 - **Main Entry**: `src/main.c` - DIP switch reading and app dispatch
-- **Default Apps**: `src/blink_app1.c`, `src/blink_app2.c` - LED blinking examples
 - **Hardware Apps**: 
-  - `apps/motor/` - Stepper motor control
-  - `apps/switches/` - GPIO switch network control
+  - `src/motor.c` - Stepper motor control (APP_MOTOR = 0)
+  - `src/tempctrl.c` - Temperature controller (APP_TEMPCTRL = 1)
+  - `src/tempmon.c` - Temperature monitoring (APP_TEMPMON = 2)
+  - `src/imu.c` - IMU sensor interface (APP_IMU = 3)
+  - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
+  - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)
+- **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
 
 ### Hardware Configuration
 
@@ -102,22 +121,21 @@ Python script for flashing and configuring multiple Picos:
 - Saves to `device_info_<unique_id>.json` files
 - Supports both BOOTSEL and CDC serial mode Picos
 
-### Git Subtree Usage
+### Libraries and Dependencies
 
-Individual apps can be managed as git subtrees:
-```bash
-# Add new app from external repo
-git subtree add --prefix=apps/newapp https://github.com/org/repo.git main --squash
-
-# Update existing subtree
-git subtree pull --prefix=apps/motor https://github.com/org/motor-repo.git main --squash
-```
+The project includes several libraries:
+- **cJSON**: JSON parsing and generation for command protocol
+- **eigsep_command**: Custom command handling library built on cJSON
+- **onewire**: OneWire protocol library with PIO implementation
+- **BNO08x_Pico_Library**: IMU sensor library for BNO08x devices
 
 ## Important Notes
 
 - The project uses the Pico SDK from the `pico-sdk/` subdirectory
-- USB serial device names planned to be unique (PICO_000, PICO_001, etc.)
+- USB serial device names use unique board IDs for identification
 - No automated tests - testing is hardware-based
-- Apps run in infinite loops - ensure proper resource management
-- Currently only 2 apps are registered in the dispatch table (MAX_APPS = 2)
-- Apps in `apps/` directory need to be integrated into the dispatch system in `src/main.c`
+- Apps use a command/response architecture with JSON protocol
+- Currently 6 apps are integrated in the dispatch system (0-5)
+- All apps are in `src/` directory and fully integrated
+- Status reporting occurs every 200ms (`STATUS_CADENCE_MS`)
+- LED blinks as a heartbeat indicator during operation
