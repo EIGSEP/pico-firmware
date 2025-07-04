@@ -16,6 +16,7 @@ add_executable(pico_multi
     src/main.c
     src/motor.c
     src/rfswitch.c
+    src/imu.cpp
 )
 
 # include directories
@@ -32,9 +33,13 @@ target_link_libraries(eigsep_command
     cjson
 )
 
+# Add BNO08x library
+add_subdirectory(lib/BNO08x_Pico_Library)
+
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/lib/BNO08x_Pico_Library/include
 )
 
 # link against Pico stdlib and required hardware libraries
@@ -43,9 +48,11 @@ target_link_libraries(pico_multi
     hardware_gpio
     hardware_watchdog
     hardware_timer
+    hardware_i2c
     pico_unique_id
     cjson
     eigsep_command
+    BNO08x_Pico_Library
 )
 
 # enable USB CDC for stdio
