@@ -26,6 +26,12 @@ void send_json(unsigned count, ...)
                 sprintf(buf, "%d", va_arg(ap, int));
                 str = buf;
                 break;
+
+            case KV_FLOAT:
+                /* float is promoted to double in varargs */
+                sprintf(buf, "%.6f", va_arg(ap, double));
+                str = buf;
+                break;
         }
 
         cJSON_AddStringToObject(reply, key, str);
