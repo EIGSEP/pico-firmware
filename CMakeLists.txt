@@ -60,12 +60,8 @@ target_include_directories(pico_multi PRIVATE
 target_link_libraries(pico_multi
     pico_stdlib
     hardware_gpio
-    hardware_watchdog
-    hardware_timer
     hardware_pwm
     hardware_pio
-    pico_multicore
-    pico_time
     pico_unique_id
     cjson
     eigsep_command
