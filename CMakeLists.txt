@@ -18,7 +18,7 @@ add_executable(pico_multi
     src/rfswitch.c
     src/tempctrl.c
     src/tempmon.c
-    src/temp_shared.c
+    src/temp_simple.c
     src/imu.cpp
     src/lidar.c
 )

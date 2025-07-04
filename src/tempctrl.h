@@ -18,8 +18,9 @@
 #define PELTIER2_DIR_PIN3   13
 #define PELTIER2_DIR_PIN4   12
 
-// OneWire DS18B20 temperature sensor
-#define DS_PIN              22
+// Temperature sensor pins
+#define TEMP_SENSOR1_PIN    21
+#define TEMP_SENSOR2_PIN    22
 
 // PWM configuration
 #define PWM_WRAP            1000
@@ -35,7 +36,6 @@ typedef struct {
     bool active;
     bool enabled;
     int channel;
-    uint64_t sensor_rom;
 } TempControl;
 
 // Standard app interface functions
