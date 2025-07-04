@@ -46,17 +46,18 @@ def main():
     ms = MotorSerial(sys.argv[-1])
     ms.start()
     payload = {
-        #"pulses_az":     0,   # signed or unsigned int
-        "pulses_el":   620,   #               "
-        #"delay_us_az": 600,  # microseconds
-        #"delay_us_el": 600   # microseconds
+        "pulses_az":     0,   # signed or unsigned int
+        "pulses_el":     0,   #               "
+        "delay_us_az": 600,  # microseconds
+        "delay_us_el": 600   # microseconds
     }
     try:
         while True:
-            for val in (620, -620):
+            for val in (1620, 0, -1620):
                 payload['pulses_el'] = val
+                payload['pulses_az'] = val
                 ms.command(payload)
-                time.sleep(1)
+                time.sleep(3)
     finally:
         ms.stop()
         
