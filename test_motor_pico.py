@@ -44,6 +44,7 @@ def main():
     Open the serial port, read until a valid JSON line appears or timeout.
     """
     ms = MotorSerial(sys.argv[-1])
+    input("GO?")
     ms.start()
     payload = {
         "pulses_az":     0,   # signed or unsigned int

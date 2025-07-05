@@ -64,6 +64,11 @@ def main():
         description="Flash all attached Picos, read JSON from each, save to single file"
     )
     p.add_argument(
+        "--port",
+        default=None,
+        help="Serial port of pico, None means all"
+   )
+    p.add_argument(
         "--uf2",
         default="build/pico_multi.uf2",
         help="Path to your pico_multi.uf2"
@@ -88,6 +93,8 @@ def main():
     args = p.parse_args()
 
     ports = find_pico_ports()
+    if args.port:
+        ports = {k: v for k, v in ports.items() if k == args.port}
     if not ports:
         print(
             "No Raspberry Pi Pico serial ports found.",
