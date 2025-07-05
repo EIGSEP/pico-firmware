@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-import argparse
-import subprocess
-import time
 import sys
 import json
 from serial import Serial
@@ -22,8 +18,9 @@ def watch_json_from_serial(port, baud):
             except json.JSONDecodeError:
                 continue
 
+
 def main():
-    data = watch_json_from_serial(sys.argv[-1], 115200)
+    watch_json_from_serial(sys.argv[-1], 115200)
 
 
 if __name__ == "__main__":

@@ -20,12 +20,16 @@ PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
 
 class PicoDevice:
-    """Base class for communicating with Pico devices running custom firmware."""
-    
-    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
+    """
+    Base class for communicating with Pico devices running custom firmware.
+    """
+
+    def __init__(
+        self, port: str, baudrate: int = 115200, timeout: float = 1.0
+    ):
         """
         Initialize a Pico device connection.
-        
+
         Args:
             port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
             baudrate: Serial baud rate (default: 115200)
@@ -38,15 +42,17 @@ class PicoDevice:
         self.ser: Optional[Serial] = None
         self._running = False
         self._reader_thread: Optional[threading.Thread] = None
-        self._response_handler: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._response_handler: Optional[Callable[[Dict[str, Any]], None]] = (
+            None
+        )
         self._raw_handler: Optional[Callable[[str], None]] = None
         self.last_status: Dict[str, Any] = {}
-        
+
     @staticmethod
     def find_pico_ports() -> list[str]:
         """
         Find all connected Pico devices in CDC mode.
-        
+
         Returns:
             List of serial port paths for connected Pico devices
         """
@@ -55,11 +61,11 @@ class PicoDevice:
             if info.vid == PICO_VID and info.pid == PICO_PID_CDC:
                 ports.append(info.device)
         return ports
-    
+
     def connect(self) -> bool:
         """
         Connect to the Pico device.
-        
+
         Returns:
             True if connection successful, False otherwise
         """
@@ -70,61 +76,61 @@ class PicoDevice:
         except Exception as e:
             self.logger.error(f"Failed to connect to {self.port}: {e}")
             return False
-    
+
     def disconnect(self):
         """Disconnect from the device and clean up resources."""
         self.stop()
         if self.ser:
             self.ser.close()
             self.ser = None
-    
+
     def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
         """
         Send a JSON command to the device.
-        
+
         Args:
             cmd_dict: Dictionary to be JSON-encoded and sent
-            
+
         Returns:
             True if command sent successfully, False otherwise
         """
         if not self.ser:
             return False
-        
+
         try:
-            json_str = json.dumps(cmd_dict, separators=(',', ':'))
-            self.ser.write((json_str + '\n').encode('utf-8'))
+            json_str = json.dumps(cmd_dict, separators=(",", ":"))
+            self.ser.write((json_str + "\n").encode("utf-8"))
             self.ser.flush()
             return True
         except Exception as e:
             self.logger.error(f"Failed to send command: {e}")
             return False
-    
+
     def read_line(self) -> Optional[str]:
         """
         Read a line from the serial port.
-        
+
         Returns:
             Decoded string without newline, or None if no data/error
         """
         if not self.ser:
             return None
-        
+
         try:
             line = self.ser.readline()
             if line:
-                return line.decode('utf-8', errors='ignore').strip()
+                return line.decode("utf-8", errors="ignore").strip()
         except Exception:
             pass
         return None
-    
+
     def parse_response(self, line: str) -> Optional[Dict[str, Any]]:
         """
         Parse JSON response from device.
-        
+
         Args:
             line: Raw string from serial port
-            
+
         Returns:
             Parsed JSON as dictionary, or None if parsing fails
         """
@@ -132,7 +138,7 @@ class PicoDevice:
             return json.loads(line)
         except json.JSONDecodeError:
             return None
-    
+
     def _reader_thread_func(self):
         """Background thread function for reading serial data."""
         while self._running:
@@ -141,7 +147,7 @@ class PicoDevice:
                 # Call raw handler if set
                 if self._raw_handler:
                     self._raw_handler(line)
-                
+
                 # Try to parse as JSON
                 data = self.parse_response(line)
                 if data:
@@ -152,60 +158,61 @@ class PicoDevice:
                     else:
                         # Default: print the response
                         print(json.dumps(data))
-    
+
     def set_response_handler(self, handler: Callable[[Dict[str, Any]], None]):
         """
         Set a custom handler for parsed JSON responses.
-        
+
         Args:
             handler: Function that takes a dictionary (parsed JSON response)
         """
         self._response_handler = handler
-    
+
     def set_raw_handler(self, handler: Callable[[str], None]):
         """
         Set a custom handler for raw string responses.
-        
+
         Args:
             handler: Function that takes a string (raw line from serial)
         """
         self._raw_handler = handler
-    
+
     def start(self):
         """Start the background reader thread."""
         if not self._running:
             self._running = True
             self._reader_thread = threading.Thread(
-                target=self._reader_thread_func, 
-                daemon=True
+                target=self._reader_thread_func, daemon=True
             )
             self._reader_thread.start()
-    
+
     def stop(self):
         """Stop the background reader thread."""
         self._running = False
         if self._reader_thread:
             self._reader_thread.join(timeout=1.0)
             self._reader_thread = None
-    
-    def wait_for_response(self, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+
+    def wait_for_response(
+        self, timeout: float = 5.0
+    ) -> Optional[Dict[str, Any]]:
         """
         Send a command and wait for a single response.
         Useful for request-response patterns.
-        
+
         Args:
             timeout: Maximum time to wait for response
-            
+
         Returns:
             Parsed response or None if timeout/error
         """
         # Temporarily store the serial timeout
         old_timeout = self.ser.timeout if self.ser else None
-        
+
         try:
             if self.ser:
                 self.ser.timeout = timeout
-            
+
             start_time = time.time()
             while time.time() - start_time < timeout:
                 line = self.read_line()
@@ -214,19 +221,19 @@ class PicoDevice:
                     if data:
                         return data
             return None
-            
+
         finally:
             # Restore the original timeout
             if self.ser and old_timeout is not None:
                 self.ser.timeout = old_timeout
-    
+
     def __enter__(self):
         """Context manager entry."""
         if self.connect():
             self.start()
             return self
         raise RuntimeError(f"Failed to connect to {self.port}")
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.disconnect()
@@ -234,39 +241,46 @@ class PicoDevice:
 
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
-    
-    def move(self, pulses_az: int, pulses_el: int, 
-             delay_us_az: int = 600, delay_us_el: int = 600) -> bool:
+
+    def move(
+        self,
+        pulses_az: int,
+        pulses_el: int,
+        delay_us_az: int = 600,
+        delay_us_el: int = 600,
+    ) -> bool:
         """
         Send motor movement command.
-        
+
         Args:
             pulses_az: Azimuth motor pulses (positive or negative)
             pulses_el: Elevation motor pulses (positive or negative)
             delay_us_az: Microseconds between azimuth steps
             delay_us_el: Microseconds between elevation steps
-            
+
         Returns:
             True if command sent successfully
         """
-        return self.send_command({
-            "pulses_az": pulses_az,
-            "pulses_el": pulses_el,
-            "delay_us_az": delay_us_az,
-            "delay_us_el": delay_us_el
-        })
+        return self.send_command(
+            {
+                "pulses_az": pulses_az,
+                "pulses_el": pulses_el,
+                "delay_us_az": delay_us_az,
+                "delay_us_el": delay_us_el,
+            }
+        )
 
 
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
-    
+
     def set_switch_state(self, state: int) -> bool:
         """
         Set RF switch state.
-        
+
         Args:
             state: Switch state value (0-255 for 8-bit control)
-            
+
         Returns:
             True if command sent successfully
         """
@@ -275,67 +289,61 @@ class PicoRFSwitch(PicoDevice):
 
 class PicoPeltier(PicoDevice):
     """Specialized class for Peltier temperature control Pico devices."""
-    
+
     def set_temperature(self, temperature: float, channel: int = 0) -> bool:
         """
         Set target temperature.
-        
+
         Args:
             temperature: Target temperature in Celsius
             channel: Channel number (0=both, 1/2=individual)
-            
+
         Returns:
             True if command sent successfully
         """
-        return self.send_command({
-            "cmd": "set_temp",
-            "temperature": temperature,
-            "channel": channel
-        })
-    
+        return self.send_command(
+            {"cmd": "set_temp", "temperature": temperature, "channel": channel}
+        )
+
     def set_hysteresis(self, hysteresis: float, channel: int = 0) -> bool:
         """
         Set temperature hysteresis band.
-        
+
         Args:
             hysteresis: Hysteresis value in Celsius
             channel: Channel number (0=both, 1/2=individual)
-            
+
         Returns:
             True if command sent successfully
         """
-        return self.send_command({
-            "cmd": "set_hysteresis",
-            "hysteresis": hysteresis,
-            "channel": channel
-        })
-    
+        return self.send_command(
+            {
+                "cmd": "set_hysteresis",
+                "hysteresis": hysteresis,
+                "channel": channel,
+            }
+        )
+
     def enable(self, channel: int = 0) -> bool:
         """
         Enable temperature control.
-        
+
         Args:
             channel: Channel number (0=both, 1/2=individual)
-            
+
         Returns:
             True if command sent successfully
         """
-        return self.send_command({
-            "cmd": "enable",
-            "channel": channel
-        })
-    
+        return self.send_command({"cmd": "enable", "channel": channel})
+
     def disable(self, channel: int = 0) -> bool:
         """
         Disable temperature control.
-        
+
         Args:
             channel: Channel number (0=both, 1/2=individual)
-            
+
         Returns:
             True if command sent successfully
         """
-        return self.send_command({
-            "cmd": "disable",
-            "channel": channel
-        })
+        return self.send_command({"cmd": "disable", "channel": channel})
