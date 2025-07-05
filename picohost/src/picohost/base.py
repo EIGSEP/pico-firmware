@@ -4,12 +4,14 @@ Provides common functionality for serial communication with Pico devices.
 """
 
 import json
+import logging
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
 from serial import Serial
 from serial.tools import list_ports
 
+logger = logging.getLogger(__name__)
 
 # USB IDs for Raspberry Pi Pico
 PICO_VID = 0x2E8A
@@ -29,6 +31,7 @@ class PicoDevice:
             baudrate: Serial baud rate (default: 115200)
             timeout: Serial read timeout in seconds (default: 1.0)
         """
+        self.logger = logger
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -65,7 +68,7 @@ class PicoDevice:
             self.ser.reset_input_buffer()
             return True
         except Exception as e:
-            print(f"Failed to connect to {self.port}: {e}")
+            self.logger.error(f"Failed to connect to {self.port}: {e}")
             return False
     
     def disconnect(self):
@@ -94,7 +97,7 @@ class PicoDevice:
             self.ser.flush()
             return True
         except Exception as e:
-            print(f"Failed to send command: {e}")
+            self.logger.error(f"Failed to send command: {e}")
             return False
     
     def read_line(self) -> Optional[str]:
