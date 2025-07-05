@@ -14,9 +14,6 @@ static TempControl tempctrl1;
 static TempControl tempctrl2;
 static TempSensor temp_sensor1;
 static TempSensor temp_sensor2;
-static volatile bool temperature_reading_active = false;
-static volatile float last_temp1 = 25.0;
-static volatile float last_temp2 = 25.0;
 
 // Forward declarations
 static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level);
@@ -49,7 +46,8 @@ void tempctrl_init(uint8_t app_id) {
     
     // Initialize Temperature Control 1 structure
     tempctrl1.T_target = 30.0;
-    tempctrl1.gain = 0.2;
+    tempctrl1.gain = 0.1;
+    tempctrl1.clamp = 0.2;  // Maximum drive level
     tempctrl1.hysteresis = 0.5;
     tempctrl1.enabled = false;
     tempctrl1.active = false;
@@ -59,7 +57,8 @@ void tempctrl_init(uint8_t app_id) {
     
     // Initialize Temperature Control 2 structure
     tempctrl2.T_target = 32.0;
-    tempctrl2.gain = 0.2;
+    tempctrl2.gain = 0.1;
+    tempctrl2.clamp = 0.2;  // Maximum drive level
     tempctrl2.hysteresis = 0.5;
     tempctrl2.enabled = false;
     tempctrl2.active = false;
@@ -71,10 +70,8 @@ void tempctrl_init(uint8_t app_id) {
     uint offset1 = pio_add_program(pio0, &onewire_program);
     uint offset2 = pio_add_program(pio1, &onewire_program);
     
-    if (temp_sensor_init(&temp_sensor1, TEMP_SENSOR1_PIN, pio0, offset1) &&
-        temp_sensor_init(&temp_sensor2, TEMP_SENSOR2_PIN, pio1, offset2)) {
-        temperature_reading_active = true;
-    }
+    temp_sensor_init(&temp_sensor1, TEMP_SENSOR1_PIN, pio0, offset1);
+    temp_sensor_init(&temp_sensor2, TEMP_SENSOR2_PIN, pio1, offset2);
 }
 
 void tempctrl_server(uint8_t app_id, const char *json_str) {
@@ -135,57 +132,57 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    send_json(13,
-        KV_STR, "status", "update",
+    const char *status;
+    const float time1 = temp_sensor_get_conversion_time(&temp_sensor1);
+    const float time2 = temp_sensor_get_conversion_time(&temp_sensor2);
+    
+    if (time1 == 0 && time2 == 0) {
+        status = "error";
+    } else {
+        status = "update";
+    }
+    
+    send_json(15,
+        KV_STR, "status", status,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temp1", tempctrl1.T_now,
         KV_INT, "temp1_gpio", TEMP_SENSOR1_PIN,
+        KV_FLOAT, "conversion_time1", time1,
         KV_FLOAT, "target1", tempctrl1.T_target,
         KV_FLOAT, "drive1", tempctrl1.drive,
         KV_BOOL, "enabled1", tempctrl1.enabled,
         KV_FLOAT, "temp2", tempctrl2.T_now,
         KV_INT, "temp2_gpio", TEMP_SENSOR2_PIN,
+        KV_FLOAT, "conversion_time2", time2,
         KV_FLOAT, "target2", tempctrl2.T_target,
         KV_FLOAT, "drive2", tempctrl2.drive,
-        KV_BOOL, "enabled2", tempctrl2.enabled,
-        KV_BOOL, "sensors_active", temperature_reading_active
+        KV_BOOL, "enabled2", tempctrl2.enabled
     );
 }
 
 void tempctrl_op(uint8_t app_id) {
-    // Read temperatures and control
-    if (temperature_reading_active) {
-        // Read temperatures from individual sensors
-        bool read1 = temp_sensor_read(&temp_sensor1);
-        bool read2 = temp_sensor_read(&temp_sensor2);
-        
-        if (read1) {
-            float temp1 = temp_sensor_get_temp(&temp_sensor1);
-            if (!isnan(temp1)) {
-                last_temp1 = temp1;
-                tempctrl1.T_now = temp1;
-            }
-        }
-        
-        if (read2) {
-            float temp2 = temp_sensor_get_temp(&temp_sensor2);
-            if (!isnan(temp2)) {
-                last_temp2 = temp2;
-                tempctrl2.T_now = temp2;
-            }
-        }
-        
-        // Drive Peltiers based on hysteresis control
-        if (tempctrl1.enabled) {
-            tempctrl_hysteresis_drive(&tempctrl1);
-        }
-        if (tempctrl2.enabled) {
-            tempctrl_hysteresis_drive(&tempctrl2);
-        }
-        
-        // Start new temperature conversion for next cycle
+    // Start conversions if not already started
+    if (!temp_sensor1.conversion_started) {
         temp_sensor_start_conversion(&temp_sensor1);
+    }
+    if (!temp_sensor2.conversion_started) {
         temp_sensor_start_conversion(&temp_sensor2);
+    }
+    
+    // Read sensors (auto-skip if conversion not ready)
+    temp_sensor_read(&temp_sensor1);
+    temp_sensor_read(&temp_sensor2);
+    
+    // Update current temperatures
+    tempctrl1.T_now = temp_sensor_get_temp(&temp_sensor1);
+    tempctrl2.T_now = temp_sensor_get_temp(&temp_sensor2);
+    
+    // Drive Peltiers based on hysteresis control
+    if (tempctrl1.enabled) {
+        tempctrl_hysteresis_drive(&tempctrl1);
+    }
+    if (tempctrl2.enabled) {
+        tempctrl_hysteresis_drive(&tempctrl2);
     }
 }
 
@@ -213,14 +210,14 @@ static void tempctrl_hysteresis_drive(TempControl *pc) {
         // Outside hysteresis band - engage control
         pc->active = true;
         
-        // Simple proportional control with gain limiting
-        pc->drive = error * 0.1;  // Proportional factor
+        // Simple proportional control using gain parameter
+        pc->drive = error * pc->gain;
         
-        // Limit drive to gain setting
-        if (pc->drive > pc->gain) {
-            pc->drive = pc->gain;
-        } else if (pc->drive < -pc->gain) {
-            pc->drive = -pc->gain;
+        // Limit drive to maximum power (clamp acts as max power)
+        if (pc->drive > pc->clamp) {
+            pc->drive = pc->clamp;
+        } else if (pc->drive < -1.0 * pc->clamp) {
+            pc->drive = -1.0; * pc->clamp;
         }
     }
     
