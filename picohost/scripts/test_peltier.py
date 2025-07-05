@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test script for Peltier temperature control system.
 Allows setting target temperatures and monitoring sensor readings.
