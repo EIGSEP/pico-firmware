@@ -28,6 +28,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-timeout",
+  "mockserial @ git+https://github.com/christianhbye/mockserial.git",
 ]
 
 [tool.setuptools]
