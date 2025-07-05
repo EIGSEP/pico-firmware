@@ -45,7 +45,7 @@ void tempmon_status(uint8_t app_id) {
         return;
     }
     
-    send_json(9,
+    send_json(8,
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temperature1", tempmon.temperature1,
@@ -53,8 +53,7 @@ void tempmon_status(uint8_t app_id) {
         KV_FLOAT, "temperature2", tempmon.temperature2,
         KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
         KV_BOOL, "sensor1_connected", tempmon.sensor1_valid,
-        KV_BOOL, "sensor2_connected", tempmon.sensor2_valid,
-        KV_INT, "last_read_ms", (int)tempmon.last_read
+        KV_BOOL, "sensor2_connected", tempmon.sensor2_valid
     );
 }
 
@@ -68,14 +67,6 @@ void tempmon_op(uint8_t app_id) {
 bool tempmon_read_sensors(void) {
     if (!tempmon.initialized) return false;
     
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    
-    // Only read every 750ms to allow conversion time
-    if ((now - tempmon.last_read) < 750) {
-        return false;
-    }
-    
-    tempmon.last_read = now;
     bool success = false;
     
     // Read sensor 1

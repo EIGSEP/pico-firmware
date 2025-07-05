@@ -18,7 +18,6 @@ typedef struct {
     bool sensor1_valid;
     bool sensor2_valid;
     bool initialized;
-    uint32_t last_read;
 } TempMonitor;
 
 // Standard app interface functions
