@@ -15,7 +15,7 @@ static TempSensor sensor2;
 
 void tempmon_init(uint8_t app_id) {
     // Initialize temperature monitor structure
-    memset(&tempmon, 0, sizeof(TempMonitor));
+    // (removed - no longer using TempMonitor struct)
     
     // Initialize temperature sensors on separate pins
     uint offset1 = pio_add_program(pio0, &onewire_program);
@@ -49,9 +49,9 @@ void tempmon_status(uint8_t app_id) {
         KV_FLOAT, "temperature1", temp1,
         KV_INT, "temperature1_gpio", TEMPMON_SENSOR1_PIN,
         KV_FLOAT, "conversion_time1", time1,
-        KV_FLOAT, "temperature2", tempmon.temperature2,
+        KV_FLOAT, "temperature2", temp2,
         KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
-        KV_FLOAT, "conversion_time2", temp2,
+        KV_FLOAT, "conversion_time2", time2,
     );
 }
 
