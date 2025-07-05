@@ -21,6 +21,9 @@ dependencies = [
   "pyserial",
 ]
 
+[project.scripts]
+flash-picos = "picohost.flash_picos:main"
+
 [project.optional-dependencies]
 dev = [
   "black",
