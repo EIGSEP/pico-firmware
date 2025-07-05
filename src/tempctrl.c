@@ -46,7 +46,8 @@ void tempctrl_init(uint8_t app_id) {
     
     // Initialize Temperature Control 1 structure
     tempctrl1.T_target = 30.0;
-    tempctrl1.gain = 0.2;
+    tempctrl1.gain = 0.1;
+    tempctrl1.clamp = 0.2;  // Maximum drive level
     tempctrl1.hysteresis = 0.5;
     tempctrl1.enabled = false;
     tempctrl1.active = false;
@@ -56,7 +57,8 @@ void tempctrl_init(uint8_t app_id) {
     
     // Initialize Temperature Control 2 structure
     tempctrl2.T_target = 32.0;
-    tempctrl2.gain = 0.2;
+    tempctrl2.gain = 0.1;
+    tempctrl2.clamp = 0.2;  // Maximum drive level
     tempctrl2.hysteresis = 0.5;
     tempctrl2.enabled = false;
     tempctrl2.active = false;
@@ -211,11 +213,11 @@ static void tempctrl_hysteresis_drive(TempControl *pc) {
         // Simple proportional control using gain parameter
         pc->drive = error * pc->gain;
         
-        // Limit drive to maximum power (gain acts as max power)
-        if (pc->drive > 1.0) {
-            pc->drive = 1.0;
-        } else if (pc->drive < -1.0) {
-            pc->drive = -1.0;
+        // Limit drive to maximum power (clamp acts as max power)
+        if (pc->drive > pc->clamp) {
+            pc->drive = pc->clamp;
+        } else if (pc->drive < -1.0 * pc->clamp) {
+            pc->drive = -1.0; * pc->clamp;
         }
     }
     
