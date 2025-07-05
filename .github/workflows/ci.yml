@@ -39,3 +39,4 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: EIGSEP/pico-firmware
+          file: picohost/coverage.xml
