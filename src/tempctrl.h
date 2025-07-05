@@ -9,18 +9,16 @@
 #include "tempmon.h"
 
 // Temperature Control 1 configuration
-#define PELTIER1_PWM_PIN    16
-#define PELTIER1_DIR_PIN1   18
-#define PELTIER1_DIR_PIN2   19
+#define TEMP_SENSOR1_PIN    21  // thermistor data pin
+#define PELTIER1_PWM_PIN    8  // enable1
+#define PELTIER1_DIR_PIN1   10  // in1
+#define PELTIER1_DIR_PIN2   12  // in2
 
 // Temperature Control 2 configuration
-#define PELTIER2_PWM_PIN    15
-#define PELTIER2_DIR_PIN3   13
-#define PELTIER2_DIR_PIN4   12
-
-// Temperature sensor pins
-#define TEMP_SENSOR1_PIN    21
 #define TEMP_SENSOR2_PIN    22
+#define PELTIER2_PWM_PIN    9  // enable2
+#define PELTIER2_DIR_PIN3   11  // in3
+#define PELTIER2_DIR_PIN4   13  // in4
 
 // PWM configuration
 #define PWM_WRAP            1000
