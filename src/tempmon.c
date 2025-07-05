@@ -51,7 +51,7 @@ void tempmon_status(uint8_t app_id) {
         KV_FLOAT, "conversion_time1", time1,
         KV_FLOAT, "temperature2", temp2,
         KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
-        KV_FLOAT, "conversion_time2", time2,
+        KV_FLOAT, "conversion_time2", time2
     );
 }
 

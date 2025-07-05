@@ -217,7 +217,7 @@ static void tempctrl_hysteresis_drive(TempControl *pc) {
         if (pc->drive > pc->clamp) {
             pc->drive = pc->clamp;
         } else if (pc->drive < -1.0 * pc->clamp) {
-            pc->drive = -1.0; * pc->clamp;
+            pc->drive = -1.0 * pc->clamp;
         }
     }
     

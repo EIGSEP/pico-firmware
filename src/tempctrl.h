@@ -31,6 +31,7 @@ typedef struct {
     float drive;
     float gain;
     float hysteresis;
+    float clamp;
     bool active;
     bool enabled;
     int channel;
