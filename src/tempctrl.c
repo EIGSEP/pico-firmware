@@ -17,6 +17,7 @@ static TempSensor temp_sensor2;
 static volatile bool temperature_reading_active = false;
 static volatile float last_temp1 = 25.0;
 static volatile float last_temp2 = 25.0;
+static uint32_t last_read_time = 0;
 
 // Forward declarations
 static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level);
@@ -51,8 +52,8 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl1.T_target = 30.0;
     tempctrl1.gain = 0.2;
     tempctrl1.hysteresis = 0.5;
-    tempctrl1.enabled = true;
-    tempctrl1.active = true;
+    tempctrl1.enabled = false;
+    tempctrl1.active = false;
     tempctrl1.channel = 1;
     tempctrl1.T_now = tempctrl1.T_target;
     tempctrl1.drive = 0.0;
@@ -61,8 +62,8 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl2.T_target = 32.0;
     tempctrl2.gain = 0.2;
     tempctrl2.hysteresis = 0.5;
-    tempctrl2.enabled = true;
-    tempctrl2.active = true;
+    tempctrl2.enabled = false;
+    tempctrl2.active = false;
     tempctrl2.channel = 2;
     tempctrl2.T_now = tempctrl2.T_target;
     tempctrl2.drive = 0.0;
@@ -153,12 +154,11 @@ void tempctrl_status(uint8_t app_id) {
 }
 
 void tempctrl_op(uint8_t app_id) {
-    static uint32_t last_temp_read = 0;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     
     // Read temperatures and control every 750ms
-    if (temperature_reading_active && (now - last_temp_read) >= 750) {
-        last_temp_read = now;
+    if (temperature_reading_active && (now - last_read_time) >= 750) {
+        last_read_time = now;
         
         // Read temperatures from individual sensors
         bool read1 = temp_sensor_read(&temp_sensor1);
