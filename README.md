@@ -1,4 +1,6 @@
-# Pico Setup
+# EIGSEP Pico Firmware
+
+[![codecov](https://codecov.io/gh/EIGSEP/pico-firmware/graph/badge.svg?token=WNGHYLBF0U)](https://codecov.io/gh/EIGSEP/pico-firmware)
 
 This repository provides instructions and tools for building and flashing firmware onto your Raspberry Pi Pico devices. Follow the steps below to install the required tools, compile your firmware, and flash one or multiple Pico boards.
 

@@ -61,17 +61,18 @@ def read_json_from_serial(port, baud, timeout):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Flash all attached Picos, read JSON from each, save to single file"
+        description=(
+            "Flash all attached Picos, read JSON from each, save to single "
+            "file."
+        )
     )
     p.add_argument(
-        "--port",
-        default=None,
-        help="Serial port of pico, None means all"
-   )
+        "--port", default=None, help="Serial port of pico, None means all"
+    )
     p.add_argument(
         "--uf2",
         default="build/pico_multi.uf2",
-        help="Path to your pico_multi.uf2"
+        help="Path to your pico_multi.uf2",
     )
     p.add_argument(
         "--baud",
@@ -104,7 +105,7 @@ def main():
 
     print(f"Found Picos on: {ports}")
     all_devices = []
-    
+
     for port_dev, port_serial in ports.items():
         print("Flashing Pico on port:", port_dev)
         try:
@@ -127,11 +128,14 @@ def main():
         data["usb_serial"] = port_serial
         all_devices.append(data)
         print(f"✔ Read device info from {port_dev}")
-    
+
     # Write all device info to a single file
     with open(args.output, "w") as f:
         json.dump(all_devices, f, indent=2)
-    print(f"\n✔ Wrote all device information to {args.output} ({len(all_devices)} devices)")
+    print(
+        f"Wrote all device information to {args.output} ({len(all_devices)} "
+        "devices)."
+    )
 
 
 if __name__ == "__main__":
