@@ -52,9 +52,9 @@ void tempmon_status(uint8_t app_id) {
         KV_INT, "temperature1_gpio", TEMPMON_SENSOR1_PIN,
         KV_FLOAT, "temperature2", tempmon.temperature2,
         KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
-        KV_BOOL, "sensor1_valid", tempmon.sensor1_valid,
-        KV_BOOL, "sensor2_valid", tempmon.sensor2_valid,
-        KV_INT, "last_read", (int)tempmon.last_read
+        KV_BOOL, "sensor1_connected", tempmon.sensor1_valid,
+        KV_BOOL, "sensor2_connected", tempmon.sensor2_valid,
+        KV_INT, "last_read_ms", (int)tempmon.last_read
     );
 }
 
@@ -68,15 +68,14 @@ void tempmon_op(uint8_t app_id) {
 bool tempmon_read_sensors(void) {
     if (!tempmon.initialized) return false;
     
-    static uint32_t last_read_time = 0;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     
     // Only read every 750ms to allow conversion time
-    if ((now - last_read_time) < 750) {
+    if ((now - tempmon.last_read) < 750) {
         return false;
     }
     
-    last_read_time = now;
+    tempmon.last_read = now;
     bool success = false;
     
     // Read sensor 1
@@ -94,8 +93,6 @@ bool tempmon_read_sensors(void) {
     }
     
     if (success) {
-        tempmon.last_read = time(NULL);
-        
         // Start next conversion cycle
         temp_sensor_start_conversion(&sensor1);
         temp_sensor_start_conversion(&sensor2);
