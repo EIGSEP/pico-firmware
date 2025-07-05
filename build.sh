@@ -12,8 +12,8 @@ echo "Target: Raspberry Pi Pico 2 (RP2350)"
 echo "Features:"
 echo "  • Multi-app firmware with DIP switch selection"
 echo "  • Dynamic USB serial numbers (PICO_000, PICO_001, etc.)"
-echo "  • Apps: motor, switch, blink, relay, adc"
-echo "  • Blink app as fallback for DIP 000"
+echo "  • Apps: motor, tempctrl, tempmon, imu, lidar, rfswitch"
+echo "  • JSON-based command protocol with cJSON"
 echo "==================================="
 
 # Check if build directory exists
@@ -57,11 +57,12 @@ if [ -f "pico_multi.uf2" ]; then
     echo ""
     echo "Ready to flash to Pico 2!"
     echo "DIP switch combinations:"
-    echo "  000 - Blink app (default/fallback)"
-    echo "  001 - Motor app"
-    echo "  010 - Switch app" 
-    echo "  011 - Relay app"
-    echo "  100 - ADC app"
+    echo "  000 - Motor app (APP_MOTOR)"
+    echo "  001 - Temperature controller (APP_TEMPCTRL)"
+    echo "  010 - Temperature monitor (APP_TEMPMON)" 
+    echo "  011 - IMU sensor (APP_IMU)"
+    echo "  100 - Lidar sensor (APP_LIDAR)"
+    echo "  101 - RF switch control (APP_RFSWITCH)"
     echo "==================================="
     
     # Show file size
