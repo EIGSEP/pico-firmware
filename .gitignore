@@ -1,6 +1,9 @@
-.venv/
-build/
+build/*
+*/build/*
+# include the final firmware file
 !build/pico_multi.uf2
+
+.venv/
 
 # Python
 __pycache__/
