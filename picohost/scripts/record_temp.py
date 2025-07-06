@@ -77,6 +77,8 @@ t.set_response_handler(add_temp_data)
 read_thread = Thread(target=stdin_reader, daemon=True)
 read_thread.start()
 t0 = time.time()
+print_time = 0
+print_cadence = 5  # seconds
 with t:
     print("Recording temperature data. Press Ctrl+C to stop.")
     if args.ctrl:
@@ -94,7 +96,11 @@ with t:
             if json:
                 temp_data.append(json)
             if args.print:
-                print(json)
+                now = time.time()
+                if now - print_time < print_cadence:
+                    continue
+                print(json.dums(json.loads(json), indent=2))
+                print_time = now
             if args.ctrl:
                 try:
                     cmd = input_queue.get_nowait()
