@@ -1,5 +1,8 @@
 from argparse import ArgumentParser
-
+import sys
+from threading import Thread
+import time
+import queue
 import numpy as np
 from picohost import PicoDevice, PicoPeltier
 
@@ -13,54 +16,54 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+input_queue = queue.Queue()
+data_queue = queue.Queue()
 temp_data = []
 
 
-def add_temp_data(json, temp_data=temp_data, print=args.print):
+def add_temp_data(json):
     """Callback function to add temperature data."""
-    if print:
-        print(json)
-    temp = json.get("temperature1")
-    temp_data.append(temp)
+    data_queue.put(json)
 
 
-def handle_commands(peltier):
+def stdin_reader():
     while True:
-        cmd = input("Enter command (or 'exit' to quit): ").strip()
-        if not cmd:
-            continue
-        parts = cmd.split()
-        cmd = parts[0].lower()
-        if cmd in ("quit", "exit", "q"):
+        line = sys.stdin.readline()
+        if not line:
             break
+        input_queue.put(line.strip())
 
-        elif cmd == "temp" and len(parts) >= 2:
-            temp = float(parts[1])
-            ch = 1  # XXX can update to allow channel selection
-            if peltier.set_temperature(temp, ch):
-                print(f"Temperature set to {temp} °C on channel {ch}.")
 
-        elif cmd == "hyst" and len(parts) >= 2:
-            hyst = float(parts[1])
-            ch = 1
-            if peltier.set_hysteresis(hyst, ch):
-                print(f"Hysteresis set to {hyst} °C on channel {ch}.")
+def handle_commands(cmd, peltier):
+    if not cmd:
+        return
+    parts = cmd.split()
+    cmd = parts[0].lower()
+    ch = 1  # XXX can update to allow channel selection
 
-        elif cmd == "enable":
-            ch = 1
-            if peltier.enable_channel(ch):
-                print(f"Channel {ch} enabled.")
+    if cmd == "temp" and len(parts) >= 2:
+        temp = float(parts[1])
+        if peltier.set_temperature(temp, ch):
+            print(f"Temperature set to {temp} °C on channel {ch}.")
 
-        elif cmd == "disable":
-            ch = 1
-            if peltier.disable_channel(ch):
-                print(f"Channel {ch} disabled.")
+    elif cmd == "hyst" and len(parts) >= 2:
+        hyst = float(parts[1])
+        if peltier.set_hysteresis(hyst, ch):
+            print(f"Hysteresis set to {hyst} °C on channel {ch}.")
 
-        else:
-            print(
-                f"Unknown command: {cmd}. Available commands: temp, hyst, "
-                "enable, disable, exit."
-            )
+    elif cmd == "enable":
+        if peltier.enable_channel(ch):
+            print(f"Channel {ch} enabled.")
+
+    elif cmd == "disable":
+        if peltier.disable_channel(ch):
+            print(f"Channel {ch} disabled.")
+
+    else:
+        print(
+            f"Unknown command: {cmd}. Available commands: temp, hyst, "
+            "enable, disable, exit."
+        )
 
 
 if args.ctrl:
@@ -71,11 +74,36 @@ else:
     t = PicoDevice(args.port)
 
 t.set_response_handler(add_temp_data)
+read_thread = Thread(target=stdin_reader, daemon=True)
+read_thread.start()
+t0 = time.time()
 with t:
     print("Recording temperature data. Press Ctrl+C to stop.")
-    try:
-        handle_commands()
-    except KeyboardInterrupt:
-        print("Recording stopped.")
+    if args.ctrl:
+        print("You can enter commands to control the Peltier device.")
+        print(
+            "Available commands: temp <value>, hyst <value>, enable, "
+            "disable, exit."
+        )
+    while time.time() - t0 < 30 * 60:
+        try:
+            try:
+                json = data_queue.get_nowait()
+            except queue.Empty:
+                json = None
+            if json:
+                temp_data.append(json)
+            if args.print:
+                print(json)
+            if args.ctrl:
+                try:
+                    cmd = input_queue.get_nowait()
+                except queue.Empty:
+                    cmd = None
+                handle_commands(cmd, t)
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("Recording stopped.")
+            break
 
 np.save("temp_data.npy", temp_data)
