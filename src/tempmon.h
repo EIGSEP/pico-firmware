@@ -8,7 +8,7 @@
 #include "eigsep_command.h"
 
 // Temperature sensor pins
-#define TEMPMON_SENSOR1_PIN         19
+#define TEMPMON_SENSOR1_PIN         22
 #define TEMPMON_SENSOR2_PIN         21
 
 // Standard app interface functions
