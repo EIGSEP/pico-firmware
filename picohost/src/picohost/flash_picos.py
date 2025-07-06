@@ -4,6 +4,7 @@ import subprocess
 import time
 import sys
 import json
+from pathlib import Path
 from serial import Serial
 from serial.tools import list_ports
 
@@ -93,6 +94,12 @@ def main():
     )
     args = p.parse_args()
 
+    # Check if the UF2 file exists
+    uf2_path = Path(args.uf2)
+    if not uf2_path.is_file():
+        print(f"UF2 file not found: {uf2_path}", file=sys.stderr)
+        sys.exit(1)
+
     ports = find_pico_ports()
     if args.port:
         ports = {k: v for k, v in ports.items() if k == args.port}
@@ -109,7 +116,7 @@ def main():
     for port_dev, port_serial in ports.items():
         print("Flashing Pico on port:", port_dev)
         try:
-            flash_uf2(args.uf2, port_serial)
+            flash_uf2(uf2_path, port_serial)
         except RuntimeError as e:
             print(e, file=sys.stderr)
             continue
@@ -127,7 +134,7 @@ def main():
         data["port"] = port_dev
         data["usb_serial"] = port_serial
         all_devices.append(data)
-        print(f"✔ Read device info from {port_dev}")
+        print(f"Read device info from {port_dev}")
 
     # Write all device info to a single file
     with open(args.output, "w") as f:
