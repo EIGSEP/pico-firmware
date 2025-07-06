@@ -56,7 +56,8 @@ int main(void) {
 
     // Read DIP code early
 //    uint8_t app_id = read_dip_code();
-    uint8_t app_id = 1;
+    // uint8_t app_id = 1; // peltier
+    uint8_t app_id = 2; // thermistor
 
     // Get unique board ID
     pico_unique_board_id_t unique_id;
