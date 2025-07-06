@@ -23,6 +23,10 @@
 // PWM configuration
 #define PWM_WRAP            1000
 
+// Error handling configuration
+#define ERROR_COUNT_THRESHOLD   5     // Number of errors before permanent disable
+#define ERROR_TIME_WINDOW_MS    10000 // Time window for error counting (10 seconds)
+
 // Temperature control structure
 typedef struct {
     uint pwm_slice;
@@ -34,7 +38,10 @@ typedef struct {
     float clamp;
     bool active;
     bool enabled;
+    bool permanently_disabled;
     int channel;
+    uint32_t error_count;
+    uint32_t last_error_time;
 } TempControl;
 
 // Standard app interface functions

@@ -14,6 +14,7 @@ typedef struct {
     float temperature;
     uint32_t last_conversion_time;
     bool conversion_started;
+    bool read_error;
 } TempSensor;
 
 // Initialize a temperature sensor on a specific GPIO pin
@@ -28,5 +29,8 @@ void temp_sensor_read(TempSensor *sensor);
 // Get current temperature value
 float temp_sensor_get_temp(TempSensor *sensor);
 float temp_sensor_get_conversion_time(TempSensor *sensor);
+
+// Get error status
+bool temp_sensor_has_error(TempSensor *sensor);
 
 #endif // TEMP_SIMPLE_H

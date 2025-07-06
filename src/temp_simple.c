@@ -9,6 +9,7 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset
     sensor->temperature = 0.0;
     sensor->last_conversion_time = 0;
     sensor->conversion_started = false;
+    sensor->read_error = false;
     
     // Initialize OneWire for this sensor
     ow_init(&sensor->ow, pio, sm_offset, gpio_pin);
@@ -36,6 +37,7 @@ void temp_sensor_read(TempSensor *sensor) {
     
     // Reset and read scratchpad
     if (!ow_reset(&sensor->ow)) {
+        sensor->read_error = true;
         return;
     }
     
@@ -53,8 +55,15 @@ void temp_sensor_read(TempSensor *sensor) {
     int16_t raw_temp = (data[1] << 8) | data[0];
     float temp = raw_temp / 16.0;
     
+    // Check for valid temperature range and NaN
+    if (isnan(temp) || temp < -55.0 || temp > 125.0) {
+        sensor->read_error = true;
+        return;
+    }
+    
     sensor->temperature = temp;
     sensor->conversion_started = false;  // Ready for next conversion
+    sensor->read_error = false;  // Successful read
 }
 
 float temp_sensor_get_temp(TempSensor *sensor) {
@@ -63,4 +72,8 @@ float temp_sensor_get_temp(TempSensor *sensor) {
 
 float temp_sensor_get_conversion_time(TempSensor *sensor) {
     return sensor->last_conversion_time;
+}
+
+bool temp_sensor_has_error(TempSensor *sensor) {
+    return sensor->read_error;
 }

@@ -43,15 +43,17 @@ void tempmon_status(uint8_t app_id) {
         status = "update";
     }
     
-    send_json(8,
+    send_json(10,
         KV_STR, "status", status,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temperature1", temp1,
         KV_INT, "temperature1_gpio", TEMPMON_SENSOR1_PIN,
         KV_FLOAT, "conversion_time1", time1,
+        KV_BOOL, "sensor_error1", temp_sensor_has_error(&sensor1),
         KV_FLOAT, "temperature2", temp2,
         KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
-        KV_FLOAT, "conversion_time2", time2
+        KV_FLOAT, "conversion_time2", time2,
+        KV_BOOL, "sensor_error2", temp_sensor_has_error(&sensor2)
     );
 }
 

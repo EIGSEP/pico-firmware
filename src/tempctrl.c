@@ -51,9 +51,12 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl1.hysteresis = 0.5;
     tempctrl1.enabled = false;
     tempctrl1.active = false;
+    tempctrl1.permanently_disabled = false;
     tempctrl1.channel = 1;
     tempctrl1.T_now = tempctrl1.T_target;
     tempctrl1.drive = 0.0;
+    tempctrl1.error_count = 0;
+    tempctrl1.last_error_time = 0;
     
     // Initialize Temperature Control 2 structure
     tempctrl2.T_target = 32.0;
@@ -62,9 +65,12 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl2.hysteresis = 0.5;
     tempctrl2.enabled = false;
     tempctrl2.active = false;
+    tempctrl2.permanently_disabled = false;
     tempctrl2.channel = 2;
     tempctrl2.T_now = tempctrl2.T_target;
     tempctrl2.drive = 0.0;
+    tempctrl2.error_count = 0;
+    tempctrl2.last_error_time = 0;
     
     // Initialize temperature sensors on separate pins
     uint offset1 = pio_add_program(pio0, &onewire_program);
@@ -110,10 +116,14 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
         }
     } else if (strcmp(cmd, "enable") == 0) {
         if (channel == 0 || channel == 1) {
-            tempctrl1.enabled = true;
+            if (!tempctrl1.permanently_disabled) {
+                tempctrl1.enabled = true;
+            }
         }
         if (channel == 0 || channel == 2) {
-            tempctrl2.enabled = true;
+            if (!tempctrl2.permanently_disabled) {
+                tempctrl2.enabled = true;
+            }
         }
     } else if (strcmp(cmd, "disable") == 0) {
         if (channel == 0 || channel == 1) {
@@ -142,7 +152,7 @@ void tempctrl_status(uint8_t app_id) {
         status = "update";
     }
     
-    send_json(15,
+    send_json(19,
         KV_STR, "status", status,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "temp1", tempctrl1.T_now,
@@ -151,12 +161,16 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "target1", tempctrl1.T_target,
         KV_FLOAT, "drive1", tempctrl1.drive,
         KV_BOOL, "enabled1", tempctrl1.enabled,
+        KV_BOOL, "perm_disabled1", tempctrl1.permanently_disabled,
+        KV_BOOL, "sensor_error1", temp_sensor_has_error(&temp_sensor1),
         KV_FLOAT, "temp2", tempctrl2.T_now,
         KV_INT, "temp2_gpio", TEMP_SENSOR2_PIN,
         KV_FLOAT, "conversion_time2", time2,
         KV_FLOAT, "target2", tempctrl2.T_target,
         KV_FLOAT, "drive2", tempctrl2.drive,
-        KV_BOOL, "enabled2", tempctrl2.enabled
+        KV_BOOL, "enabled2", tempctrl2.enabled,
+        KV_BOOL, "perm_disabled2", tempctrl2.permanently_disabled,
+        KV_BOOL, "sensor_error2", temp_sensor_has_error(&temp_sensor2)
     );
 }
 
@@ -177,11 +191,50 @@ void tempctrl_op(uint8_t app_id) {
     tempctrl1.T_now = temp_sensor_get_temp(&temp_sensor1);
     tempctrl2.T_now = temp_sensor_get_temp(&temp_sensor2);
     
-    // Drive Peltiers based on hysteresis control
-    if (tempctrl1.enabled) {
+    // Check for sensor errors and track error counts
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    
+    // Handle sensor 1 errors
+    if (temp_sensor_has_error(&temp_sensor1)) {
+        if ((now - tempctrl1.last_error_time) > ERROR_TIME_WINDOW_MS) {
+            tempctrl1.error_count = 0;  // Reset count if outside time window
+        }
+        tempctrl1.error_count++;
+        tempctrl1.last_error_time = now;
+        
+        if (tempctrl1.error_count >= ERROR_COUNT_THRESHOLD) {
+            tempctrl1.permanently_disabled = true;
+        }
+        
+        if (tempctrl1.enabled) {
+            tempctrl1.drive = 0.0;
+            tempctrl_drive_raw(&tempctrl1, true, 0);
+        }
+    }
+    
+    // Handle sensor 2 errors
+    if (temp_sensor_has_error(&temp_sensor2)) {
+        if ((now - tempctrl2.last_error_time) > ERROR_TIME_WINDOW_MS) {
+            tempctrl2.error_count = 0;  // Reset count if outside time window
+        }
+        tempctrl2.error_count++;
+        tempctrl2.last_error_time = now;
+        
+        if (tempctrl2.error_count >= ERROR_COUNT_THRESHOLD) {
+            tempctrl2.permanently_disabled = true;
+        }
+        
+        if (tempctrl2.enabled) {
+            tempctrl2.drive = 0.0;
+            tempctrl_drive_raw(&tempctrl2, true, 0);
+        }
+    }
+    
+    // Drive Peltiers based on hysteresis control (only if enabled and no errors)
+    if (tempctrl1.enabled && !temp_sensor_has_error(&temp_sensor1) && !tempctrl1.permanently_disabled) {
         tempctrl_hysteresis_drive(&tempctrl1);
     }
-    if (tempctrl2.enabled) {
+    if (tempctrl2.enabled && !temp_sensor_has_error(&temp_sensor2) && !tempctrl2.permanently_disabled) {
         tempctrl_hysteresis_drive(&tempctrl2);
     }
 }
