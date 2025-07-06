@@ -6,7 +6,6 @@ import threading
 
 
 class MotorSerial(Serial):
-    """ """
 
     def __init__(self, port, baud=115200, timeout=1.0):
         Serial.__init__(self, port, baud, timeout=timeout)
@@ -55,6 +54,7 @@ def main():
     try:
         while True:
             for val in (1620, 0, -1620):
+                print(f"Sending {val} pulses")
                 payload["pulses_el"] = val
                 payload["pulses_az"] = val
                 ms.command(payload)

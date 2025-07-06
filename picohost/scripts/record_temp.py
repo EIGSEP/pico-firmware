@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+import json
 import sys
 from threading import Thread
 import time
@@ -21,9 +22,9 @@ data_queue = queue.Queue()
 temp_data = []
 
 
-def add_temp_data(json):
+def add_temp_data(json_data):
     """Callback function to add temperature data."""
-    data_queue.put(json)
+    data_queue.put(json_data)
 
 
 def stdin_reader():
@@ -78,7 +79,7 @@ read_thread = Thread(target=stdin_reader, daemon=True)
 read_thread.start()
 t0 = time.time()
 print_time = 0
-print_cadence = 5  # seconds
+print_cadence = .5  # seconds
 with t:
     print("Recording temperature data. Press Ctrl+C to stop.")
     if args.ctrl:
@@ -90,17 +91,17 @@ with t:
     while time.time() - t0 < 30 * 60:
         try:
             try:
-                json = data_queue.get_nowait()
+                json_data = data_queue.get_nowait()
             except queue.Empty:
-                json = None
-            if json:
-                temp_data.append(json)
-            if args.print:
-                now = time.time()
-                if now - print_time < print_cadence:
-                    continue
-                print(json.dums(json.loads(json), indent=2))
-                print_time = now
+                json_data = None
+            if json_data:
+                temp_data.append(json_data)
+                if args.print:
+                    now = time.time()
+                    if now - print_time < print_cadence:
+                        continue
+                    print(json.dumps(json_data, indent=2))
+                    print_time = now
             if args.ctrl:
                 try:
                     cmd = input_queue.get_nowait()
