@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-import argparse
-import subprocess
-import time
 import sys
 import json
 from serial import Serial
@@ -38,7 +35,7 @@ class RFSwitchSerial(Serial):
 
     def stop(self):
         self._running = False
-        if self._process_status_thread != None:
+        if self._process_status_thread is not None:
             self._process_status_thread.join()
 
 
