@@ -2,78 +2,167 @@
 
 [![codecov](https://codecov.io/gh/EIGSEP/pico-firmware/graph/badge.svg?token=WNGHYLBF0U)](https://codecov.io/gh/EIGSEP/pico-firmware)
 
-This repository provides instructions and tools for building and flashing firmware onto your Raspberry Pi Pico devices. Follow the steps below to install the required tools, compile your firmware, and flash one or multiple Pico boards.
+Multi-application firmware for Raspberry Pi Pico 2 (RP2350) that implements hardware control applications selectable via DIP switches. The firmware supports motor control, temperature monitoring/control, IMU sensors, lidar, and RF switches.
 
 ---
+
+## Features
+
+- **Multi-app dispatch system** - Select application at boot via DIP switches (GPIO 2,3,4)
+- **JSON command protocol** - Control devices via USB serial at 115200 baud
+- **6 integrated applications**:
+  - Motor control (stepper motors)
+  - Temperature controller (Peltier elements)
+  - Temperature monitoring (DS18B20 sensors)
+  - IMU sensor interface (BNO08x)
+  - Lidar sensor interface
+  - RF switch control
+- **Python host library** - Control devices from host computer
+- **Automatic status updates** - Every 200ms
+- **Unique device identification** - USB enumeration as PICO_000, PICO_001, etc.
 
 ## Prerequisites
 
 - **Operating System:** Ubuntu (or other Debian-based Linux)
-- **Hardware:** Raspberry Pi Pico (or compatible RP2040 board)
+- **Hardware:** Raspberry Pi Pico 2 (RP2350) or Pico (RP2040)
 - **Permissions:** You will need `sudo` access to install packages and configure udev rules.
 
 ---
 
-## 1. Install picotool
+## 1. Install Dependencies and Tools
 
-Picotool is a command-line utility to interact with RP2040 devices over USB. It supports loading firmware, inspecting flash, and more.
-
+### Build Dependencies
 ```bash
-# Clone the picotool repository
-git clone https://github.com/raspberrypi/picotool.git
-
 # Install build dependencies
 sudo apt update
 sudo apt install build-essential pkg-config libusb-1.0-0-dev cmake
 
-# Build picotool
+# Install Python dependencies
+pip3 install pyserial
+```
+
+### Install picotool
+Picotool is required for flashing firmware to Pico devices.
+
+```bash
+# Clone and build picotool
+cd ~/
+git clone https://github.com/raspberrypi/picotool.git
 cd picotool
 mkdir build && cd build
 cmake ..
 make
+sudo cp picotool /usr/local/bin/
 
-# Install udev rule for non-root access
-sudo cp udev/99-picotool.rules /etc/udev/rules.d/
-
-# Reload udev rules (or reboot)
+# Set up udev rules for non-root access
+echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", MODE="0666"' | sudo tee /etc/udev/rules.d/99-pico.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 ---
 
-## 2. Clone and Build pico-firmware
-
-This project includes your firmware source code and a helper script to build the UF2 file.
+## 2. Clone and Build Firmware
 
 ```bash
-# Clone your firmware repository
+# Clone the firmware repository
 git clone git@github.com:EIGSEP/pico-firmware.git
 cd pico-firmware
 
-# Initialize the pico-sdk submodule
+# Initialize all submodules
 git submodule update --init lib/cJSON
 git submodule update --init lib/BNO08x_Pico_Library
 git submodule update --init pico-sdk
-cd pico-sdk
-git submodule update --init
+cd pico-sdk && git submodule update --init && cd ..
 
-# Build the firmware
+# Build the firmware for Pico 2 (default)
 ./build.sh
+
+# Or build manually
+mkdir build && cd build
+PICO_BOARD=pico2 cmake ..
+PICO_BOARD=pico2 make -j$(nproc)
 ```
 
-- The `build.sh` script will invoke CMake and generate a `build/pico_multi.uf2` file ready for flashing.
+The build produces `build/pico_multi.uf2` ready for flashing.
 
 ---
 
 ## 3. Flash Pico Devices
 
-Use the provided Python script `flash_picos.py` to automate flashing one or multiple Pico boards in BOOTSEL mode.
+### Single Device (Manual)
+1. Hold BOOTSEL button while connecting Pico via USB
+2. Copy `build/pico_multi.uf2` to the mounted RPI-RP2 drive
+3. Device will reboot automatically
+
+### Multiple Devices (Automated)
+Use the provided `flash_picos.py` script:
 
 ```bash
-# Run the flashing script
-pip3 install serial
+# Flash all connected Picos
 python3 flash_picos.py --uf2 build/pico_multi.uf2
+
+# Flash with custom parameters
+python3 flash_picos.py --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
 ```
 
-### Options
-See `python flash_picos.py --help`.
+The script will:
+- Find all connected Picos (BOOTSEL or CDC mode)
+- Flash each device using its USB serial number
+- Read device info after flashing
+- Update `devices_info.json` with configurations
+
+## 4. Configure DIP Switches
+
+Set GPIO pins 2, 3, 4 to select the application:
+- **000** (0): Motor control
+- **001** (1): Temperature controller
+- **010** (2): Temperature monitor
+- **011** (3): IMU sensor
+- **100** (4): Lidar sensor
+- **101** (5): RF switch
+- **110-111** (6-7): Reserved
+
+## 5. Install Python Host Library (Optional)
+
+For controlling devices from a host computer:
+
+```bash
+# Install the picohost package
+cd pico-firmware
+pip install -e ./picohost
+
+# Test your device
+python3 picohost/scripts/test_motor_pico_v2.py    # For motor control
+python3 picohost/scripts/test_peltier_v2.py       # For temperature control
+python3 picohost/scripts/test_rfswitch_pico_v2.py # For RF switch
+```
+
+## Monitor Serial Output
+
+```bash
+# Find your device
+ls /dev/ttyACM*
+
+# Monitor with minicom
+minicom -D /dev/ttyACM0 -b 115200
+
+# Or use the Python monitor
+python3 picohost/scripts/monitor_picos.py
+```
+
+## Project Structure
+
+- `src/` - Firmware source code for all applications
+- `lib/` - Libraries (cJSON, BNO08x, eigsep_command, onewire)
+- `picohost/` - Python host control library and test scripts
+- `build.sh` - Build script for firmware
+- `flash_picos.py` - Multi-device flashing tool
+- `devices_info.json` - Device configuration database
+
+## Contributing
+
+See [CLAUDE.md](CLAUDE.md) for detailed development guidelines.
+
+## License
+
+MIT License - see LICENSE file for details.

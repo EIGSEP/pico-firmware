@@ -1,14 +1,15 @@
 # picohost
 
-Host control and management tools for Raspberry Pi Pico devices running custom firmware.
+Host control and management tools for Raspberry Pi Pico devices running the EIGSEP multi-application firmware.
 
 ## Overview
 
 This package provides a Python library for communicating with Raspberry Pi Pico devices running the custom multi-application firmware. It includes:
 
 - **Base communication classes** for serial JSON protocol
-- **Specialized device classes** for different applications (motor, temperature, RF switch)
+- **Specialized device classes** for motor, temperature control, and RF switch applications
 - **Test scripts** for development and debugging
+- **Device discovery and flashing tools**
 - **Example code** showing usage patterns
 
 ## Features
@@ -52,9 +53,14 @@ with PicoDevice(ports[0]) as device:
 ```python
 from picohost import PicoMotor
 
+# Connect to motor device (DIP switch set to 000)
 with PicoMotor("/dev/ttyACM0") as motor:
     # Move 1000 steps on both axes
     motor.move(pulses_az=1000, pulses_el=1000)
+    
+    # Set individual axis positions
+    motor.set_azimuth_position(5000)
+    motor.set_elevation_position(2000)
 ```
 
 ### Temperature Control
@@ -62,10 +68,15 @@ with PicoMotor("/dev/ttyACM0") as motor:
 ```python
 from picohost import PicoPeltier
 
+# Connect to temperature controller (DIP switch set to 001)
 with PicoPeltier("/dev/ttyACM0") as peltier:
     # Set temperature to 25C on channel 1
     peltier.set_temperature(25.0, channel=1)
     peltier.enable(channel=1)
+    
+    # Get current temperature readings
+    status = peltier.get_status()
+    print(f"Current temp: {status.get('temperature', 'N/A')}°C")
 ```
 
 ### RF Switch Control
@@ -73,9 +84,14 @@ with PicoPeltier("/dev/ttyACM0") as peltier:
 ```python
 from picohost import PicoRFSwitch
 
+# Connect to RF switch device (DIP switch set to 101)
 with PicoRFSwitch("/dev/ttyACM0") as switch:
     # Set switch state to 5
     switch.set_switch_state(5)
+    
+    # Get current switch state
+    state = switch.get_switch_state()
+    print(f"Current switch state: {state}")
 ```
 
 ## Device Classes
@@ -92,9 +108,15 @@ The base class provides core functionality:
 
 ### Specialized Classes
 
+**Currently implemented:**
 - **PicoMotor** - Stepper motor control (APP_MOTOR = 0)
 - **PicoPeltier** - Temperature control (APP_TEMPCTRL = 1)
 - **PicoRFSwitch** - RF switch control (APP_RFSWITCH = 5)
+
+**Firmware-only applications (no Python class yet):**
+- **Temperature Monitor** (APP_TEMPMON = 2) - Temperature sensing only
+- **IMU Sensor** (APP_IMU = 3) - BNO08x sensor interface
+- **Lidar Sensor** (APP_LIDAR = 4) - Lidar sensor interface
 
 ## Command Protocol
 
@@ -112,24 +134,28 @@ Responses are JSON objects:
 
 ## Test Scripts
 
-The package includes several test scripts:
+The package includes several test scripts in `scripts/`:
 
 - **test_motor_pico_v2.py** - Motor control testing
 - **test_peltier_v2.py** - Temperature control testing  
 - **test_rfswitch_pico_v2.py** - RF switch testing
+- **monitor_picos.py** - General device monitoring
 - **example_usage.py** - Usage examples
 
 Run tests with:
 
 ```bash
-# Motor test
+# Motor test (requires DIP switch set to 000)
 python scripts/test_motor_pico_v2.py /dev/ttyACM0
 
-# Temperature test (interactive)
+# Temperature test (requires DIP switch set to 001)
 python scripts/test_peltier_v2.py -p /dev/ttyACM0
 
-# RF switch test
+# RF switch test (requires DIP switch set to 101)
 python scripts/test_rfswitch_pico_v2.py /dev/ttyACM0
+
+# Monitor all connected devices
+python scripts/monitor_picos.py
 ```
 
 ## Development
@@ -152,16 +178,22 @@ pytest --cov=picohost
 class MyDevice(PicoDevice):
     def my_command(self, param):
         return self.send_command({"cmd": "my_cmd", "param": param})
+        
+    def get_status(self):
+        """Get device status"""
+        return self.send_command({"cmd": "status"})
 ```
 
 2. Add to `__init__.py`:
 
 ```python
-from .base import MyDevice
+from .mydevice import MyDevice
 __all__.append("MyDevice")
 ```
 
-3. Create test script following the existing patterns.
+3. Create test script following the existing patterns in `scripts/`.
+
+4. Update this README with usage examples.
 
 ## Architecture
 
@@ -180,11 +212,39 @@ Each app implements:
 - `app_op()` - Continuous operations
 - `app_status()` - Send status updates
 
+## DIP Switch Configuration
+
+Set GPIO pins 2, 3, 4 to select the application before powering on:
+
+| DIP (2,3,4) | Binary | App ID | Application | Python Class |
+|-------------|--------|--------|-------------|---------------|
+| 000 | 0 | APP_MOTOR | Motor control | PicoMotor |
+| 001 | 1 | APP_TEMPCTRL | Temperature controller | PicoPeltier |
+| 010 | 2 | APP_TEMPMON | Temperature monitor | *None* |
+| 011 | 3 | APP_IMU | IMU sensor | *None* |
+| 100 | 4 | APP_LIDAR | Lidar sensor | *None* |
+| 101 | 5 | APP_RFSWITCH | RF switch | PicoRFSwitch |
+| 110 | 6 | Reserved | - | - |
+| 111 | 7 | Reserved | - | - |
+
 ## Hardware Support
 
 - **Raspberry Pi Pico 2** (RP2350) - Primary target
 - **Raspberry Pi Pico** (RP2040) - Also supported
 - **USB Serial** - CDC ACM interface (VID:0x2E8A, PID:0x0009)
+- **Device naming** - Enumerates as PICO_000, PICO_001, etc.
+
+## Flashing Tool
+
+The package includes a flashing tool for managing multiple devices:
+
+```bash
+# Flash all connected Picos
+python -m picohost.flash_picos --uf2 ../build/pico_multi.uf2
+
+# List available devices
+python -m picohost.flash_picos --list
+```
 
 ## Contributing
 
@@ -193,6 +253,11 @@ Each app implements:
 3. Add tests for new functionality
 4. Run tests and ensure they pass
 5. Submit a pull request
+
+**Priority areas for contribution:**
+- Python classes for APP_TEMPMON, APP_IMU, and APP_LIDAR
+- Additional test scripts
+- Enhanced device discovery and management
 
 ## License
 
