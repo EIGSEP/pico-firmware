@@ -144,13 +144,9 @@ class PicoDevice:
         while self._running:
             line = self.read_line()
             if line:
-                # Call raw handler if set
-                if self._raw_handler:
-                    self._raw_handler(line)
-
                 # Try to parse as JSON
                 data = self.parse_response(line)
-                if data:
+                if data:  # is json
                     self.last_status = data
                     # Call response handler if set
                     if self._response_handler:
@@ -158,6 +154,9 @@ class PicoDevice:
                     else:
                         # Default: print the response
                         print(json.dumps(data))
+                # Call raw handler on non-json if set
+                elif self._raw_handler:
+                    self._raw_handler(line)
 
     def set_response_handler(self, handler: Callable[[Dict[str, Any]], None]):
         """
