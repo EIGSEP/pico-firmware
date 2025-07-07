@@ -294,16 +294,16 @@ class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
     path_str = {
-        "VNAO": "10000000",
-        "VNAS": "11000000",
-        "VNAL": "00100000",
-        "VNAANT": "00000100",
-        "VNANON": "00000111",
-        "VNANOFF": "00000110",
-        "VNARF": "00011000",
-        "RFNON": "00000011",
-        "RFNOFF": "00000010",
-        "RFANT": "00000000",
+        "VNAO":   "10000000",  # checked 7/7/25
+        "VNAS":   "11000000",  # checked 7/7/25
+        "VNAL":   "00100000",  # checked 7/7/25
+        "VNAANT": "00000001",  # checked 7/7/25
+        "VNANON": "00000111",  # checked 7/7/25
+        "VNANOFF":"00000101",  # checked 7/7/25
+        "VNARF":  "00011000",  # checked 7/7/25
+        "RFNON":  "00000110",  # checked 7/7/25
+        "RFNOFF": "00000100",  # checked 7/7/25
+        "RFANT":  "00000000",  # checked 7/7/25
     }
 
     @staticmethod
