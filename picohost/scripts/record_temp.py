@@ -4,11 +4,16 @@ import sys
 from threading import Thread
 import time
 import queue
-import numpy as np
 from picohost import PicoDevice, PicoPeltier
 
 parser = ArgumentParser(description="Record temperature from Pico device")
-parser.add_argument("-p", "--port", type=str, default="/dev/ttyACM0", help="Serial port for Pico device (default: /dev/ttyACM0)")
+parser.add_argument(
+    "-p",
+    "--port",
+    type=str,
+    default="/dev/ttyACM0",
+    help="Serial port for Pico device (default: /dev/ttyACM0)"
+)
 parser.add_argument(
     "-v", action="store_true", help="Print temperature data to console"
 )
@@ -53,17 +58,17 @@ def handle_commands(cmd, peltier):
             print(f"Hysteresis set to {hyst} °C on channel {ch}.")
 
     elif cmd == "enable":
-        if peltier.enable_channel(ch):
+        if peltier.enable(ch):
             print(f"Channel {ch} enabled.")
 
     elif cmd == "disable":
-        if peltier.disable_channel(ch):
+        if peltier.disable(ch):
             print(f"Channel {ch} disabled.")
 
     else:
         print(
             f"Unknown command: {cmd}. Available commands: temp, hyst, "
-            "enable, disable, exit."
+            "enable, disable."
         )
 
 
@@ -77,9 +82,8 @@ else:
 t.set_response_handler(add_temp_data)
 read_thread = Thread(target=stdin_reader, daemon=True)
 read_thread.start()
-t0 = time.time()
 print_time = 0
-print_cadence = .5  # seconds
+print_cadence = 2  # seconds
 with t:
     print("Recording temperature data. Press Ctrl+C to stop.")
     if args.ctrl:
@@ -88,7 +92,7 @@ with t:
             "Available commands: temp <value>, hyst <value>, enable, "
             "disable, exit."
         )
-    while time.time() - t0 < 30 * 60:
+    while True:
         try:
             try:
                 json_data = data_queue.get_nowait()
@@ -112,5 +116,3 @@ with t:
         except KeyboardInterrupt:
             print("Recording stopped.")
             break
-
-np.save("temp_data.npy", temp_data)
