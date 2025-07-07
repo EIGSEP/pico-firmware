@@ -34,6 +34,7 @@ typedef struct {
     float T_target;
     float drive;
     float gain;
+    float baseline;
     float hysteresis;
     float clamp;
     bool active;

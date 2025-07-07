@@ -48,6 +48,8 @@ class PicoDevice:
         self._raw_handler: Optional[Callable[[str], None]] = None
         self.last_status: Dict[str, Any] = {}
 
+        self.connect()
+
     @staticmethod
     def find_pico_ports() -> list[str]:
         """
@@ -61,6 +63,16 @@ class PicoDevice:
             if info.vid == PICO_VID and info.pid == PICO_PID_CDC:
                 ports.append(info.device)
         return ports
+
+    @property
+    def is_connected(self) -> bool:
+        """
+        Check if the device is currently connected.
+
+        Returns:
+            True if connected, False otherwise
+        """
+        return self.ser is not None and self.ser.is_open
 
     def connect(self) -> bool:
         """
@@ -80,7 +92,7 @@ class PicoDevice:
     def disconnect(self):
         """Disconnect from the device and clean up resources."""
         self.stop()
-        if self.ser:
+        if self.is_connected:
             self.ser.close()
             self.ser = None
 
@@ -94,7 +106,7 @@ class PicoDevice:
         Returns:
             True if command sent successfully, False otherwise
         """
-        if not self.ser:
+        if not self.is_connected:
             return False
 
         try:
@@ -113,7 +125,7 @@ class PicoDevice:
         Returns:
             Decoded string without newline, or None if no data/error
         """
-        if not self.ser:
+        if not self.is_connected:
             return None
 
         try:
@@ -205,13 +217,12 @@ class PicoDevice:
         Returns:
             Parsed response or None if timeout/error
         """
-        # Temporarily store the serial timeout
-        old_timeout = self.ser.timeout if self.ser else None
+        if not self.is_connected:
+            return None
 
+        old_timeout = self.ser.timeout
         try:
-            if self.ser:
-                self.ser.timeout = timeout
-
+            self.ser.timeout = timeout
             start_time = time.time()
             while time.time() - start_time < timeout:
                 line = self.read_line()
@@ -223,7 +234,7 @@ class PicoDevice:
 
         finally:
             # Restore the original timeout
-            if self.ser and old_timeout is not None:
+            if old_timeout is not None:
                 self.ser.timeout = old_timeout
 
     def __enter__(self):
@@ -353,7 +364,7 @@ class PicoRFSwitch(PicoDevice):
         except KeyError as e:
             raise ValueError(
                 f"Invalid switch state '{state}'. Valid states: "
-                "{list(self.PATHS.keys())}"
+                f"{list(self.paths.keys())}"
             ) from e
         return self.send_command({"sw_state": s})
 

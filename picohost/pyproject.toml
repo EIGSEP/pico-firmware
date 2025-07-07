@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "picohost"
-version = "0.0.1"
+version = "0.0.2a3"
 description = "Host control and management tools for Raspberry Pi Pico devices"
 readme = "README.md"
 license = {text = "MIT"}

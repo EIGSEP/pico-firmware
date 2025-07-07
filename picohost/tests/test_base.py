@@ -32,7 +32,7 @@ class TestPicoDevice:
             mock_serial_instance.add_peer(MockSerial())  # Make it 'open'
             mock_serial.return_value = mock_serial_instance
             device = PicoDevice("/dev/ttyACM0")
-            assert device.connect() is True
+            assert device.is_connected is True
             mock_serial.assert_called_once_with(
                 "/dev/ttyACM0", 115200, timeout=1.0
             )
