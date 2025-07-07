@@ -8,12 +8,12 @@ import numpy as np
 from picohost import PicoDevice, PicoPeltier
 
 parser = ArgumentParser(description="Record temperature from Pico device")
-parser.add_argument("-p", "--port", type=str, default="/dev/ttyACM0")
+parser.add_argument("-p", "--port", type=str, default="/dev/ttyACM0", help="Serial port for Pico device (default: /dev/ttyACM0)")
 parser.add_argument(
-    "--ctrl", action="store_true", help="Use control mode for Peltier device"
+    "-v", action="store_true", help="Print temperature data to console"
 )
 parser.add_argument(
-    "--print", action="store_true", help="Print temperature data to console"
+    "--ctrl", action="store_true", help="Use control mode for Peltier device"
 )
 args = parser.parse_args()
 
@@ -96,7 +96,7 @@ with t:
                 json_data = None
             if json_data:
                 temp_data.append(json_data)
-                if args.print:
+                if args.v:
                     now = time.time()
                     if now - print_time < print_cadence:
                         continue
