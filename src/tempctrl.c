@@ -53,7 +53,7 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl1.active = false;
     tempctrl1.permanently_disabled = false;
     tempctrl1.channel = 1;
-    tempctrl1.T_now = tempctrl1.T_target;
+    tempctrl1.T_now = 0;
     tempctrl1.drive = 0.0;
     tempctrl1.error_count = 0;
     tempctrl1.last_error_time = 0;
@@ -67,7 +67,7 @@ void tempctrl_init(uint8_t app_id) {
     tempctrl2.active = false;
     tempctrl2.permanently_disabled = false;
     tempctrl2.channel = 2;
-    tempctrl2.T_now = tempctrl2.T_target;
+    tempctrl2.T_now = 0;
     tempctrl2.drive = 0.0;
     tempctrl2.error_count = 0;
     tempctrl2.last_error_time = 0;
@@ -142,19 +142,15 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const char *status;
     const float time1 = temp_sensor_get_conversion_time(&temp_sensor1);
     const float time2 = temp_sensor_get_conversion_time(&temp_sensor2);
     
-    if (time1 == 0 && time2 == 0) {
-        status = "error";
-    } else {
-        status = "update";
-    }
+    const char *status1 = temp_sensor_has_error(&temp_sensor1) ? "error" : "update";
+    const char *status2 = temp_sensor_has_error(&temp_sensor2) ? "error" : "update";
     
     send_json(19,
-        KV_STR, "status", status,
         KV_INT, "app_id", app_id,
+        KV_STR, "status1", status1,
         KV_FLOAT, "temp1", tempctrl1.T_now,
         KV_INT, "temp1_gpio", TEMP_SENSOR1_PIN,
         KV_FLOAT, "conversion_time1", time1,
@@ -162,7 +158,8 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "drive1", tempctrl1.drive,
         KV_BOOL, "enabled1", tempctrl1.enabled,
         KV_BOOL, "perm_disabled1", tempctrl1.permanently_disabled,
-        KV_BOOL, "sensor_error1", temp_sensor_has_error(&temp_sensor1),
+        KV_FLOAT, "hysteresis1", tempctrl1.hysteresis,
+        KV_STR, "status2", status2,
         KV_FLOAT, "temp2", tempctrl2.T_now,
         KV_INT, "temp2_gpio", TEMP_SENSOR2_PIN,
         KV_FLOAT, "conversion_time2", time2,
@@ -170,7 +167,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "drive2", tempctrl2.drive,
         KV_BOOL, "enabled2", tempctrl2.enabled,
         KV_BOOL, "perm_disabled2", tempctrl2.permanently_disabled,
-        KV_BOOL, "sensor_error2", temp_sensor_has_error(&temp_sensor2)
+        KV_FLOAT, "hysteresis2", tempctrl2.hysteresis
     );
 }
 
@@ -230,7 +227,7 @@ void tempctrl_op(uint8_t app_id) {
         }
     }
     
-    // Drive Peltiers based on hysteresis control (only if enabled and no errors)
+    // Drive Peltiers based on hysteresis control
     if (tempctrl1.enabled && !temp_sensor_has_error(&temp_sensor1) && !tempctrl1.permanently_disabled) {
         tempctrl_hysteresis_drive(&tempctrl1);
     }
