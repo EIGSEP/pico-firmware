@@ -16,7 +16,7 @@ static TempSensor temp_sensor1;
 static TempSensor temp_sensor2;
 
 // Forward declarations
-static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level);
+static void tempctrl_drive_raw(TempControl *pc);
 static void tempctrl_hysteresis_drive(TempControl *pc);
 
 void tempctrl_init(uint8_t app_id) {
@@ -47,6 +47,7 @@ void tempctrl_init(uint8_t app_id) {
     // Initialize Temperature Control 1 structure
     tempctrl1.T_target = 30.0;
     tempctrl1.gain = 0.2;
+    tempctrl1.baseline = 0.4;  // Baseline drive level
     tempctrl1.clamp = 0.6;  // Maximum drive level
     tempctrl1.hysteresis = 0.5;
     tempctrl1.enabled = false;
@@ -61,6 +62,7 @@ void tempctrl_init(uint8_t app_id) {
     // Initialize Temperature Control 2 structure
     tempctrl2.T_target = 32.0;
     tempctrl2.gain = 0.2;
+    tempctrl2.baseline = 0.4;  // Baseline drive level
     tempctrl2.clamp = 0.6;  // Maximum drive level
     tempctrl2.hysteresis = 0.5;
     tempctrl2.enabled = false;
@@ -129,12 +131,12 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
         if (channel == 0 || channel == 1) {
             tempctrl1.enabled = false;
             tempctrl1.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl1, true, 0);
+            tempctrl_drive_raw(&tempctrl1);
         }
         if (channel == 0 || channel == 2) {
             tempctrl2.enabled = false;
             tempctrl2.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl2, true, 0);
+            tempctrl_drive_raw(&tempctrl2);
         }
     }
     
@@ -205,7 +207,7 @@ void tempctrl_op(uint8_t app_id) {
         
         if (tempctrl1.enabled) {
             tempctrl1.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl1, true, 0);
+            tempctrl_drive_raw(&tempctrl1);
         }
     }
     else if (tempctrl1.enabled && !tempctrl1.permanently_disabled) {
@@ -226,7 +228,7 @@ void tempctrl_op(uint8_t app_id) {
         
         if (tempctrl2.enabled) {
             tempctrl2.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl2, true, 0);
+            tempctrl_drive_raw(&tempctrl2);
         }
     }
     else if (tempctrl2.enabled && !tempctrl2.permanently_disabled) {
@@ -235,20 +237,23 @@ void tempctrl_op(uint8_t app_id) {
 }
 
 // Helper functions
-static void tempctrl_drive_raw(TempControl *pc, bool forward, uint32_t level) {
+static void tempctrl_drive_raw(TempControl *pc) {
+    uint32_t pwm_level = (uint32_t)(fabsf(pc->drive) * PWM_WRAP);
+    bool forward = (pc->drive >= 0);
     if (pc->channel == 1) {
         gpio_put(PELTIER1_DIR_PIN1, forward);
         gpio_put(PELTIER1_DIR_PIN2, !forward);
-        pwm_set_gpio_level(PELTIER1_PWM_PIN, level);
+        pwm_set_gpio_level(PELTIER1_PWM_PIN, pwm_level);
     } else if (pc->channel == 2) {
         gpio_put(PELTIER2_DIR_PIN3, forward);
         gpio_put(PELTIER2_DIR_PIN4, !forward);
-        pwm_set_gpio_level(PELTIER2_PWM_PIN, level);
+        pwm_set_gpio_level(PELTIER2_PWM_PIN, pwm_level);
     }
 }
 
 static void tempctrl_hysteresis_drive(TempControl *pc) {
     float error = pc->T_target - pc->T_now;
+    int sign = (error >= 0) ? 1 : -1;
     
     if (fabsf(error) <= pc->hysteresis) {
         // Within hysteresis band - turn off
@@ -258,23 +263,14 @@ static void tempctrl_hysteresis_drive(TempControl *pc) {
         // Outside hysteresis band - engage control
         pc->active = true;
         
-        // Simple proportional control using gain parameter
-        pc->drive = error * pc->gain;
+        // Simple proportional control using gain and baseline drive
+        pc->drive = error * pc->gain + sign * pc->baseline;
         
         // Limit drive to maximum power (clamp acts as max power)
-        if (pc->drive > pc->clamp) {
-            pc->drive = pc->clamp;
-        } else if (pc->drive < -1.0 * pc->clamp) {
-            pc->drive = -1.0 * pc->clamp;
+        if (fabsf(pc->drive) > pc->clamp) {
+            pc->drive = sign * pc->clamp;
         }
     }
     
-    // Apply drive signal
-    if (pc->drive >= 0) {
-        // Heating mode
-        tempctrl_drive_raw(pc, true, (uint32_t)(pc->drive * PWM_WRAP));
-    } else {
-        // Cooling mode
-        tempctrl_drive_raw(pc, false, (uint32_t)(-pc->drive * PWM_WRAP));
-    }
+    tempctrl_drive_raw(pc);
 }
