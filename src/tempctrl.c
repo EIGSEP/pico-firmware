@@ -191,7 +191,7 @@ void tempctrl_op(uint8_t app_id) {
     // Check for sensor errors and track error counts
     uint32_t now = to_ms_since_boot(get_absolute_time());
     
-    // Handle sensor 1 errors
+    // Handle sensor 1 error or drive Peltiers based on hysteresis control
     if (temp_sensor_has_error(&temp_sensor1)) {
         if ((now - tempctrl1.last_error_time) > ERROR_TIME_WINDOW_MS) {
             tempctrl1.error_count = 0;  // Reset count if outside time window
@@ -208,8 +208,11 @@ void tempctrl_op(uint8_t app_id) {
             tempctrl_drive_raw(&tempctrl1, true, 0);
         }
     }
+    else if (tempctrl1.enabled && !tempctrl1.permanently_disabled) {
+        tempctrl_hysteresis_drive(&tempctrl1);
+    }
     
-    // Handle sensor 2 errors
+    // Handle sensor 2 errors or drive Peltiers based on hysteresis control
     if (temp_sensor_has_error(&temp_sensor2)) {
         if ((now - tempctrl2.last_error_time) > ERROR_TIME_WINDOW_MS) {
             tempctrl2.error_count = 0;  // Reset count if outside time window
@@ -226,12 +229,7 @@ void tempctrl_op(uint8_t app_id) {
             tempctrl_drive_raw(&tempctrl2, true, 0);
         }
     }
-    
-    // Drive Peltiers based on hysteresis control
-    if (tempctrl1.enabled && !temp_sensor_has_error(&temp_sensor1) && !tempctrl1.permanently_disabled) {
-        tempctrl_hysteresis_drive(&tempctrl1);
-    }
-    if (tempctrl2.enabled && !temp_sensor_has_error(&temp_sensor2) && !tempctrl2.permanently_disabled) {
+    else if (tempctrl2.enabled && !tempctrl2.permanently_disabled) {
         tempctrl_hysteresis_drive(&tempctrl2);
     }
 }
