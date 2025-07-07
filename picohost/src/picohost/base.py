@@ -293,16 +293,66 @@ class PicoMotor(PicoDevice):
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
-    def set_switch_state(self, state: int) -> bool:
+    path_str = {
+        "VNAO": "10000000",
+        "VNAS": "11000000",
+        "VNAL": "00100000",
+        "VNAANT": "00000100",
+        "VNANON": "00000111",
+        "VNANOFF": "00000110",
+        "VNARF": "00011000",
+        "RFNON": "00000011",
+        "RFNOFF": "00000010",
+        "RFANT": "00000000",
+    }
+
+    PATHS = {k: PicoRFSWitch.rbin(v) for k, v in path_str.items()}
+
+    @staticmethod
+    def rbin(s):
+        """
+        Convert a str of 0s and 1s to binary, where the first char is the LSB.
+
+        Parameters
+        ----------
+        s : str
+            String of 0s and 1s.
+
+        Returns
+        -------
+        int
+            Integer representation of the binary string.
+
+        """
+        return int(s[::-1], 2)  # reverse the string and convert to int
+
+    def switch(self, state: str) -> bool:
         """
         Set RF switch state.
 
-        Args:
-            state: Switch state value (0-255 for 8-bit control)
+        Parameters
+        ----------
+        state: str
+            Switch state path, see self.PATHS for valid keys
 
-        Returns:
+        Returns
+        -------
+        bool
             True if command sent successfully
+
+        Raises
+        -------
+        ValueError
+            If an invalid switch state is provided
+
         """
+        try:
+            s = self.PATHS[state]
+        except KeyError as e:
+            raise ValueError(
+                f"Invalid switch state '{state}'. Valid states: "
+                "{list(self.PATHS.keys())}"
+            ) from e
         return self.send_command({"sw_state": state})
 
 
