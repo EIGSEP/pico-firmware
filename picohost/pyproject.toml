@@ -26,12 +26,14 @@ flash-picos = "picohost.flash_picos:main"
 
 [project.optional-dependencies]
 dev = [
+  "build",
+  "twine",
   "black",
   "flake8",
   "pytest",
   "pytest-cov",
   "pytest-timeout",
-  "mockserial @ git+https://github.com/christianhbye/mockserial.git",
+  "pyserial-mock",
 ]
 
 [tool.setuptools]
