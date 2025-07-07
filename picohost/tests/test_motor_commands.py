@@ -19,9 +19,11 @@ class TestPicoMotor:
         motor = PicoMotor("/dev/ttyACM0")
         motor.connect()
 
-        # Test move command
+        # Test move command with degrees
+        deg_az = 5.0
+        deg_el = 10.0
         result = motor.move(
-            pulses_az=100, pulses_el=200, delay_us_az=500, delay_us_el=700
+            deg_az=deg_az, deg_el=deg_el, delay_us_az=500, delay_us_el=700
         )
 
         # Verify command was sent
@@ -32,9 +34,13 @@ class TestPicoMotor:
             "utf-8"
         ).strip()
 
+        # Calculate expected pulses
+        expected_pulses_az = motor.deg_to_pulses(deg_az)
+        expected_pulses_el = motor.deg_to_pulses(deg_el)
+
         # Should contain the expected JSON structure
-        assert '"pulses_az":100' in command_str
-        assert '"pulses_el":200' in command_str
+        assert f'"pulses_az":{expected_pulses_az}' in command_str
+        assert f'"pulses_el":{expected_pulses_el}' in command_str
         assert '"delay_us_az":500' in command_str
         assert '"delay_us_el":700' in command_str
 
@@ -49,7 +55,9 @@ class TestPicoMotor:
         motor.connect()
 
         # Test move with defaults
-        result = motor.move(pulses_az=50, pulses_el=75)
+        deg_az = 3.0
+        deg_el = 4.0
+        result = motor.move(deg_az=deg_az, deg_el=deg_el)
 
         assert result is True
 
@@ -57,6 +65,13 @@ class TestPicoMotor:
             "utf-8"
         ).strip()
 
+        # Calculate expected pulses
+        expected_pulses_az = motor.deg_to_pulses(deg_az)
+        expected_pulses_el = motor.deg_to_pulses(deg_el)
+
+        # Should contain the correct pulses
+        assert f'"pulses_az":{expected_pulses_az}' in command_str
+        assert f'"pulses_el":{expected_pulses_el}' in command_str
         # Should use default delays (600)
         assert '"delay_us_az":600' in command_str
         assert '"delay_us_el":600' in command_str

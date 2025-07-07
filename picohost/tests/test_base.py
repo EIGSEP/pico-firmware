@@ -94,16 +94,22 @@ class TestPicoMotor:
         motor.ser = MockSerial()
         motor.ser.add_peer(MockSerial())  # Make it 'open'
 
-        # Test move command
-        motor.move(1000, -500, 600, 800)
+        # Test move command with degrees
+        deg_az = 10.0
+        deg_el = -5.0
+        motor.move(deg_az=deg_az, deg_el=deg_el, delay_us_az=600, delay_us_el=800)
 
         # Verify the command was sent
         sent_data = motor.ser.peer._read_buffer.decode("utf-8").strip()
         sent_json = json.loads(sent_data)
 
+        # Calculate expected pulses
+        expected_pulses_az = motor.deg_to_pulses(deg_az)
+        expected_pulses_el = motor.deg_to_pulses(deg_el)
+
         assert sent_json == {
-            "pulses_az": 1000,
-            "pulses_el": -500,
+            "pulses_az": expected_pulses_az,
+            "pulses_el": expected_pulses_el,
             "delay_us_az": 600,
             "delay_us_el": 800,
         }
@@ -112,20 +118,35 @@ class TestPicoMotor:
 class TestPicoRFSwitch:
     """Test the PicoRFSwitch class."""
 
-    def test_set_switch_state(self):
+    def test_switch_state(self):
         """Test RF switch state command."""
         switch = PicoRFSwitch("/dev/ttyACM0")
         switch.ser = MockSerial()
         switch.ser.add_peer(MockSerial())  # Make it 'open'
 
-        # Test switch state command
-        switch.set_switch_state(5)
+        # Test switch state command with valid state
+        switch.switch("VNAO")
 
         # Verify the command was sent
         sent_data = switch.ser.peer._read_buffer.decode("utf-8").strip()
         sent_json = json.loads(sent_data)
 
-        assert sent_json == {"sw_state": 5}
+        # The switch method converts the state string to binary
+        expected_state = switch.rbin(switch.path_str["VNAO"])
+        assert sent_json == {"sw_state": expected_state}
+
+    def test_switch_invalid_state(self):
+        """Test RF switch with invalid state."""
+        switch = PicoRFSwitch("/dev/ttyACM0")
+        switch.ser = MockSerial()
+        switch.ser.add_peer(MockSerial())  # Make it 'open'
+
+        # Test invalid switch state - should raise ValueError
+        try:
+            switch.switch("INVALID")
+            assert False, "Should have raised ValueError"
+        except ValueError as e:
+            assert "Invalid switch state" in str(e)
 
 
 class TestPicoPeltier:
