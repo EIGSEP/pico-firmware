@@ -306,8 +306,6 @@ class PicoRFSwitch(PicoDevice):
         "RFANT": "00000000",
     }
 
-    PATHS = {k: PicoRFSWitch.rbin(v) for k, v in path_str.items()}
-
     @staticmethod
     def rbin(s):
         """
@@ -325,6 +323,10 @@ class PicoRFSwitch(PicoDevice):
 
         """
         return int(s[::-1], 2)  # reverse the string and convert to int
+
+    @property
+    def paths(self):
+        return {k: self.rbin(v) for k, v in self.path_str.items()}
 
     def switch(self, state: str) -> bool:
         """
@@ -347,13 +349,13 @@ class PicoRFSwitch(PicoDevice):
 
         """
         try:
-            s = self.PATHS[state]
+            s = self.paths[state]
         except KeyError as e:
             raise ValueError(
                 f"Invalid switch state '{state}'. Valid states: "
                 "{list(self.PATHS.keys())}"
             ) from e
-        return self.send_command({"sw_state": state})
+        return self.send_command({"sw_state": s})
 
 
 class PicoPeltier(PicoDevice):
