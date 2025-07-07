@@ -364,7 +364,7 @@ class PicoRFSwitch(PicoDevice):
         except KeyError as e:
             raise ValueError(
                 f"Invalid switch state '{state}'. Valid states: "
-                f"{list(self.PATHS.keys())}"
+                f"{list(self.paths.keys())}"
             ) from e
         return self.send_command({"sw_state": s})
 
