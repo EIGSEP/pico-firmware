@@ -241,10 +241,28 @@ class PicoDevice:
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
+    STEP_ANGLE = 1.8  # degrees per step
+    MICROSTEP = 1
+    GEAR_TEETH = 113
+
+    @staticmethod
+    def deg_to_pulses(degrees: float) -> int:
+        """
+        Convert degrees to motor pulses.
+
+        Args:
+            degrees: Angle in degrees
+
+        Returns:
+            Number of pulses for the given angle
+        """
+        steps = degrees / PicoMotor.STEP_ANGLE
+        return int(steps * PicoMotor.MICROSTEP * PicoMotor.GEAR_TEETH)
+
     def move(
         self,
-        pulses_az: int,
-        pulses_el: int,
+        deg_az: Optional[float] = 0,
+        deg_el: Optional[float] = 0,
         delay_us_az: int = 600,
         delay_us_el: int = 600,
     ) -> bool:
@@ -252,14 +270,16 @@ class PicoMotor(PicoDevice):
         Send motor movement command.
 
         Args:
-            pulses_az: Azimuth motor pulses (positive or negative)
-            pulses_el: Elevation motor pulses (positive or negative)
+            deg_az: Azimuth angle in degrees (0 for no movement)
+            deg_el: Elevation angle in degrees (0 for no movement)
             delay_us_az: Microseconds between azimuth steps
             delay_us_el: Microseconds between elevation steps
 
         Returns:
             True if command sent successfully
         """
+        pulses_az = self.deg_to_pulses(deg_az)
+        pulses_el = self.deg_to_pulses(deg_el)
         return self.send_command(
             {
                 "pulses_az": pulses_az,
