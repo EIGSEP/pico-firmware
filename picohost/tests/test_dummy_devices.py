@@ -60,6 +60,7 @@ class TestDummyPicoDevice(unittest.TestCase):
     def test_send_command_no_connection(self):
         """Test sending command without connection."""
         cmd = {"cmd": "test"}
+        self.device.disconnect()  # Ensure disconnected
         result = self.device.send_command(cmd)
         self.assertFalse(result)
     
