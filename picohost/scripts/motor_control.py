@@ -47,12 +47,11 @@ class MotorController(PicoMotor):
             except KeyboardInterrupt:
                 self.stop()
 
-     def stop(self):
+    def stop(self):
         """Stop all motor movements"""
         print("Stopping motors.")
         self.move(deg_az=0, deg_el=0, block=False)
         self.status_queue.queue.clear()
-
 
 
 def infinite_scan_mode(motor, scan_az=True, scan_el=True):
