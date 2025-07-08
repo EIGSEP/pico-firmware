@@ -25,7 +25,7 @@ class MotorController(PicoMotor):
         if self._running:
             status = self.status_queue.get(timeout=1)
         else:
-            status = self.readline(timeout=1)
+            status = self.parse_response(self.read_line())
         if not status:
             print("No status received from motor")
             return False
@@ -33,9 +33,9 @@ class MotorController(PicoMotor):
         el_moving = status.get("el_remaining_steps", 0) != 0
         return az_moving or el_moving
 
-    def move(self, deg_az=0, deg_el=0, block=True):
+    def move(self, az_deg=0, el_deg=0, block=True):
         """Move motors by specified degrees"""
-        super().move(deg_az=deg_az, deg_el=deg_el)
+        super().move(az_deg=az_deg, el_deg=el_deg)
         if block:
             self.wait_for_motors()
 
@@ -119,10 +119,10 @@ def main():
         help="Serial port for PicoMotor device (default: /dev/ttyACM0)",
     )
     parser.add_argument(
-        "--az", type=float, help="Degrees to move azimuth motor"
+        "--az", type=float, default=0, help="Degrees to move azimuth motor"
     )
     parser.add_argument(
-        "--el", type=float, help="Degrees to move elevation motor"
+        "--el", type=float, default=0, help="Degrees to move elevation motor"
     )
     parser.add_argument(
         "--infinite", action="store_true", help="Run infinite scanning mode"
@@ -141,12 +141,13 @@ def main():
     args = parser.parse_args()
 
     m = MotorController(args.port)
+    m.start()
     if args.infinite or args.infinite_az or args.infinite_el:
         scan_az = args.infinite or args.infinite_az
         scan_el = args.infinite or args.infinite_el
         infinite_scan_mode(m, scan_az=scan_az, scan_el=scan_el)
     elif args.az is not None or args.el is not None:
-        m.move(az_degrees=args.az, el_degrees=args.el)
+        m.move(az_deg=args.az, el_deg=args.el)
     else:
         parser.print_help()
         sys.exit(1)

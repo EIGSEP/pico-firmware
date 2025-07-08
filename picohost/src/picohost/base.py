@@ -272,8 +272,8 @@ class PicoMotor(PicoDevice):
 
     def move(
         self,
-        deg_az: Optional[float] = 0,
-        deg_el: Optional[float] = 0,
+        az_deg: Optional[float] = 0,
+        el_deg: Optional[float] = 0,
         delay_us_az: int = 600,
         delay_us_el: int = 600,
     ) -> bool:
@@ -289,8 +289,8 @@ class PicoMotor(PicoDevice):
         Returns:
             True if command sent successfully
         """
-        pulses_az = self.deg_to_pulses(deg_az)
-        pulses_el = self.deg_to_pulses(deg_el)
+        pulses_az = self.deg_to_pulses(az_deg)
+        pulses_el = self.deg_to_pulses(el_deg)
         return self.send_command(
             {
                 "pulses_az": pulses_az,
