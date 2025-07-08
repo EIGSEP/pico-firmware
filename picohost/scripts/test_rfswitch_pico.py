@@ -20,7 +20,6 @@ def main():
     Open the serial port, read until a valid JSON line appears or timeout.
     """
     rfsw = picohost.PicoRFSwitch(sys.argv[-1])
-    rfsw.connect()  #XXX why??
     for state in STATES:
         print(f"RF switch state: {state}")
         rfsw.switch(state)
