@@ -7,6 +7,8 @@
 #include "bno08x.h"
 
 #define I2C_BAUDRATE 400000
+// sample rate in ms
+#define SAMPLE_PERIOD 50
 #define IMU_ADDR 0x4A
 
 static BNO08x imu1;
@@ -34,11 +36,11 @@ static void init_i2c_bus(i2c_inst_t *i2c, uint sda, uint scl) {
 }
 
 static void enable_imu_features(BNO08x& imu) {
-    imu.enableRotationVector();
-    imu.enableAccelerometer();
-    imu.enableLinearAccelerometer();
-    imu.enableGyro();
-    imu.enableMagnetometer();
+    imu.enableRotationVector(SAMPLE_RATE);
+    imu.enableAccelerometer(SAMPLE_RATE);
+    imu.enableLinearAccelerometer(SAMPLE_RATE);
+    imu.enableGyro(SAMPLE_RATE);
+    imu.enableMagnetometer(SAMPLE_RATE);
     imu.enableGravity();
 }
 
@@ -57,7 +59,7 @@ void calibrate_imu() {
     if (imu_initialized) {
         sensor_data.accel_status = -1;
         sensor_data.mag_status = -1;        
-        absolute_time_t deadline = make_timeout_time_ms(50);
+        absolute_time_t deadline = make_timeout_time_ms(SAMPLE_RATE);
         while (!time_reached(deadline)) {
             if (!imu1.getSensorEvent()) continue;
             sh2_SensorValue_t event = imu1.sensorValue;
@@ -108,7 +110,7 @@ void imu_op(uint8_t app_id) {
     }
     
     // Read sensor events
-    if (imu1.getSensorEvent()) {
+    while (imu1.getSensorEvent()) {
         sh2_SensorValue_t event = imu1.sensorValue;
         switch (event.sensorId) {
             case SENSOR_REPORTID_ROTATION_VECTOR:
