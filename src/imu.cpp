@@ -36,11 +36,11 @@ static void init_i2c_bus(i2c_inst_t *i2c, uint sda, uint scl) {
 }
 
 static void enable_imu_features(BNO08x& imu) {
-    imu.enableRotationVector(SAMPLE_RATE);
-    imu.enableAccelerometer(SAMPLE_RATE);
-    imu.enableLinearAccelerometer(SAMPLE_RATE);
-    imu.enableGyro(SAMPLE_RATE);
-    imu.enableMagnetometer(SAMPLE_RATE);
+    imu.enableRotationVector(SAMPLE_PERIOD);
+    imu.enableAccelerometer(SAMPLE_PERIOD);
+    imu.enableLinearAccelerometer(SAMPLE_PERIOD);
+    imu.enableGyro(SAMPLE_PERIOD);
+    imu.enableMagnetometer(SAMPLE_PERIOD);
     imu.enableGravity();
 }
 
@@ -59,7 +59,7 @@ void calibrate_imu() {
     if (imu_initialized) {
         sensor_data.accel_status = -1;
         sensor_data.mag_status = -1;        
-        absolute_time_t deadline = make_timeout_time_ms(SAMPLE_RATE);
+        absolute_time_t deadline = make_timeout_time_ms(SAMPLE_PERIOD);
         while (!time_reached(deadline)) {
             if (!imu1.getSensorEvent()) continue;
             sh2_SensorValue_t event = imu1.sensorValue;
