@@ -25,14 +25,14 @@
  */
 
 // define motor pins
-#define  EL_EN_PIN 9
-#define EL_DIR_PIN 7
-#define EL_PUL_PIN 11
+#define  EL_EN_PIN 5
+#define EL_DIR_PIN 6
+#define EL_PUL_PIN 7
 #define  EL_CW_VAL 0
 
-#define  AZ_EN_PIN 9
-#define AZ_DIR_PIN 7
-#define AZ_PUL_PIN 11
+#define  AZ_EN_PIN 8
+#define AZ_DIR_PIN 9
+#define AZ_PUL_PIN 10
 #define  AZ_CW_VAL 0
 
 #define DEFAULT_DELAY_US 600
