@@ -3,7 +3,7 @@ build/*
 # include the final firmware file
 !build/pico_multi.uf2
 
-devices_info.json
+*.json
 
 .venv/
 

@@ -64,7 +64,8 @@ def main():
         description=(
             "Flash all attached Picos, read JSON from each, save to single "
             "file."
-        )
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
         "--port", default=None, help="Serial port of pico, None means all"
@@ -78,18 +79,18 @@ def main():
         "--baud",
         type=int,
         default=115200,
-        help="Serial baud rate (default: 115200)",
+        help="Serial baud rate.",
     )
     p.add_argument(
         "--timeout",
         type=int,
         default=10,
-        help="Seconds to wait for each Pico's JSON (default: 10)",
+        help="Seconds to wait for each Pico's JSON",
     )
     p.add_argument(
         "--output",
-        default="devices_info.json",
-        help="Output JSON file (default: devices_info.json)",
+        default="pico_config.json",
+        help="Output JSON file",
     )
     args = p.parse_args()
 
