@@ -1,4 +1,5 @@
 import logging
+
 try:
     import mockserial
 except ImportError:

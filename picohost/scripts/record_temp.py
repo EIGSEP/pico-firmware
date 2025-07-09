@@ -12,7 +12,7 @@ parser.add_argument(
     "--port",
     type=str,
     default="/dev/ttyACM0",
-    help="Serial port for Pico device (default: /dev/ttyACM0)"
+    help="Serial port for Pico device (default: /dev/ttyACM0)",
 )
 parser.add_argument(
     "-v", action="store_true", help="Print temperature data to console"

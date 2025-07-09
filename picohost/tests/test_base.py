@@ -95,17 +95,19 @@ class TestPicoMotor:
         motor.ser.add_peer(MockSerial())  # Make it 'open'
 
         # Test move command with degrees
-        deg_az = 10.0
-        deg_el = -5.0
-        motor.move(deg_az=deg_az, deg_el=deg_el, delay_us_az=600, delay_us_el=800)
+        az_deg = 10.0
+        el_deg = -5.0
+        motor.move(
+            az_deg=az_deg, el_deg=el_deg, delay_us_az=600, delay_us_el=800
+        )
 
         # Verify the command was sent
         sent_data = motor.ser.peer._read_buffer.decode("utf-8").strip()
         sent_json = json.loads(sent_data)
 
         # Calculate expected pulses
-        expected_pulses_az = motor.deg_to_pulses(deg_az)
-        expected_pulses_el = motor.deg_to_pulses(deg_el)
+        expected_pulses_az = motor.deg_to_pulses(az_deg)
+        expected_pulses_el = motor.deg_to_pulses(el_deg)
 
         assert sent_json == {
             "pulses_az": expected_pulses_az,

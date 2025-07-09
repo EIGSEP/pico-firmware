@@ -23,7 +23,7 @@ class TestPicoMotor:
         deg_az = 5.0
         deg_el = 10.0
         result = motor.move(
-            deg_az=deg_az, deg_el=deg_el, delay_us_az=500, delay_us_el=700
+            az_deg=deg_az, el_deg=deg_el, delay_us_az=500, delay_us_el=700
         )
 
         # Verify command was sent
@@ -57,7 +57,7 @@ class TestPicoMotor:
         # Test move with defaults
         deg_az = 3.0
         deg_el = 4.0
-        result = motor.move(deg_az=deg_az, deg_el=deg_el)
+        result = motor.move(az_deg=deg_az, el_deg=deg_el)
 
         assert result is True
 
