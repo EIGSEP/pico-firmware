@@ -70,7 +70,8 @@ void lidar_server(uint8_t app_id, const char *json_str) {
 }
 
 void lidar_status(uint8_t app_id) {
-    send_json(5,
+    send_json(6,
+        KV_STR, "sensor_name", "lidar",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_FLOAT, "distance", lidar_data.distance,

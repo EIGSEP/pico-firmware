@@ -150,26 +150,25 @@ void tempctrl_status(uint8_t app_id) {
     const char *status1 = temp_sensor_has_error(&temp_sensor1) ? "error" : "update";
     const char *status2 = temp_sensor_has_error(&temp_sensor2) ? "error" : "update";
     
-    send_json(19,
+    send_json(18,
+        KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
-        KV_STR, "status1", status1,
-        KV_FLOAT, "temp1", tempctrl1.T_now,
-        KV_INT, "temp1_gpio", TEMP_SENSOR1_PIN,
-        KV_FLOAT, "conversion_time1", time1,
-        KV_FLOAT, "target1", tempctrl1.T_target,
-        KV_FLOAT, "drive1", tempctrl1.drive,
-        KV_BOOL, "enabled1", tempctrl1.enabled,
-        KV_BOOL, "perm_disabled1", tempctrl1.permanently_disabled,
-        KV_FLOAT, "hysteresis1", tempctrl1.hysteresis,
-        KV_STR, "status2", status2,
-        KV_FLOAT, "temp2", tempctrl2.T_now,
-        KV_INT, "temp2_gpio", TEMP_SENSOR2_PIN,
-        KV_FLOAT, "conversion_time2", time2,
-        KV_FLOAT, "target2", tempctrl2.T_target,
-        KV_FLOAT, "drive2", tempctrl2.drive,
-        KV_BOOL, "enabled2", tempctrl2.enabled,
-        KV_BOOL, "perm_disabled2", tempctrl2.permanently_disabled,
-        KV_FLOAT, "hysteresis2", tempctrl2.hysteresis
+        KV_STR, "A_status", status1,
+        KV_FLOAT, "A_temp_now", tempctrl1.T_now,
+        KV_FLOAT, "A_timestamp", time1,
+        KV_FLOAT, "A_temp_target", tempctrl1.T_target,
+        KV_FLOAT, "A_drive_level", tempctrl1.drive,
+        KV_BOOL, "A_enabled", tempctrl1.enabled,
+        KV_BOOL, "A_perm_disabled", tempctrl1.permanently_disabled,
+        KV_FLOAT, "A_hysteresis", tempctrl1.hysteresis,
+        KV_STR, "B_status", status2,
+        KV_FLOAT, "B_temp_now", tempctrl2.T_now,
+        KV_FLOAT, "B_timestamp", time2,
+        KV_FLOAT, "B_temp_target", tempctrl2.T_target,
+        KV_FLOAT, "B_drive_level", tempctrl2.drive,
+        KV_BOOL, "B_enabled", tempctrl2.enabled,
+        KV_BOOL, "B_perm_disabled", tempctrl2.permanently_disabled,
+        KV_FLOAT, "B_hysteresis", tempctrl2.hysteresis
     );
 }
 

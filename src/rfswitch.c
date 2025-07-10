@@ -32,7 +32,8 @@ void rfswitch_server(uint8_t app_id, const char *json_str) {
 
 
 void rfswitch_status(uint8_t app_id) {
-	send_json(3,
+	send_json(4,
+        KV_STR, "sensor_name", "rfswitch",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_INT, "sw_state", rfswitch.sw_state

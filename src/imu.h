@@ -24,7 +24,7 @@
 #define IMU_RST_GPIO     13
 #define IMU_I2C          i2c0
 
-#define IMU_NAME_LEN      8
+#define IMU_NAME_LEN      32
 
 /* ------------------------------------------------------------------ */
 /* Data structures                                                    */

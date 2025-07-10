@@ -39,9 +39,9 @@ void init_eigsep_imu(EigsepImu *eimu, uint app_id) {
     eimu->is_initialized = false;
     eimu->do_calibration = false;
     if (app_id == APP_IMU) {
-        strncpy(eimu->name, "panda", IMU_NAME_LEN - 1);
+        strncpy(eimu->name, "imu_panda", IMU_NAME_LEN - 1);
     } else {
-        strncpy(eimu->name, "antenna", IMU_NAME_LEN - 1);
+        strncpy(eimu->name, "imu_antenna", IMU_NAME_LEN - 1);
     }
     eimu->name[IMU_NAME_LEN-1] = '\0';
     eimu->i2c = i2c0;
@@ -172,8 +172,8 @@ void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
     }
     
     send_json(21,
+        KV_STR, "sensor_name", eimu->name,
         KV_STR, "status", status,
-        KV_STR, "imu_name", eimu->name,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "quat_i", eimu->sensor_data.q[0],
         KV_FLOAT, "quat_j", eimu->sensor_data.q[1],

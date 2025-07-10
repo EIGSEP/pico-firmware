@@ -38,16 +38,15 @@ void tempmon_status(uint8_t app_id) {
     const char *status1 = temp_sensor_has_error(&sensor1) ? "error" : "update";
     const char *status2 = temp_sensor_has_error(&sensor2) ? "error" : "update";
 
-    send_json(9,
+    send_json(8,
+        KV_STR, "sensor_name", "temp_mon",
         KV_INT, "app_id", app_id,
-        KV_STR, "status1", status1,
-        KV_FLOAT, "temperature1", temp1,
-        KV_INT, "temperature1_gpio", TEMPMON_SENSOR1_PIN,
-        KV_FLOAT, "conversion_time1", time1,
-        KV_STR, "status2", status2,
-        KV_FLOAT, "temperature2", temp2,
-        KV_INT, "temperature2_gpio", TEMPMON_SENSOR2_PIN,
-        KV_FLOAT, "conversion_time2", time2
+        KV_STR, "A_status", status1,
+        KV_FLOAT, "A_temp", temp1,
+        KV_FLOAT, "A_timestamp", time1,
+        KV_STR, "B_status", status2,
+        KV_FLOAT, "B_temp", temp2,
+        KV_FLOAT, "B_timestamp", time2
     );
 }
 
