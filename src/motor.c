@@ -30,8 +30,9 @@ void stepper_init(Stepper *m,
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
     m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
+    m->extra_delay_us= THROTTLE_FACTOR * DEFAULT_DELAY_US; // slow direction changes
     m->position      = 0;
-    m->dir           = 1;
+    m->dir           = 0;
     // controlling steps
     m->remaining_steps = 0;  // Initialize remaining steps to 0
     m->max_pulses    = 60;  // pulses per command, ~1 deg
@@ -64,30 +65,36 @@ void motor_init(uint8_t app_id) {
  *
  * @param m Pointer to the Stepper instance representing the motor.
  */
-void stepper_tick(Stepper *m) {
+void stepper_tick(Stepper *m, int extra_delay_us) {
     gpio_put(m->pulse_pin, 1);
-    sleep_us(m->delay_us);
+    sleep_us(m->delay_us); // keep active timing tight
     gpio_put(m->pulse_pin, 0);
-    sleep_us(m->delay_us);
+    sleep_us(m->delay_us + extra_delay_us); // to throttle start/stop
     // Update position
     m->position += m->dir;
 }
 
 void stepper_op(Stepper *m) {
+    int extra_delay_us = 0;
     if (m->remaining_steps > 0) {
+        if (m->dir != 1) m->throttle_delay_us = 2 * THROTTLE_FACTOR * m->delay_us; // slow direction change
         m->dir = 1;
         gpio_put(m->direction_pin, m->cw_val);
     } else if (m->remaining_steps < 0) {
+        if (m->dir != -1) m->throttle_delay_us = 2 * THROTTLE_FACTOR * m->delay_us; // slow direction change
         m->dir = -1;
         gpio_put(m->direction_pin, !m->cw_val);
     } else {
+        m->dir = 0;
         return;
     }
+    m->throttle_delay_us /= 2;
+    m->throttle_delay_us = m->throttle_delay_us > m->delay_us ? m->throttle_delay_us : m->delay_us;
 
     int nsteps = MIN(m->max_pulses, abs(m->remaining_steps));
     stepper_enable(m);
     for (int i = 0; i < nsteps; i++) {
-        stepper_tick(m);
+        stepper_tick(m, extra_delay_us);
     }
     stepper_disable(m);
     m->remaining_steps -= nsteps * m->dir;
@@ -116,21 +123,30 @@ void motor_server(uint8_t app_id, const char *json_str) {
     uint32_t delay_us_az, delay_us_el;
 
     cJSON *root = cJSON_Parse(json_str);
-    cJSON *pul_az_json = cJSON_GetObjectItem(root, "pulses_az");
-    cJSON *pul_el_json = cJSON_GetObjectItem(root, "pulses_el");
-    cJSON *dly_us_az_json = cJSON_GetObjectItem(root, "delay_us_az");
-    cJSON *dly_us_el_json = cJSON_GetObjectItem(root, "delay_us_el");
+    cJSON *az_set_pos_json = cJSON_GetObjectItem(root, "az_set_pos");
+    az_pos = az_set_pos_json ? az_set_pos_json->valueint : azimuth.position;
+    cJSON *el_set_pos_json = cJSON_GetObjectItem(root, "el_set_pos");
+    el_pos = el_set_pos_json ? el_set_pos_json->valueint : elevation.position;
 
-    pulses_az = pul_az_json ? pul_az_json->valueint : 0;
-    pulses_el = pul_el_json ? pul_el_json->valueint : 0;
-    delay_us_az = dly_us_az_json ? dly_us_az_json->valueint : azimuth.delay_us;
-    delay_us_el = dly_us_el_json ? dly_us_el_json->valueint : elevation.delay_us;
-
-    // update the stepper motors
-    azimuth.remaining_steps += pulses_az;
-    elevation.remaining_steps += pulses_el;
-    azimuth.delay_us = delay_us_az;
-    elevation.delay_us = delay_us_el;
+    cJSON *az_add_pulses_json = cJSON_GetObjectItem(root, "az_add_pulses");
+    if (az_add_pulses_json) {
+        az_pulses = az_add_pulses_json->valueint;
+        // Sending increment of zero halts motor immediately
+        if (az_pulses == 0) azimuth.remaining_steps = 0;
+        azimuth.remaining_steps += az_pulses;
+    }
+    cJSON *el_add_pulses_json = cJSON_GetObjectItem(root, "el_add_pulses");
+    if (el_add_pulses_json) {
+        el_pulsesl = el_add_pulses_json->valueint;
+        // Sending increment of zero halts motor immediately
+        if (el_pulses == 0) elevation.remaining_steps = 0;
+        elevation.remaining_steps += el_pulses;
+    }
+        
+    cJSON *az_dly_us_json = cJSON_GetObjectItem(root, "az_delay_us");
+    azimuth.delay_us = az_dly_us_json ? az_dly_us_json->valueint : azimuth.delay_us;
+    cJSON *el_dly_us_json = cJSON_GetObjectItem(root, "el_delay_us");
+    elevation.delay_us = el_dly_us_json ? el_dly_us_json->valueint : elevation.delay_us;
 }
 
 
