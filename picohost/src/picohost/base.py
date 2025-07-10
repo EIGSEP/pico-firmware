@@ -75,6 +75,8 @@ class PicoDevice:
         self.connect()
         if eig_redis is not None:
             self.redis_handler = redis_handler(eig_redis)
+        else:
+            self.redis_handler = None
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
@@ -187,13 +189,13 @@ class PicoDevice:
         while self._running:
             line = self.read_line()
             if line:
-                # upload to redis
-                if self.redis_handler:
-                    self.redis_handler(line)
                 # Try to parse as JSON
                 data = self.parse_response(line)
                 if data:  # is json
                     self.last_status = data
+                    # upload to redis
+                    if self.redis_handler:
+                        self.redis_handler(line)
                     # Call response handler if set
                     if self._response_handler:
                         self._response_handler(data)
