@@ -18,6 +18,7 @@ PICO_VID = 0x2E8A
 PICO_PID_CDC = 0x0009  # CDC mode (serial)
 PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
+
 def redis_handler(redis):
     def handler(data):
         try:
@@ -26,6 +27,7 @@ def redis_handler(redis):
             logger.error("Data does not contain 'sensor_name' key")
             return
         redis.add_metadata(name, data)
+
     return handler
 
 
@@ -71,15 +73,11 @@ class PicoDevice:
             self.name = name
 
         self.connect()
-        if eig_redis is None:
-            self.eig_redis = None
-        else:
-            self.eig_redis = eig_redis
+        if eig_redis is not None:
+            self.redis_handler = redis_handler(eig_redis)
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
-        elif eig_redis is not None:
-            self.set_response_handler(redis_handler(eig_redis, self.name))
 
         self.start()
 
@@ -189,6 +187,9 @@ class PicoDevice:
         while self._running:
             line = self.read_line()
             if line:
+                # upload to redis
+                if self.redis_handler:
+                    self.redis_handler(line)
                 # Try to parse as JSON
                 data = self.parse_response(line)
                 if data:  # is json
