@@ -305,16 +305,16 @@ class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
     path_str = {
-        "VNAO":   "10000000",  # checked 7/7/25
-        "VNAS":   "11000000",  # checked 7/7/25
-        "VNAL":   "00100000",  # checked 7/7/25
+        "VNAO": "10000000",  # checked 7/7/25
+        "VNAS": "11000000",  # checked 7/7/25
+        "VNAL": "00100000",  # checked 7/7/25
         "VNAANT": "00000001",  # checked 7/7/25
         "VNANON": "00000111",  # checked 7/7/25
-        "VNANOFF":"00000101",  # checked 7/7/25
-        "VNARF":  "00011000",  # checked 7/7/25
-        "RFNON":  "00000110",  # checked 7/7/25
+        "VNANOFF": "00000101",  # checked 7/7/25
+        "VNARF": "00011000",  # checked 7/7/25
+        "RFNON": "00000110",  # checked 7/7/25
         "RFNOFF": "00000100",  # checked 7/7/25
-        "RFANT":  "00000000",  # checked 7/7/25
+        "RFANT": "00000000",  # checked 7/7/25
     }
 
     @staticmethod
@@ -366,7 +366,12 @@ class PicoRFSwitch(PicoDevice):
                 f"Invalid switch state '{state}'. Valid states: "
                 f"{list(self.paths.keys())}"
             ) from e
-        return self.send_command({"sw_state": s})
+        c = self.send_command({"sw_state": s})
+        if c:
+            self.logger.info(f"Switched to {state}.")
+        else:
+            self.logger.error(f"Failed to switch to {state}.")
+        return c
 
 
 class PicoPeltier(PicoDevice):
@@ -429,6 +434,7 @@ class PicoPeltier(PicoDevice):
             True if command sent successfully
         """
         return self.send_command({"cmd": "disable", "channel": channel})
+
 
 class PicoIMU(PicoDevice):
     """Specialized class for IMU calibration control."""
