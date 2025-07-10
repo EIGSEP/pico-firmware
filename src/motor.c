@@ -30,7 +30,7 @@ void stepper_init(Stepper *m,
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
     m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
-    m->extra_delay_us= THROTTLE_FACTOR * DEFAULT_DELAY_US; // slow direction changes
+    m->throttle_delay_us= THROTTLE_FACTOR * DEFAULT_DELAY_US; // slow direction changes
     m->position      = 0;
     m->dir           = 0;
     // controlling steps
@@ -119,7 +119,8 @@ void stepper_disable(Stepper *m) {
 
 // cmd is a JSON command string with pulses and delay_us for az/el
 void motor_server(uint8_t app_id, const char *json_str) {
-    int32_t pulses_az, pulses_el;
+    int32_t az_pulses, el_pulses;
+    int32_t az_pos, el_pos;
     uint32_t delay_us_az, delay_us_el;
 
     cJSON *root = cJSON_Parse(json_str);
@@ -137,7 +138,7 @@ void motor_server(uint8_t app_id, const char *json_str) {
     }
     cJSON *el_add_pulses_json = cJSON_GetObjectItem(root, "el_add_pulses");
     if (el_add_pulses_json) {
-        el_pulsesl = el_add_pulses_json->valueint;
+        el_pulses = el_add_pulses_json->valueint;
         // Sending increment of zero halts motor immediately
         if (el_pulses == 0) elevation.remaining_steps = 0;
         elevation.remaining_steps += el_pulses;

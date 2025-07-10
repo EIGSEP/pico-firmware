@@ -65,7 +65,7 @@ typedef struct {
     uint    enable_pin;    /**< GPIO pin for driver enable */   
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
     uint32_t delay_us;     /**< pulse width in microseconds and delay between steps */    
-    uint32_t extra_delay_us; /**< extra Delay in microseconds between steps */    
+    uint32_t throttle_delay_us; /**< extra Delay in microseconds between steps */    
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
     int32_t remaining_steps; /**< Remaining steps to move in current operation */

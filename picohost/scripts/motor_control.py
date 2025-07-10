@@ -6,6 +6,7 @@ and an infinite scanning mode.
 
 import time
 import queue
+import json
 
 from picohost import PicoMotor
 
@@ -21,12 +22,12 @@ def main():
         "--pico_config",
         type=str,
         default="pico_config.json",
-        help="Output of flash_picos (pico_config.json)"
+        help="Output of flash_picos (pico_config.json)",
     )
     parser.add_argument(
         "--el_first",
         action="store_true",
-        help="Scan el, then az. Otherwise, reverse.")
+        help="Scan el, then az. Otherwise, reverse.",
     )
     parser.add_argument(
         "--count",
@@ -44,7 +45,7 @@ def main():
     args = parser.parse_args()
     port = None
     with open(args.pico_config, "r", encoding="utf-8") as f:
-        records = json.load(fp)
+        records = json.load(f)
         for config in records:
             if config["app_id"] == 0:  # must match pico_multi.h
                 port = config["port"]
@@ -52,7 +53,7 @@ def main():
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
     c = PicoMotor(port, verbose=True)
-    c.scan(az_first=!args.el_first, repeat_count=args.count, pause_s=args.pause_s)
+    c.scan(az_first=not args.el_first, repeat_count=args.count, pause_s=args.pause_s)
 
 
 if __name__ == "__main__":

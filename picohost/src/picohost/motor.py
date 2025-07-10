@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import queue
+import numpy as np
 from typing import Dict, Any, Optional, Callable
 from .base import PicoDevice, logger, redis_handler
 
@@ -17,8 +18,7 @@ class PicoMotor(PicoDevice):
     def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
         super().__init__(port)
         self.status_queue = queue.Queue()
-        self.set_response_handler(self.status_queue.put)
-        self.step_angle_deg = step_angle
+        self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
         self.microstep = microstep
         self.commands = {
@@ -72,12 +72,12 @@ class PicoMotor(PicoDevice):
 
     def reset_deg_position(self, az_deg=None, el_deg=None):
         """Set az and el position to specified count."""
-        az_pos = az_deg is None ? None : self.steps_to_deg(az_deg)
-        el_pos = el_deg is None ? None : self.steps_to_deg(el_deg)
+        az_pos = None if az_deg is None else self.steps_to_deg(az_deg)
+        el_pos = None if el_deg is None else self.steps_to_deg(el_deg)
         self.reset_step_pos(az_pos=az_pos, el_pos=el_pos)
 
     def set_delay(self, az_delay_us=2300, el_delay_us=2300):
-        self.send_motor_command(az_delay_us=az_delay_us, el_delay_us=el_delay_us)
+        self.motor_command(az_delay_us=az_delay_us, el_delay_us=el_delay_us)
 
     def stop(self, az=True, el=True):
         """Hard stop on motors. Default: both."""
@@ -89,32 +89,32 @@ class PicoMotor(PicoDevice):
         self.motor_command(**cmd)
 
     def az_move_steps(self, delta_steps):
-        self.send_motor_command(az_add_pulses=delta_steps)
+        self.motor_command(az_add_pulses=delta_steps)
 
     def az_move_deg(self, delta_deg):
         self.az_incmove_steps(self.deg_to_steps(delta_deg))
 
     def az_target_steps(self, target_steps):
-        cur_steps = self.status['az_position'] + self.status['az_remaining_steps']
+        cur_steps = self.status['az_pos'] + self.status['az_remaining_steps']
         self.az_move_steps(target_steps - cur_steps)
 
     def az_target_deg(self, target_deg):
-        cur_steps = self.status['az_position'] + self.status['az_remaining_steps']
+        cur_steps = self.status['az_pos'] + self.status['az_remaining_steps']
         target_steps = self.deg_to_steps(target_deg)
         self.az_move_steps(target_steps - cur_steps)
 
     def el_move_steps(self, delta_steps):
-        self.send_motor_command(el_add_pulses=delta_steps)
+        self.motor_command(el_add_pulses=delta_steps)
 
     def el_move_deg(self, delta_deg):
         self.el_incmove_steps(self.deg_to_steps(delta_deg))
 
     def el_target_steps(self, target_steps):
-        cur_steps = self.status['el_position'] + self.status['el_remaining_steps']
+        cur_steps = self.status['el_pos'] + self.status['el_remaining_steps']
         self.el_move_steps(target_steps - cur_steps)
 
     def el_target_deg(self, target_deg):
-        cur_steps = self.status['el_position'] + self.status['el_remaining_steps']
+        cur_steps = self.status['el_pos'] + self.status['el_remaining_steps']
         target_steps = self.deg_to_steps(target_deg)
         self.el_move_steps(target_steps - cur_steps)
 

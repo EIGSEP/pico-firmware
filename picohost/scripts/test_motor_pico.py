@@ -49,11 +49,11 @@ def main():
     input("GO?")
     ms.start()
     payload = {
-        "pulses_az": 0,  # signed or unsigned int
-        "pulses_el": 0,  # signed or unsigned int
+        "az_pulses": 0,  # signed or unsigned int
+        "el`pulses": 0,  # signed or unsigned int
         #"delay_us_az": 600,  # microseconds
-        "delay_us_az": 2300,  # microseconds
-        "delay_us_el": 2300,  # microseconds
+        "az_delay_us": 2300,  # microseconds
+        "el_delay_us": 2300,  # microseconds
     }
     try:
         while True:
