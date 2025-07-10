@@ -18,6 +18,11 @@ PICO_VID = 0x2E8A
 PICO_PID_CDC = 0x0009  # CDC mode (serial)
 PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
+def redis_handler(redis, name):
+    def handler(data):
+        redis.add_metadata(name, data)
+    return handler
+
 
 class PicoDevice:
     """
@@ -25,7 +30,13 @@ class PicoDevice:
     """
 
     def __init__(
-        self, port: str, baudrate: int = 115200, timeout: float = 1.0
+        self,
+        port: str,
+        baudrate: int = 115200,
+        timeout: float = 5.0,
+        name=None,
+        eig_redis=None,
+        response_handler=None,
     ):
         """
         Initialize a Pico device connection.
@@ -34,6 +45,8 @@ class PicoDevice:
             port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
             baudrate: Serial baud rate (default: 115200)
             timeout: Serial read timeout in seconds (default: 1.0)
+            name: str
+            eig_redis: EigsepRedis instance
         """
         self.logger = logger
         self.port = port
@@ -47,8 +60,23 @@ class PicoDevice:
         )
         self._raw_handler: Optional[Callable[[str], None]] = None
         self.last_status: Dict[str, Any] = {}
+        if name is None:
+            self.name = port.split("/")[-1] if "/" in port else port
+        else:
+            self.name = name
 
         self.connect()
+        if eig_redis is None:
+            self.eig_redis = None
+        else:
+            self.eig_redis = eig_redis
+
+        if response_handler is not None:
+            self.set_response_handler(response_handler)
+        elif eig_redis is not None:
+            self.set_response_handler(redis_handler(eig_redis, self.name))
+
+        self.start()
 
     @staticmethod
     def find_pico_ports() -> list[str]:
