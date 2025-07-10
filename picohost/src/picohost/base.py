@@ -18,8 +18,13 @@ PICO_VID = 0x2E8A
 PICO_PID_CDC = 0x0009  # CDC mode (serial)
 PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
-def redis_handler(redis, name):
+def redis_handler(redis):
     def handler(data):
+        try:
+            name = data["sensor_name"]
+        except KeyError:
+            logger.error("Data does not contain 'sensor_name' key")
+            return
         redis.add_metadata(name, data)
     return handler
 
