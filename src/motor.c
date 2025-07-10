@@ -135,7 +135,8 @@ void motor_server(uint8_t app_id, const char *json_str) {
 
 
 void motor_status(uint8_t app_id) {
-	send_json(10,
+	send_json(11,
+        KV_STR, "sensor_name", "motor",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_INT, "az_pos", azimuth.position,
