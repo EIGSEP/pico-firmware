@@ -51,7 +51,8 @@ def main():
     payload = {
         "pulses_az": 0,  # signed or unsigned int
         "pulses_el": 0,  # signed or unsigned int
-        "delay_us_az": 600,  # microseconds
+        #"delay_us_az": 600,  # microseconds
+        "delay_us_az": 2300,  # microseconds
         "delay_us_el": 2300,  # microseconds
     }
     try:
@@ -61,8 +62,8 @@ def main():
             #    payload["pulses_el"] = val
             #    ms.command(payload)
             #    time.sleep(3)
-            #for val in (-1000, 2000, -1000):
-            for val in (-1000,):
+            for val in (-1000, 2000, -1000):
+            #for val in (-1000,):
                 for cnt in range(22):
                     print(f"Sending {val} pulses")
                     payload[f"pulses_az"] = val
