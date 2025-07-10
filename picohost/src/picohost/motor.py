@@ -36,9 +36,9 @@ class PicoMotor(PicoDevice):
 
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
-        self.status.update(data)
         if self.verbose:
             print(json.dumps(data, indent=2, sort_keys=True))
+        self.status.update(data)
 
     def deg_to_steps(self, degrees: float) -> int:
         """Convert degrees to motor pulses."""
