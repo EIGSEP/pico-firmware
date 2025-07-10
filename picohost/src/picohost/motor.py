@@ -122,6 +122,10 @@ class PicoMotor(PicoDevice):
         return self.status['az_remaining_steps'] != 0 or \
                self.status['el_remaining_steps'] != 0
 
+    def wait_for_start(self):
+        while not self.is_moving():
+            time.sleep(.1)
+
     def wait_for_stop(self):
         if self.verbose:
             print('Waiting for stop.')
@@ -133,11 +137,11 @@ class PicoMotor(PicoDevice):
             el_range_deg=np.arange(-180.0, 180.0, 5),
             az_first=True, repeat_count=1, pause_s=1):
         if az_first:
-            mv_axis1, mv_axis2 = self.az_target_deg, self.el_target_deg
-            axis1_rng, axis2_rng = az_range_deg, el_range_deg
-        else:
             mv_axis2, mv_axis1 = self.az_target_deg, self.el_target_deg
             axis2_rng, axis1_rng = az_range_deg, el_range_deg
+        else:
+            mv_axis1, mv_axis2 = self.az_target_deg, self.el_target_deg
+            axis1_rng, axis2_rng = az_range_deg, el_range_deg
 
         i = 0
         try:

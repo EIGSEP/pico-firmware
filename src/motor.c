@@ -30,7 +30,7 @@ void stepper_init(Stepper *m,
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
     m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
-    m->throttle_delay_us= THROTTLE_FACTOR * DEFAULT_DELAY_US; // slow direction changes
+    m->slowdown_factor = MAX_SLOWDOWN_FACTOR; // slow direction changes
     m->position      = 0;
     m->dir           = 0;
     // controlling steps
@@ -75,27 +75,43 @@ void stepper_tick(Stepper *m, int extra_delay_us) {
 }
 
 void stepper_op(Stepper *m) {
-    int extra_delay_us = 0;
+    int f=0;
+
     if (m->remaining_steps > 0) {
-        if (m->dir != 1) m->throttle_delay_us = 2 * THROTTLE_FACTOR * m->delay_us; // slow direction change
-        m->dir = 1;
-        gpio_put(m->direction_pin, m->cw_val);
+        // slow on direction change
+        if (m->dir != 1) {
+            m->slowdown_factor = MAX_SLOWDOWN_FACTOR;
+            m->dir = 1;
+            gpio_put(m->direction_pin, m->cw_val);
+        } else {
+            f = MAX_SLOWDOWN_FACTOR - abs(m->remaining_steps) / m->max_pulses;
+            m->slowdown_factor -= 1;
+            m->slowdown_factor = f > m->slowdown_factor ? f : m->slowdown_factor;
+        }
     } else if (m->remaining_steps < 0) {
-        if (m->dir != -1) m->throttle_delay_us = 2 * THROTTLE_FACTOR * m->delay_us; // slow direction change
-        m->dir = -1;
-        gpio_put(m->direction_pin, !m->cw_val);
+        // slow direction change
+        if (m->dir != -1) {
+            m->slowdown_factor= MAX_SLOWDOWN_FACTOR;
+            m->dir = -1;
+            gpio_put(m->direction_pin, !m->cw_val);
+        } else {
+            f = MAX_SLOWDOWN_FACTOR - abs(m->remaining_steps) / m->max_pulses;
+            m->slowdown_factor -= 1;
+            m->slowdown_factor = f > m->slowdown_factor ? f : m->slowdown_factor;
+        }
     } else {
         m->dir = 0;
         return;
     }
-    m->throttle_delay_us /= 2;
-    m->throttle_delay_us = m->throttle_delay_us > m->delay_us ? m->throttle_delay_us : m->delay_us;
+    m->slowdown_factor = m->slowdown_factor > 0 ? m->slowdown_factor : 0;
+    m->slowdown_factor = m->slowdown_factor < MAX_SLOWDOWN_FACTOR ? m->slowdown_factor : MAX_SLOWDOWN_FACTOR;
 
     int nsteps = MIN(m->max_pulses, abs(m->remaining_steps));
     stepper_enable(m);
     for (int i = 0; i < nsteps; i++) {
-        stepper_tick(m, extra_delay_us);
+        stepper_tick(m, m->slowdown_factor * m->delay_us);
     }
+    printf("{\"slowdown\":\"%d\"}", m->slowdown_factor);
     stepper_disable(m);
     m->remaining_steps -= nsteps * m->dir;
 }

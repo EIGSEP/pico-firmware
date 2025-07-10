@@ -36,7 +36,7 @@
 #define  AZ_CW_VAL 0
 
 #define DEFAULT_DELAY_US 600
-#define THROTTLE_FACTOR 8
+#define MAX_SLOWDOWN_FACTOR 4
 
 /**
  * @struct Stepper
@@ -65,7 +65,7 @@ typedef struct {
     uint    enable_pin;    /**< GPIO pin for driver enable */   
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
     uint32_t delay_us;     /**< pulse width in microseconds and delay between steps */    
-    uint32_t throttle_delay_us; /**< extra Delay in microseconds between steps */    
+    uint32_t slowdown_factor; /**< extra multiplier on delay between steps */    
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
     int32_t remaining_steps; /**< Remaining steps to move in current operation */

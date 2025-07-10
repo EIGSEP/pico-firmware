@@ -53,8 +53,14 @@ def main():
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
     c = PicoMotor(port, verbose=True)
-    time.sleep(10)
-    c.scan(az_first=not args.el_first, repeat_count=args.count, pause_s=args.pause_s)
+    time.sleep(1)
+    #c.scan(az_first=not args.el_first, repeat_count=args.count, pause_s=args.pause_s)
+    #for steps in (1000, -2000, 1000):
+    for steps in (1000,):
+        c.az_move_steps(steps)
+        c.wait_for_start()
+        c.wait_for_stop()
+    c.stop()
 
 
 if __name__ == "__main__":
