@@ -19,15 +19,10 @@
 #define SAMPLE_PERIOD     10      /* ms */
 #define IMU_ADDR          0x4A
 
-#define IMU1_SDA_GPIO     0
-#define IMU1_SCL_GPIO     1
-#define IMU1_RST_GPIO     13
-#define IMU1_I2C          i2c0
-
-#define IMU2_SDA_GPIO     18
-#define IMU2_SCL_GPIO     19
-#define IMU2_RST_GPIO     21
-#define IMU2_I2C          i2c1
+#define IMU_SDA_GPIO     0
+#define IMU_SCL_GPIO     1
+#define IMU_RST_GPIO     13
+#define IMU_I2C          i2c0
 
 #define IMU_NAME_LEN      8
 
@@ -65,6 +60,7 @@ extern "C" {
 #endif
 
 void imu_init(uint8_t app_id);
+void init_eigsep_imu(EigsepImu *eimu, uint index);
 void calibrate_imu(EigsepImu *eimu);
 void imu_server(uint8_t app_id, const char *json_str);
 void process_imu_events(EigsepImu *eimu);

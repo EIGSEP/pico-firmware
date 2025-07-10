@@ -4,15 +4,9 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "cJSON.h"
-#include "bno08x.h"
+#include "pico_multi.h"
 
-#define I2C_BAUDRATE 400000
-// sample rate in ms
-#define SAMPLE_PERIOD 10
-#define IMU_ADDR 0x4A
-
-//static EigsepImu imu_panda;
-static EigsepImu imu_antenna;
+static EigsepImu imu;
 
 static void init_i2c_bus(i2c_inst_t *i2c, uint sda_pin, uint scl_pin) {
     i2c_init(i2c, I2C_BAUDRATE);
@@ -41,40 +35,25 @@ static void free_i2c_bus(i2c_inst_t *i2c, uint sda_pin, uint scl_pin)
     gpio_set_function(sda_pin, GPIO_FUNC_I2C);
 }
 
-static void init_eigsep_imu(EigsepImu *eimu, uint index) {
+void init_eigsep_imu(EigsepImu *eimu, uint app_id) {
     eimu->is_initialized = false;
     eimu->do_calibration = false;
-    if (index == 0) {
+    if (app_id == APP_IMU) {
         strncpy(eimu->name, "panda", IMU_NAME_LEN - 1);
-        eimu->name[IMU_NAME_LEN-1] = '\0';
-        eimu->i2c = i2c0;
-        eimu->sda_pin = IMU1_SDA_GPIO;
-        eimu->scl_pin = IMU1_SCL_GPIO;
-        eimu->rst_pin = IMU1_RST_GPIO;
     } else {
         strncpy(eimu->name, "antenna", IMU_NAME_LEN - 1);
-        eimu->name[IMU_NAME_LEN-1] = '\0';
-        eimu->i2c = i2c1;
-        eimu->sda_pin = IMU2_SDA_GPIO;
-        eimu->scl_pin = IMU2_SCL_GPIO;
-        eimu->rst_pin = IMU2_RST_GPIO;
     }
+    eimu->name[IMU_NAME_LEN-1] = '\0';
+    eimu->i2c = i2c0;
+    eimu->sda_pin = IMU_SDA_GPIO;
+    eimu->scl_pin = IMU_SCL_GPIO;
+    eimu->rst_pin = IMU_RST_GPIO;
+
     init_i2c_bus(eimu->i2c, eimu->sda_pin, eimu->scl_pin);
 
-    gpio_init(eimu->rst_pin);
-    gpio_set_dir(eimu->rst_pin, GPIO_OUT);
-    gpio_put(eimu->rst_pin, 0);
-    sleep_ms(2);
-    gpio_put(eimu->rst_pin, 1);
-    sleep_ms(600);              // tSTARTUP max = 600 ms
-    // detach anyone lingering on the bus
-    //free_i2c_bus(eimu->i2c, eimu->sda_pin, eimu->scl_pin);
+    free_i2c_bus(eimu->i2c, eimu->sda_pin, eimu->scl_pin);
 
-    //if (eimu->imu.softReset()) {
-    //    sleep_ms(600);
-    //}
-
-    if (eimu->imu.begin(IMU_ADDR, eimu->i2c)) {
+    if (eimu->imu.begin(IMU_ADDR, eimu->i2c, -1, eimu->rst_pin)) {
         eimu->imu.enableRotationVector(SAMPLE_PERIOD);
         eimu->imu.enableAccelerometer(SAMPLE_PERIOD);
         eimu->imu.enableLinearAccelerometer(SAMPLE_PERIOD);
@@ -82,12 +61,13 @@ static void init_eigsep_imu(EigsepImu *eimu, uint index) {
         eimu->imu.enableMagnetometer(SAMPLE_PERIOD);
         eimu->imu.enableGravity();
         eimu->is_initialized = true;
+    } else {
+        eimu->imu.hardwareReset();
     }
 }
 
 void imu_init(uint8_t app_id) {
-    //init_eigsep_imu(&imu_panda, 0);
-    init_eigsep_imu(&imu_antenna, 1);
+    if (!imu.is_initialized) init_eigsep_imu(&imu, app_id);
 }
 
 void calibrate_imu(EigsepImu *eimu) {
@@ -123,10 +103,9 @@ void imu_server(uint8_t app_id, const char *json_str) {
         // Invalid JSON input, exit early
         return;
     }
-    cJSON *cal = cJSON_GetObjectItem(root, "calibrate");
-    if (cal && cJSON_IsTrue(cal)) {
-        //imu_panda.do_calibration = true;
-        imu_antenna.do_calibration = true;
+    cJSON *cal_json = cJSON_GetObjectItem(root, "calibrate");
+    if (cal_json && cJSON_IsTrue(cal_json)) {
+        imu.do_calibration = true;
     }
     cJSON_Delete(root);
 }
@@ -177,10 +156,9 @@ void process_imu_events(EigsepImu *eimu) {
 
 void imu_op(uint8_t app_id) {
     // Handle calibration request
-    //calibrate_imu(&imu_panda);
-    //process_imu_events(&imu_panda);
-    calibrate_imu(&imu_antenna);
-    process_imu_events(&imu_antenna);
+    imu_init(app_id);
+    calibrate_imu(&imu);
+    process_imu_events(&imu);
 }    
 
 
@@ -219,6 +197,5 @@ void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
 }
 
 void imu_status(uint8_t app_id) {
-    //send_imu_report(app_id, &imu_panda);
-    send_imu_report(app_id, &imu_antenna);
+    send_imu_report(app_id, &imu);
 }
