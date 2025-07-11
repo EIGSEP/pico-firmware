@@ -475,7 +475,7 @@ class PicoPeltier(PicoDevice):
 class PicoIMU(PicoDevice):
     """Specialized class for IMU calibration control."""
 
-    def calibrate(self, channel: int = 0) -> bool:
+    def calibrate(self) -> bool:
         """
         Send request to calibrate IMU.
 
@@ -485,4 +485,4 @@ class PicoIMU(PicoDevice):
         Returns:
             True if command sent successfully
         """
-        return self.send_command({"cmd": "calibrate", "channel": channel})
+        return self.send_command({"cmd": "calibrate"})
