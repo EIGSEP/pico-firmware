@@ -17,7 +17,7 @@ class PicoMotor(PicoDevice):
 
     def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
         super().__init__(port)
-        self.status_queue = queue.Queue()
+        self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
         self.microstep = microstep
@@ -32,13 +32,22 @@ class PicoMotor(PicoDevice):
         self.status = {}
         self.set_response_handler(self.update_status)
         self.set_delay()
-        self.verbose = verbose
+        self.wait_for_updates()
 
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
         if self.verbose:
             print(json.dumps(data, indent=2, sort_keys=True))
         self.status.update(data)
+
+    def wait_for_updates(self, timeout=10):
+        t = time.time()
+        while True:
+            if len(self.status) != 0:
+                break
+            assert time.time() - t < timeout
+            time.sleep(0.1)
+            
 
     def deg_to_steps(self, degrees: float) -> int:
         """Convert degrees to motor pulses."""
