@@ -32,13 +32,13 @@ def main():
     parser.add_argument(
         "--count",
         type=int,
-        default=0,
-        help="Run specified number of scans (or infinite if <= 0)",
+        default=None,
+        help="Run specified number of scans (defauly infinite)",
     )
     parser.add_argument(
         "--pause_s",
         type=float,
-        default=1.0,
+        default=None,
         help="Seconds to pause at each pointing",
     )
 
@@ -54,18 +54,19 @@ def main():
 
     c = PicoMotor(port, verbose=True)
     c.stop()
-    #c.scan(az_first=not args.el_first, repeat_count=args.count, pause_s=args.pause_s)
+    c.scan(el_first=args.el_first, repeat_count=args.count, pause_s=args.pause_s)
     #c.az_move_deg(-360)
-    c.reset_deg_position(az_deg=0)
+    # XXX re-init position from redis
+    #c.reset_deg_position(az_deg=0)
     for deg in (90, -90, 0):
         c.az_target_deg(deg)
         try:
             while c.is_moving():
                 time.sleep(0.1)
         except(KeyboardInterrupt):
-            c.stop()
             continue
-            
+        finally:
+            c.stop()
     c.stop()
 
 

@@ -6,6 +6,9 @@
 #ifndef MIN                   // avoid double-definition
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
+#ifndef MAX                   // avoid double-definition
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
 
 static Stepper azimuth;
 static Stepper elevation;
@@ -30,12 +33,14 @@ void stepper_init(Stepper *m,
     m->enable_pin    = enable_pin;
     m->cw_val        = cw_val;
     m->delay_us      = DEFAULT_DELAY_US;  // pause between delays 
-    m->slowdown_factor = MAX_SLOWDOWN_FACTOR; // slow direction changes
+    m->slowdown_factor = SLOWDOWN_FACTOR; // slow direction changes
+    m->slow_zone = SLOW_ZONE; // steps within which to slow down
     m->position      = 0;
     m->dir           = 0;
     // controlling steps
-    m->remaining_steps = 0;  // Initialize remaining steps to 0
+    m->target_pos    = 0;
     m->max_pulses    = 60;  // pulses per command, ~1 deg
+    m->steps_in_direction = 0;
 
     gpio_init(dir_pin);
     gpio_set_dir(dir_pin, GPIO_OUT);
@@ -75,49 +80,30 @@ void stepper_tick(Stepper *m, int extra_delay_us) {
 }
 
 void stepper_op(Stepper *m) {
-    int f=0;
+    int remaining_steps = m->target_pos - m->position;
+    int abs_steps = abs(remaining_steps);
+    int nsteps = MIN(m->max_pulses, abs_steps);  // how many steps to take now
+    bool near_stop = (abs_steps <= m->slow_zone);
 
-    if (m->remaining_steps > 0) {
-        // slow on direction change
-        if (m->dir != 1) {
-            //m->slowdown_factor = MAX_SLOWDOWN_FACTOR;
-            m->dir = 1;
-            gpio_put(m->direction_pin, m->cw_val);
-        } else {
-            gpio_put(m->direction_pin, m->cw_val);
-            //f = MAX_SLOWDOWN_FACTOR - abs(m->remaining_steps) / m->max_pulses;
-            //m->slowdown_factor -= 1;
-            //m->slowdown_factor = f > m->slowdown_factor ? f : m->slowdown_factor;
-        }
-    } else if (m->remaining_steps < 0) {
-        // slow direction change
-        if (m->dir != -1) {
-            //m->slowdown_factor= MAX_SLOWDOWN_FACTOR;
-            m->dir = -1;
-            gpio_put(m->direction_pin, !m->cw_val);
-        } else {
-            gpio_put(m->direction_pin, !m->cw_val);
-            //f = MAX_SLOWDOWN_FACTOR - abs(m->remaining_steps) / m->max_pulses;
-            m->slowdown_factor -= 1;
-            //m->slowdown_factor = f > m->slowdown_factor ? f : m->slowdown_factor;
-        }
-    } else {
-        m->dir = 0;
-        return;
-    }
-    // clamp values between 0 and MAX
-    //m->slowdown_factor = m->slowdown_factor > 0 ? m->slowdown_factor : 0;
-    //m->slowdown_factor = m->slowdown_factor < MAX_SLOWDOWN_FACTOR ? m->slowdown_factor : MAX_SLOWDOWN_FACTOR;
+    int new_dir = remaining_steps > 0 ? 1 : -1;
+    new_dir = remaining_steps == 0 ? 0 : m->dir;
+    bool change_dir = (new_dir != m->dir);
+    m->dir = new_dir;
+    if (change_dir) m->steps_in_direction = 0;
+    bool near_start = (m->steps_in_direction <= m->slow_zone);
 
-    int nsteps = MIN(m->max_pulses, abs(m->remaining_steps));
+    int extra_delay_us = m->slowdown_factor * m->delay_us;
+    extra_delay_us = (near_start || near_stop) ? extra_delay_us : 0;
+
+    // set correct direction for motor
+    gpio_put(m->direction_pin, m->dir > 0 ? m->cw_val : !m->cw_val);
+
     stepper_enable(m);
     for (int i = 0; i < nsteps; i++) {
-        //stepper_tick(m, m->slowdown_factor * m->delay_us);
-        stepper_tick(m, 0);
+        stepper_tick(m, extra_delay_us);
     }
-    //printf("{\"slowdown\":\"%d\"}", m->slowdown_factor);
     stepper_disable(m);
-    m->remaining_steps -= nsteps * m->dir;
+    m->steps_in_direction += nsteps;
 }
 	
 
@@ -139,7 +125,7 @@ void stepper_disable(Stepper *m) {
 
 // cmd is a JSON command string with pulses and delay_us for az/el
 void motor_server(uint8_t app_id, const char *json_str) {
-    int32_t az_pulses, el_pulses;
+    int32_t az_tar_pos, el_tar_pos;
     int32_t az_pos, el_pos;
     uint32_t delay_us_az, delay_us_el;
 
@@ -149,20 +135,14 @@ void motor_server(uint8_t app_id, const char *json_str) {
     cJSON *el_set_pos_json = cJSON_GetObjectItem(root, "el_set_pos");
     el_pos = el_set_pos_json ? el_set_pos_json->valueint : elevation.position;
 
-    cJSON *az_add_pulses_json = cJSON_GetObjectItem(root, "az_add_pulses");
-    if (az_add_pulses_json) {
-        az_pulses = az_add_pulses_json->valueint;
-        // Sending increment of zero halts motor immediately
-        if (az_pulses == 0) azimuth.remaining_steps = 0;
-        azimuth.remaining_steps += az_pulses;
-    }
-    cJSON *el_add_pulses_json = cJSON_GetObjectItem(root, "el_add_pulses");
-    if (el_add_pulses_json) {
-        el_pulses = el_add_pulses_json->valueint;
-        // Sending increment of zero halts motor immediately
-        if (el_pulses == 0) elevation.remaining_steps = 0;
-        elevation.remaining_steps += el_pulses;
-    }
+    cJSON *az_tar_pos_json = cJSON_GetObjectItem(root, "az_set_target_pos");
+    az_tar_pos = az_tar_pos_json ? az_tar_pos_json->valueint : azimuth.target_pos;
+    cJSON *el_tar_pos_json = cJSON_GetObjectItem(root, "el_set_target_pos");
+    el_tar_pos = el_tar_pos_json ? el_tar_pos_json->valueint : elevation.target_pos;
+    // Process halt request
+    cJSON *halt_json = cJSON_GetObjectItem(root, "halt");
+    azimuth.target_pos = halt_json ? azimuth.position : az_tar_pos;
+    elevation.target_pos = halt_json ? elevation.position : el_tar_pos;
         
     cJSON *az_dly_us_json = cJSON_GetObjectItem(root, "az_delay_us");
     azimuth.delay_us = az_dly_us_json ? az_dly_us_json->valueint : azimuth.delay_us;
@@ -172,18 +152,14 @@ void motor_server(uint8_t app_id, const char *json_str) {
 
 
 void motor_status(uint8_t app_id) {
-	send_json(11,
+	send_json(7,
         KV_STR, "sensor_name", "motor",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
         KV_INT, "az_pos", azimuth.position,
-        KV_INT, "az_dir", azimuth.dir,
-        KV_INT, "az_remaining_steps", azimuth.remaining_steps,
-        KV_INT, "az_max_pulses", azimuth.max_pulses,
+        KV_INT, "az_target_pos", azimuth.target_pos,
         KV_INT, "el_pos", elevation.position,
-        KV_INT, "el_dir", elevation.dir,
-        KV_INT, "el_remaining_steps", elevation.remaining_steps,
-        KV_INT, "el_max_pulses", elevation.max_pulses
+        KV_INT, "el_target_pos", elevation.target_pos,
     );
 }
 
