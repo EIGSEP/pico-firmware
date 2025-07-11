@@ -89,7 +89,6 @@ void calibrate_imu(EigsepImu *eimu) {
     if (eimu->sensor_data.accel_status == 3 && eimu->sensor_data.mag_status == 3 && eimu->is_initialized && eimu->do_calibration) {
         eimu->imu.saveCalibration();
     }
-    eimu->do_calibration = false;
 }
 
 // calibrate if user sends {calibrate: true} in JSON
@@ -102,6 +101,8 @@ void imu_server(uint8_t app_id, const char *json_str) {
     cJSON *cal_json = cJSON_GetObjectItem(root, "calibrate");
     if (cal_json && cJSON_IsTrue(cal_json)) {
         imu.do_calibration = true;
+    } else {
+        imu.do_calibration = false;
     }
     cJSON_Delete(root);
 }
@@ -160,14 +161,20 @@ void imu_op(uint8_t app_id) {
 
 void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
     const char *status;
+    const char *calibrated;
     if (!eimu->is_initialized) {
         status = "error";
     }
     else {
         status = "update";
     }
+    if (!eimu->do_calibration) {
+        calibrated = "False"
+    } else {
+        calibrated = "True"
+    }
     
-    send_json(21,
+    send_json(22,
         KV_STR, "sensor_name", eimu->name,
         KV_STR, "status", status,
         KV_INT, "app_id", app_id,
@@ -187,6 +194,7 @@ void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
         KV_FLOAT, "mag_x", eimu->sensor_data.m[0],
         KV_FLOAT, "mag_y", eimu->sensor_data.m[1],
         KV_FLOAT, "mag_z", eimu->sensor_data.m[2],
+        KV_STR, "calibrated", calibrated,
         KV_INT, "accel_cal", eimu->sensor_data.accel_status,
         KV_INT, "mag_cal", eimu->sensor_data.mag_status
     );
