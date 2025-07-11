@@ -7,6 +7,8 @@ and an infinite scanning mode.
 import time
 import queue
 import json
+import numpy as np
+from eigsep_observing import EigsepRedis
 
 from picohost import PicoMotor
 
@@ -52,22 +54,39 @@ def main():
                 break
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
+    try:
+        r = EigsepRedis()
+        last_status = r.get_live_metadata(keys='motor')
+    except(KeyError):
+        last_status = None
     c = PicoMotor(port, verbose=True)
+    zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
+    if zeroed and (last_status is not None):
+        print('Resetting to last known position.')
+        c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
+    c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
     c.stop()
-    c.scan(el_first=args.el_first, repeat_count=args.count, pause_s=args.pause_s)
-    #c.az_move_deg(-360)
-    # XXX re-init position from redis
-    #c.reset_deg_position(az_deg=0)
-    for deg in (90, -90, 0):
-        c.az_target_deg(deg)
-        try:
-            while c.is_moving():
-                time.sleep(0.1)
-        except(KeyboardInterrupt):
-            continue
-        finally:
-            c.stop()
-    c.stop()
+    #try:
+    #    c.el_target_steps(6277, wait_for_stop=True)
+    #    c.az_target_deg(180, wait_for_stop=True)
+    #    c.az_target_deg(-180, wait_for_stop=True)
+    #except(KeyboardInterrupt):
+    #    c.stop()
+    #finally:
+    #    c.stop()
+    try:
+        c.stop()
+        c.scan(
+            az_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_first=args.el_first,
+            repeat_count=args.count,
+            pause_s=args.pause_s,
+        )
+    except(KeyboardInterrupt):
+        c.stop()
+    finally:
+        c.stop()
 
 
 if __name__ == "__main__":

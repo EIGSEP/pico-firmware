@@ -27,8 +27,10 @@ class PicoMotor(PicoDevice):
             'az_set_target_pos': int,
             'el_set_target_pos': int,
             'halt': int,
-            'az_delay_us': int,
-            'el_delay_us': int,
+            'az_up_delay_us': int,
+            'az_dn_delay_us': int,
+            'el_up_delay_us': int,
+            'el_dn_delay_us': int,
         }
         self.status = {}
         self.set_response_handler(self.update_status)
@@ -70,13 +72,13 @@ class PicoMotor(PicoDevice):
             cmd[k] = self.commands[k](v)
         self.send_command(cmd)
         
-    def reset_step_position(self, az_pos=None, el_pos=None):
+    def reset_step_position(self, az_step=None, el_step=None):
         """Set az and el position to specified count."""
         cmd = {}
-        if az_pos is not None:
-            cmd['az_set_pos'] = az_pos
-        if el_pos is not None:
-            cmd['el_set_pos'] = el_pos
+        if az_step is not None:
+            cmd['az_set_pos'] = az_step
+        if el_step is not None:
+            cmd['el_set_pos'] = el_step
         self.motor_command(**cmd)
 
     def reset_deg_position(self, az_deg=None, el_deg=None):
@@ -85,8 +87,10 @@ class PicoMotor(PicoDevice):
         el_pos = None if el_deg is None else self.deg_to_steps(el_deg)
         self.reset_step_position(az_pos=az_pos, el_pos=el_pos)
 
-    def set_delay(self, az_delay_us=2300, el_delay_us=2300):
-        self.motor_command(az_delay_us=az_delay_us, el_delay_us=el_delay_us)
+    def set_delay(self, az_up_delay_us=2300, az_dn_delay_us=2300,
+                        el_up_delay_us=2300, el_dn_delay_us=2300):
+        self.motor_command(az_up_delay_us=az_up_delay_us, az_dn_delay_us=az_dn_delay_us,
+                           el_up_delay_us=el_up_delay_us, el_dn_delay_us=el_dn_delay_us)
 
     def stop(self, az=True, el=True):
         """Hard stop on motors. Default: both."""
@@ -145,8 +149,9 @@ class PicoMotor(PicoDevice):
         return self.status['az_target_pos'] != self.status['az_pos'] or \
                self.status['el_target_pos'] != self.status['el_pos']
 
-    def wait_for_start(self):
-        while not self.is_moving():
+    def wait_for_start(self, timeout=0.3):
+        t = time.time()
+        while not self.is_moving() and time.time() < t + timeout:
             time.sleep(.1)
 
     def wait_for_stop(self):
@@ -165,10 +170,10 @@ class PicoMotor(PicoDevice):
         # set order of scanning
         if el_first:
             mv_axis1, mv_axis2 = self.az_target_deg, self.el_target_deg
-            axis1_rng, axis2_rng = az_range_deg, el_range_deg
+            axis1_rng, axis2_rng = az_range_deg.copy(), el_range_deg.copy()
         else:
             mv_axis2, mv_axis1 = self.az_target_deg, self.el_target_deg
-            axis2_rng, axis1_rng = az_range_deg, el_range_deg
+            axis2_rng, axis1_rng = az_range_deg.copy(), el_range_deg.copy()
 
         i = 0
         try:
@@ -176,20 +181,22 @@ class PicoMotor(PicoDevice):
                 if repeat_count is not None and i >= repeat_count:
                     break
                 for val1 in axis1_rng:
-                    mv_axis1(val1)
-                    self.wait_for_stop()
+                    if self.verbose:
+                        print("MOVE AXIS 1 TO", val1)
+                    mv_axis1(val1, wait_for_stop=True)
                     if pause_s is None:
+                        if self.verbose:
+                            print("MOVE AXIS 2 FROM", axis2_rng[0], "TO", axis2_rng[-1])
                         # continuous motion
-                        mv_axis2(axis2_rng[0])
-                        self.wait_for_stop()
-                        mv_axis2(axis2_rng[-1])
-                        self.wait_for_stop()
+                        mv_axis2(axis2_rng[0], wait_for_stop=True)
+                        mv_axis2(axis2_rng[-1], wait_for_stop=True)
                     else:
                         # pause at each position
                         for val2 in axis2_rng:
-                            mv_axis2(val2)
-                            self.wait_for_stop()
+                            mv_axis2(val2, wait_for_stop=True)
                             time.sleep(pause_s)
+                    axis2_rng = axis2_rng[::-1]  # reverse direction each time
+                axis1_rng = axis1_rng[::-1]  # reverse direction each time
         finally:
             self.stop()
             

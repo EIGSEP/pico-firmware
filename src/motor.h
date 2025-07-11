@@ -48,7 +48,8 @@ typedef struct {
     uint    pulse_pin;     /**< GPIO pin for step pulses */  
     uint    enable_pin;    /**< GPIO pin for driver enable */   
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
-    uint32_t delay_us;     /**< pulse width in microseconds and delay between steps */    
+    uint32_t up_delay_us;     /**< pulse width in microseconds */    
+    uint32_t dn_delay_us;     /**< delay between steps */    
     uint32_t slowdown_factor; /**< extra multiplier on delay between steps */    
     uint32_t slow_zone;
     uint32_t steps_in_direction;
