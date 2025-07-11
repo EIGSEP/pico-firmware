@@ -12,7 +12,9 @@ from eigsep_observing import EigsepRedis
 
 from picohost import PicoMotor
 
-def main():
+def main(screen):
+    curses.noecho()           # optional: wrapper sets cbreak but not noecho
+    screen.nodelay(False)     # blocking getch
     import sys
     import argparse
 
@@ -37,10 +39,33 @@ def main():
                 break
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
+
+
     c = PicoMotor(port, verbose=True)
     c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
+
+    def move_up(deg): c.el_move_deg(deg, wait_for_stop=True)
+    def move_dn(deg): c.el_move_deg(-deg, wait_for_stop=True)
+    def move_lf(deg): c.az_move_deg(deg, wait_for_stop=True)
+    def move_rt(deg): c.az_move_deg(-deg, wait_for_stop=True)
+
+    DISPATCH = {
+        'u': move_up,
+        'd': move_dn,
+        'l': move_lf,
+        'r': move_rt,
+    }
     try:
-        c.el_move_deg(-10, wait_for_stop=True)
+        deg = 1
+        while True:
+            ch = screen.getch()
+            if ch == -1:
+                continue
+            if 0 <= ch < 256:
+                key = chr(ch).lower()
+                if key in DISPATCH:
+                    DISPATCH[key](deg)
+        #c.el_move_deg(-10, wait_for_stop=True)
     #    c.az_target_deg(180, wait_for_stop=True)
     #    c.az_target_deg(-180, wait_for_stop=True)
     except(KeyboardInterrupt):
@@ -50,4 +75,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import curses
+    curses.wrapper(main)

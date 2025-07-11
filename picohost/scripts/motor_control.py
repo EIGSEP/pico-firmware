@@ -60,33 +60,35 @@ def main():
     except(KeyError):
         last_status = None
     c = PicoMotor(port, verbose=True)
-    zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
-    if zeroed and (last_status is not None):
-        print('Resetting to last known position.')
-        c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
+    #zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
+    #if zeroed and (last_status is not None):
+    #    print('Resetting to last known position.')
+    #    c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
+    c.reset_step_position(az_step=0, el_step=0)
     c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
     c.stop()
-    try:
-        c.el_move_deg(-30, wait_for_stop=True)
-    #    c.az_target_deg(180, wait_for_stop=True)
-    #    c.az_target_deg(-180, wait_for_stop=True)
-    except(KeyboardInterrupt):
-        c.stop()
-    finally:
-        c.stop()
     #try:
-    #    c.stop()
-    #    c.scan(
-    #        az_range_deg=np.linspace(-180.0, 180.0, 10),
-    #        el_range_deg=np.linspace(-180.0, 180.0, 10),
-    #        el_first=args.el_first,
-    #        repeat_count=args.count,
-    #        pause_s=args.pause_s,
-    #    )
+    #    #c.el_move_deg(30, wait_for_stop=True)
+    #    c.az_move_deg(100, wait_for_stop=True)
+    ##    c.az_target_deg(180, wait_for_stop=True)
+    ##    c.az_target_deg(-180, wait_for_stop=True)
     #except(KeyboardInterrupt):
     #    c.stop()
     #finally:
     #    c.stop()
+    try:
+        c.stop()
+        c.scan(
+            az_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_first=args.el_first,
+            repeat_count=args.count,
+            pause_s=args.pause_s,
+        )
+    except(KeyboardInterrupt):
+        c.stop()
+    finally:
+        c.stop()
 
 
 if __name__ == "__main__":
