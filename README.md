@@ -61,6 +61,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ---
 
 ## 2. Clone and Build Firmware
+Clone with all submodules: `git clone --recurse-submodules git@github.com:EIGSEP/pico-firmware.git`
+
 
 ```bash
 # Clone the firmware repository
