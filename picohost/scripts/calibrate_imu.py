@@ -5,78 +5,107 @@ import queue
 from picohost import PicoIMU
 
 parser = ArgumentParser(
-    description="Calibrate magnetometer and accelerometer from IMU device(s)."
+    description="Calibrate magnetometer and accelerometer on 2 independent Pico IMUs."
 )
 parser.add_argument(
-    "-p",
-    "--port",
+    "-p1",
+    "--port1",
     type=str,
     default="/dev/ttyACM0",
-    help="Serial port for Pico device (default: /dev/ttyACM0)",
+    help="Serial port for IMU1 (default: /dev/ttyACM0)",
 )
 parser.add_argument(
-    "-v", action="store_true", help="Print calibration data to console"
+    "-p2",
+    "--port2",
+    type=str,
+    default="/dev/ttyACM1",
+    help="Serial port for IMU2 (default: /dev/ttyACM1)",
 )
 parser.add_argument(
-    "-ch",
-    "-channel",
-    type=int,
-    default=0,
-    help="IMU channel: 0 for both, 1 for alt IMU only, 2 for az IMU only",
+    "-v", "--verbose", action="store_true", help="Print calibration data to console",
 )
 args = parser.parse_args()
 
-data_queue = queue.Queue()
+# Per‑IMU queues
+imu_queues = {1: queue.Queue(), 2: queue.Queue()}
 calibration_data = []
 
+def make_callback(which):
+    def callback(data):
+        imu_queues[which].put(data)
+    return callback
 
-def add_calibration_data(json_data):
-    """Callback function to add temperature data."""
-    data_queue.put(json_data)
-
-
-def handle_commands(cmd, ch, imu):
-    if not cmd:
-        return
-    parts = cmd.split()
-    cmd = parts[0].lower()
-
-    if cmd == "calibrate":
-        if imu.calibrate(ch):
-            print(f"Channel {ch} enabled.")
+def request_calibration(imu, name):
+    if imu.calibrate():
+        print(f"Sent calibration request to {name}")
     else:
-        print(f"Unknown command: {cmd}. Available commands: calibrate.")
+        print(f"Failed to send calibration request to {name}")
 
+imu1 = PicoIMU(args.port1)
+imu2 = PicoIMU(args.port2)
 
-c = PicoIMU(args.port)
+imu1.set_response_handler(make_callback(1))
+imu2.set_response_handler(make_callback(2))
 
-c.set_response_handler(add_calibration_data)
+imu_done = {1: False, 2: False}
 print_time = 0
 print_cadence = 2  # seconds
-with c:
-    print("Recording IMU calibration data data. Press Ctrl+C to stop.")
+
+with imu1, imu2:
+    print("Recording IMU calibration data. Press Ctrl+C to stop.")
+
+    request_calibration(imu1, "IMU1")
+    request_calibration(imu2, "IMU2")
+
     while True:
         try:
-            handle_commands("calibrate", args.ch, c)
-            try:
-                json_data = data_queue.get_nowait()
-            except queue.Empty:
-                json_data = None
-            if json_data:
-                calibration_data.append(json_data)
-                if args.v:
-                    now = time.time()
-                    if now - print_time < print_cadence:
-                        continue
-                    print(json.dumps(json_data, indent=2))
-                    print_time = now
-                if (
-                    json_data.get("accel_cal") == 3
-                    and json_data.get("mag_cal") == 3
-                ):
-                    print("IMU calibration complete: accel_cal=3, mag_cal=3")
-                    break
+            now = time.time()
+
+            # IMU1
+            if not imu_done[1]:
+                try:
+                    data1 = imu_queues[1].get_nowait()
+                except queue.Empty:
+                    data1 = None
+
+                if data1:
+                    calibration_data.append(("IMU1", data1))
+                    if args.verbose and now - print_time >= print_cadence:
+                        print("IMU1:", json.dumps(data1, indent=2))
+                        print_time = now
+
+                    if data1.get("accel_cal") == 3 and data1.get("mag_cal") == 3:
+                        print("IMU1 calibration complete.")
+                        imu_done[1] = True
+                    else:
+                        request_calibration(imu1, data1.get("sensor_name"))
+
+            # IMU2
+            if not imu_done[2]:
+                try:
+                    data2 = imu_queues[2].get_nowait()
+                except queue.Empty:
+                    data2 = None
+
+                if data2:
+                    calibration_data.append(("IMU2", data2))
+                    if args.verbose and now - print_time >= print_cadence:
+                        print("IMU2:", json.dumps(data2, indent=2))
+                        print_time = now
+
+                    if data2.get("accel_cal") == 3 and data2.get("mag_cal") == 3:
+                        print("IMU2 calibration complete.")
+                        imu_done[2] = True
+                    else:
+                        request_calibration(imu2, data2.get("sensor_name"))
+
+            # Exit when done
+            if imu_done[1] and imu_done[2]:
+                print("Both IMUs calibrated. Exiting.")
+                break
+
             time.sleep(0.1)
+
         except KeyboardInterrupt:
-            print("Recording stopped.")
+            print("Recording stopped by user.")
             break
