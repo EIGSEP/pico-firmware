@@ -132,8 +132,12 @@ void motor_server(uint8_t app_id, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
     cJSON *az_set_pos_json = cJSON_GetObjectItem(root, "az_set_pos");
     az_pos = az_set_pos_json ? az_set_pos_json->valueint : azimuth.position;
+    // if changing position definitions, better reset target too
+    azimuth.target_pos = az_set_pos_json ? az_set_pos_json->valueint : azimuth.target_pos;
     cJSON *el_set_pos_json = cJSON_GetObjectItem(root, "el_set_pos");
     el_pos = el_set_pos_json ? el_set_pos_json->valueint : elevation.position;
+    // if changing position definitions, better reset target too
+    elevation.target_pos = el_set_pos_json ? el_set_pos_json->valueint : elevation.target_pos;
 
     cJSON *az_tar_pos_json = cJSON_GetObjectItem(root, "az_set_target_pos");
     az_tar_pos = az_tar_pos_json ? az_tar_pos_json->valueint : azimuth.target_pos;
