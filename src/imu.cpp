@@ -71,12 +71,10 @@ void imu_init(uint8_t app_id) {
 }
 
 void calibrate_imu(EigsepImu *eimu) {
-    if (!eimu->is_initialized or !eimu->do_calibration) return;
+    if (!eimu->is_initialized) return;
     eimu->sensor_data.accel_status = -1;
     eimu->sensor_data.mag_status = -1;        
-    absolute_time_t deadline = make_timeout_time_ms(SAMPLE_PERIOD);
-    while (!time_reached(deadline)) {
-        if (!eimu->imu.getSensorEvent()) continue;
+    while (eimu->imu.getSensorEvent()) {
         sh2_SensorValue_t event = eimu->imu.sensorValue;
         switch (event.sensorId) {
             case SENSOR_REPORTID_ACCELEROMETER:
@@ -86,14 +84,12 @@ void calibrate_imu(EigsepImu *eimu) {
                 eimu->sensor_data.mag_status = event.status;
                 break;
         }
-                
-        // exit early if both sensors are calibrated
-        if (eimu->sensor_data.accel_status == 3 && eimu->sensor_data.mag_status == 3) break;
     }
-            
-    if (eimu->sensor_data.accel_status >= 3 && eimu->sensor_data.mag_status >= 3) {
+        
+    if (eimu->sensor_data.accel_status == 3 && eimu->sensor_data.mag_status == 3 && eimu->is_initialized && eimu->do_calibration) {
         eimu->imu.saveCalibration();
     }
+    eimu->do_calibration = false;
 }
 
 // calibrate if user sends {calibrate: true} in JSON
