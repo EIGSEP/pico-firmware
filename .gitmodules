@@ -7,4 +7,4 @@
 	url = git@github.com:DaveGamble/cJSON.git
 [submodule "lib/BNO08x_Pico_Library"]
 	path = lib/BNO08x_Pico_Library
-	url = https://github.com/robotcopper/BNO08x_Pico_Library.git
+	url = git@github.com:EIGSEP/BNO08x_Pico_Library.git
