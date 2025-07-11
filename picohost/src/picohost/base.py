@@ -404,6 +404,7 @@ class PicoRFSwitch(PicoDevice):
             ) from e
         c = self.send_command({"sw_state": s})
         if c:
+            time.sleep(0.05)  # allow time for switch to settle
             self.logger.info(f"Switched to {state}.")
         else:
             self.logger.error(f"Failed to switch to {state}.")
