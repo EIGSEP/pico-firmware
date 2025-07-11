@@ -195,13 +195,13 @@ class PicoDevice:
                     self.last_status = data
                     # upload to redis
                     if self.redis_handler:
-                        self.redis_handler(line)
+                        self.redis_handler(data)
                     # Call response handler if set
                     if self._response_handler:
                         self._response_handler(data)
-                    else:
+                    # else:
                         # Default: print the response
-                        print(json.dumps(data))
+                    #    print(json.dumps(data))
                 # Call raw handler on non-json if set
                 elif self._raw_handler:
                     self._raw_handler(line)

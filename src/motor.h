@@ -36,37 +36,26 @@
 #define  AZ_CW_VAL 0
 
 #define DEFAULT_DELAY_US 600
+#define SLOWDOWN_FACTOR 2
+#define SLOW_ZONE 100
 
 /**
  * @struct Stepper
  * @brief Represents a stepper motor interface and its current state.
- *
- * @var Stepper::direction_pin
- * GPIO pin used to select the motor rotation direction.
- * @var Stepper::pulse_pin
- * GPIO pin used to send step pulses to the motor driver.
- * @var Stepper::enable_pin
- * GPIO pin used to enable or disable the motor driver.
- * @var Stepper::cw_val
- * Logical level to set on direction_pin for clockwise rotation.
- * @var Stepper::ccw_val
- * Logical level to set on direction_pin for counter-clockwise rotation.
- * @var Stepper::delay_us
- * Microsecond delay between pulse transitions (step speed control).
- * @var Stepper::position
- * Current step count position of the motor (relative origin).
- * @var Stepper::dir
- * Direction flag: positive for CW, negative for CCW.
  */
 typedef struct {
     uint    direction_pin; /**< GPIO pin for rotation direction */
     uint    pulse_pin;     /**< GPIO pin for step pulses */  
     uint    enable_pin;    /**< GPIO pin for driver enable */   
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
-    uint32_t delay_us;     /**< Delay in microseconds between steps */    
+    uint32_t up_delay_us;     /**< pulse width in microseconds */    
+    uint32_t dn_delay_us;     /**< delay between steps */    
+    uint32_t slowdown_factor; /**< extra multiplier on delay between steps */    
+    uint32_t slow_zone;
+    uint32_t steps_in_direction;
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
-    int32_t remaining_steps; /**< Remaining steps to move in current operation */
+    int32_t target_pos;
     int32_t max_pulses;    /**< Maximum steps to move in current operation */
 } Stepper;
 

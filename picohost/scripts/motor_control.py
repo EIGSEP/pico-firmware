@@ -4,153 +4,89 @@ Allows manual control of azimuth and elevation motors with degree inputs
 and an infinite scanning mode.
 """
 
-import argparse
 import time
-import sys
 import queue
+import json
+import numpy as np
+from eigsep_observing import EigsepRedis
 
-from picohost.base import PicoMotor
-
-
-class MotorController(PicoMotor):
-
-    def __init__(self, port):
-        super().__init__(port)
-        self.status_queue = queue.Queue()
-        self.set_response_handler(self.status_queue.put)
-
-    @property
-    def is_moving(self):
-        """Check if motors are currently moving"""
-        if self._running:
-            status = self.status_queue.get(timeout=1)
-        else:
-            status = self.parse_response(self.read_line())
-        if not status:
-            print("No status received from motor")
-            return False
-        az_moving = status.get("az_remaining_steps", 0) != 0
-        el_moving = status.get("el_remaining_steps", 0) != 0
-        return az_moving or el_moving
-
-    def move(self, az_deg=0, el_deg=0, block=True):
-        """Move motors by specified degrees"""
-        super().move(az_deg=az_deg, el_deg=el_deg)
-        if block:
-            self.wait_for_motors()
-
-    def wait_for_motors(self):
-        while self.is_moving:
-            try:
-                print("Waiting for motors to finish moving...")
-                time.sleep(0.1)
-            except KeyboardInterrupt:
-                self.stop()
-
-    def stop(self):
-        """Stop all motor movements"""
-        print("Stopping motors.")
-        self.move(deg_az=0, deg_el=0, block=False)
-        self.status_queue.queue.clear()
-
-
-def infinite_scan_mode(motor, scan_az=True, scan_el=True):
-
-    with motor:
-        mode_str = []
-        if scan_az:
-            mode_str.append("azimuth")
-        if scan_el:
-            mode_str.append("elevation")
-        print(
-            f"Starting infinite scan mode for {' and '.join(mode_str)} "
-            "(Ctrl+C to stop)"
-        )
-
-        # Track motor states with unified logic
-        az_direction = 1
-        el_direction = 1
-        el_total = 0
-
-        while True:
-            try:
-                if scan_az:
-                    # Move azimuth 360 degrees in current direction
-                    az_move = 360 * az_direction
-                    print(f"Rotating azimuth {az_move}°...")
-                    motor.move(deg_az=az_move, deg_el=0)
-                    motor.wait_for_motors()
-
-                    # Reverse azimuth direction for next iteration
-                    az_direction *= -1
-
-                if scan_el:
-                    # Move elevation 10 degrees in current direction
-                    el_move = 10 * el_direction
-                    print(f"Rotating elevation {el_move}°...")
-                    motor.move(deg_az=0, deg_el=el_move)
-                    motor.wait_for_motors()
-
-                    # Update elevation total and check for reversal
-                    el_total += 10
-                    if el_total >= 360:
-                        el_direction *= -1
-                        el_total = 0
-                        print("Elevation direction reversed")
-
-                time.sleep(0.5)  # Small pause between cycles
-
-            except KeyboardInterrupt:
-                print("\nStopping infinite scan mode")
-                # Send stop command (0 movement)
-                motor.move(deg_az=0, deg_el=0)
-                break
-
+from picohost import PicoMotor
 
 def main():
+    import sys
+    import argparse
+
     parser = argparse.ArgumentParser(
         description="Control PicoMotor azimuth and elevation"
     )
     parser.add_argument(
-        "-p",
-        "--port",
+        "-c",
+        "--pico_config",
         type=str,
-        default="/dev/ttyACM0",
-        help="Serial port for PicoMotor device (default: /dev/ttyACM0)",
+        default="pico_config.json",
+        help="Output of flash_picos (pico_config.json)",
     )
     parser.add_argument(
-        "--az", type=float, default=0, help="Degrees to move azimuth motor"
-    )
-    parser.add_argument(
-        "--el", type=float, default=0, help="Degrees to move elevation motor"
-    )
-    parser.add_argument(
-        "--infinite", action="store_true", help="Run infinite scanning mode"
-    )
-    parser.add_argument(
-        "--infinite-az",
+        "--el_first",
         action="store_true",
-        help="Run infinite scanning mode for azimuth only",
+        help="Scan el, then az. Otherwise, reverse.",
     )
     parser.add_argument(
-        "--infinite-el",
-        action="store_true",
-        help="Run infinite scanning mode for elevation only",
+        "--count",
+        type=int,
+        default=None,
+        help="Run specified number of scans (defauly infinite)",
+    )
+    parser.add_argument(
+        "--pause_s",
+        type=float,
+        default=None,
+        help="Seconds to pause at each pointing",
     )
 
     args = parser.parse_args()
+    port = None
+    with open(args.pico_config, "r", encoding="utf-8") as f:
+        records = json.load(f)
+        for config in records:
+            if config["app_id"] == 0:  # must match pico_multi.h
+                port = config["port"]
+                break
+    assert port is not None  # didn't find app_id 0 in pico_config.json
 
-    m = MotorController(args.port)
-    m.start()
-    if args.infinite or args.infinite_az or args.infinite_el:
-        scan_az = args.infinite or args.infinite_az
-        scan_el = args.infinite or args.infinite_el
-        infinite_scan_mode(m, scan_az=scan_az, scan_el=scan_el)
-    elif args.az is not None or args.el is not None:
-        m.move(az_deg=args.az, el_deg=args.el)
-    else:
-        parser.print_help()
-        sys.exit(1)
+    try:
+        r = EigsepRedis()
+        last_status = r.get_live_metadata(keys='motor')
+    except(KeyError):
+        last_status = None
+    c = PicoMotor(port, verbose=True)
+    zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
+    if zeroed and (last_status is not None):
+        print('Resetting to last known position.')
+        c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
+    c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
+    c.stop()
+    #try:
+    #    c.el_target_steps(6277, wait_for_stop=True)
+    #    c.az_target_deg(180, wait_for_stop=True)
+    #    c.az_target_deg(-180, wait_for_stop=True)
+    #except(KeyboardInterrupt):
+    #    c.stop()
+    #finally:
+    #    c.stop()
+    try:
+        c.stop()
+        c.scan(
+            az_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_range_deg=np.linspace(-180.0, 180.0, 10),
+            el_first=args.el_first,
+            repeat_count=args.count,
+            pause_s=args.pause_s,
+        )
+    except(KeyboardInterrupt):
+        c.stop()
+    finally:
+        c.stop()
 
 
 if __name__ == "__main__":

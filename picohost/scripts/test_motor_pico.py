@@ -49,11 +49,10 @@ def main():
     input("GO?")
     ms.start()
     payload = {
-        "pulses_az": 0,  # signed or unsigned int
-        "pulses_el": 0,  # signed or unsigned int
-        #"delay_us_az": 600,  # microseconds
-        "delay_us_az": 2300,  # microseconds
-        "delay_us_el": 2300,  # microseconds
+        "az_add_pulses": 0,  # signed or unsigned int
+        "el`add_pulses": 0,  # signed or unsigned int
+        "az_delay_us": 2300,  # microseconds
+        "el_delay_us": 2300,  # microseconds
     }
     try:
         while True:
@@ -62,15 +61,15 @@ def main():
             #    payload["pulses_el"] = val
             #    ms.command(payload)
             #    time.sleep(3)
-            for val in (-1000, 2000, -1000):
-            #for val in (-1000,):
+            #for val in (-1000, 2000, -1000):
+            for val in (-1000,):
                 for cnt in range(22):
                     print(f"Sending {val} pulses")
-                    payload[f"pulses_az"] = val
+                    payload[f"el_add_pulses"] = val
                     ms.command(payload)
-                    while ms.status.get(f'az_remaining_steps', 0) == 0:
+                    while ms.status.get(f'el_remaining_steps', 0) == 0:
                         time.sleep(0.1)
-                    while ms.status.get(f'az_remaining_steps', 0) != 0:
+                    while ms.status.get(f'el_remaining_steps', 0) != 0:
                         time.sleep(0.1)
               #for cnt in (500,):
               #  print(f"Sending {val} pulses")
