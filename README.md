@@ -51,8 +51,7 @@ git clone https://github.com/raspberrypi/picotool.git
 cd picotool
 mkdir build && cd build
 cmake ..
-make
-sudo cp picotool /usr/local/bin/
+sudo make
 
 # Set up udev rules for non-root access
 sudo cp udev/99-picotool.rules /etc/udev/rules.d/
