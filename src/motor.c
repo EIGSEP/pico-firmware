@@ -131,6 +131,7 @@ void stepper_disable(Stepper *m) {
 void motor_server(uint8_t app_id, const char *json_str) {
     cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
+    if (!root) return;
     item_json = cJSON_GetObjectItem(root, "az_set_pos");
     azimuth.position = item_json ? item_json->valueint : azimuth.position;
     // if changing position definitions, better reset target too
@@ -157,6 +158,8 @@ void motor_server(uint8_t app_id, const char *json_str) {
     elevation.up_delay_us = item_json ? item_json->valueint : elevation.up_delay_us;
     item_json = cJSON_GetObjectItem(root, "el_dn_delay_us");
     elevation.dn_delay_us = item_json ? item_json->valueint : elevation.dn_delay_us;
+
+    cJSON_Delete(root);
 }
 
 

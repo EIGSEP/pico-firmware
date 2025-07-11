@@ -5,7 +5,8 @@ try:
 except ImportError:
     logging.warning("Mockserial not found, dummy devices will not work")
 
-from .base import PicoDevice, PicoMotor, PicoRFSwitch, PicoPeltier
+from .base import PicoDevice, PicoRFSwitch, PicoPeltier
+from .motor import PicoMotor
 
 
 class DummyPicoDevice(PicoDevice):

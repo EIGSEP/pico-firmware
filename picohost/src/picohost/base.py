@@ -285,57 +285,6 @@ class PicoDevice:
         self.disconnect()
 
 
-class PicoMotor(PicoDevice):
-    """Specialized class for motor control Pico devices."""
-
-    STEP_ANGLE = 1.8  # degrees per step
-    MICROSTEP = 1
-    GEAR_TEETH = 113
-
-    @staticmethod
-    def deg_to_pulses(degrees: float) -> int:
-        """
-        Convert degrees to motor pulses.
-
-        Args:
-            degrees: Angle in degrees
-
-        Returns:
-            Number of pulses for the given angle
-        """
-        steps = degrees / PicoMotor.STEP_ANGLE
-        return int(steps * PicoMotor.MICROSTEP * PicoMotor.GEAR_TEETH)
-
-    def move(
-        self,
-        az_deg: Optional[float] = 0,
-        el_deg: Optional[float] = 0,
-        delay_us_az: int = 600,
-        delay_us_el: int = 600,
-    ) -> bool:
-        """
-        Send motor movement command.
-
-        Args:
-            deg_az: Azimuth angle in degrees (0 for no movement)
-            deg_el: Elevation angle in degrees (0 for no movement)
-            delay_us_az: Microseconds between azimuth steps
-            delay_us_el: Microseconds between elevation steps
-
-        Returns:
-            True if command sent successfully
-        """
-        pulses_az = self.deg_to_pulses(az_deg)
-        pulses_el = self.deg_to_pulses(el_deg)
-        return self.send_command(
-            {
-                "pulses_az": pulses_az,
-                "pulses_el": pulses_el,
-                "delay_us_az": delay_us_az,
-                "delay_us_el": delay_us_el,
-            }
-        )
-
 
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
@@ -410,66 +359,50 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
+class PicoStatus(PicoDevice):
+    """Adds status monitoring to PicoDevice."""
+    def __init__(self, port, verbose=False):
+        super().__init__(port)
+        self.verbose = verbose
+        self.status = {}
+        self.set_response_handler(self.update_status)
+        self.wait_for_updates()
 
-class PicoPeltier(PicoDevice):
+    def update_status(self, data):
+        """Update internal status based on unpacked json packets from picos."""
+        if self.verbose:
+            print(json.dumps(data, indent=2, sort_keys=True))
+        self.status.update(data)
+
+    def wait_for_updates(self, timeout=3):
+        t = time.time()
+        while True:
+            if len(self.status) != 0:
+                break
+            assert time.time() - t < timeout
+            time.sleep(0.1)
+
+class PicoPeltier(PicoStatus):
     """Specialized class for Peltier temperature control Pico devices."""
 
     def set_temperature(self, temperature: float, channel: int = 0) -> bool:
-        """
-        Set target temperature.
-
-        Args:
-            temperature: Target temperature in Celsius
-            channel: Channel number (0=both, 1/2=individual)
-
-        Returns:
-            True if command sent successfully
-        """
+        """Set target temperature."""
         return self.send_command(
             {"cmd": "set_temp", "temperature": temperature, "channel": channel}
         )
 
     def set_hysteresis(self, hysteresis: float, channel: int = 0) -> bool:
-        """
-        Set temperature hysteresis band.
-
-        Args:
-            hysteresis: Hysteresis value in Celsius
-            channel: Channel number (0=both, 1/2=individual)
-
-        Returns:
-            True if command sent successfully
-        """
+        """Set temperature hysteresis band."""
         return self.send_command(
-            {
-                "cmd": "set_hysteresis",
-                "hysteresis": hysteresis,
-                "channel": channel,
-            }
+            {"cmd": "set_hysteresis", "hysteresis": hysteresis, "channel": channel}
         )
 
     def enable(self, channel: int = 0) -> bool:
-        """
-        Enable temperature control.
-
-        Args:
-            channel: Channel number (0=both, 1/2=individual)
-
-        Returns:
-            True if command sent successfully
-        """
+        """Enable temperature control."""
         return self.send_command({"cmd": "enable", "channel": channel})
 
     def disable(self, channel: int = 0) -> bool:
-        """
-        Disable temperature control.
-
-        Args:
-            channel: Channel number (0=both, 1/2=individual)
-
-        Returns:
-            True if command sent successfully
-        """
+        """Disable temperature control."""
         return self.send_command({"cmd": "disable", "channel": channel})
 
 

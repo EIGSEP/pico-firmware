@@ -7,29 +7,30 @@
 #include "hardware/gpio.h"
 #include "eigsep_command.h"
 #include "tempmon.h"
+#include "temp_simple.h"
 
 // Temperature Control 1 configuration
 #define TEMP_SENSOR1_PIN    21  // thermistor data pin
-#define PELTIER1_PWM_PIN    8  // enable1
+#define PELTIER1_PWM_PIN    8 // enable1
 #define PELTIER1_DIR_PIN1   10  // in1
 #define PELTIER1_DIR_PIN2   12  // in2
 
 // Temperature Control 2 configuration
 #define TEMP_SENSOR2_PIN    22
-#define PELTIER2_PWM_PIN    9  // enable2
+#define PELTIER2_PWM_PIN    9 // enable2
 #define PELTIER2_DIR_PIN3   11  // in3
 #define PELTIER2_DIR_PIN4   13  // in4
 
 // PWM configuration
 #define PWM_WRAP            1000
 
-// Error handling configuration
-#define ERROR_COUNT_THRESHOLD   5     // Number of errors before permanent disable
-#define ERROR_TIME_WINDOW_MS    10000 // Time window for error counting (10 seconds)
-
 // Temperature control structure
 typedef struct {
+    uint dir_pin1;
+    uint dir_pin2;
+    uint pwm_pin;
     uint pwm_slice;
+    TempSensor temp_sensor;
     float T_now;
     float T_target;
     float drive;
@@ -39,10 +40,7 @@ typedef struct {
     float clamp;
     bool active;
     bool enabled;
-    bool permanently_disabled;
-    int channel;
-    uint32_t error_count;
-    uint32_t last_error_time;
+    bool internally_disabled;
 } TempControl;
 
 // Standard app interface functions

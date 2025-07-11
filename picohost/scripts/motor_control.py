@@ -66,27 +66,27 @@ def main():
         c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
     c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
     c.stop()
-    #try:
-    #    c.el_target_steps(6277, wait_for_stop=True)
+    try:
+        c.el_move_deg(-30, wait_for_stop=True)
     #    c.az_target_deg(180, wait_for_stop=True)
     #    c.az_target_deg(-180, wait_for_stop=True)
-    #except(KeyboardInterrupt):
-    #    c.stop()
-    #finally:
-    #    c.stop()
-    try:
-        c.stop()
-        c.scan(
-            az_range_deg=np.linspace(-180.0, 180.0, 10),
-            el_range_deg=np.linspace(-180.0, 180.0, 10),
-            el_first=args.el_first,
-            repeat_count=args.count,
-            pause_s=args.pause_s,
-        )
     except(KeyboardInterrupt):
         c.stop()
     finally:
         c.stop()
+    #try:
+    #    c.stop()
+    #    c.scan(
+    #        az_range_deg=np.linspace(-180.0, 180.0, 10),
+    #        el_range_deg=np.linspace(-180.0, 180.0, 10),
+    #        el_first=args.el_first,
+    #        repeat_count=args.count,
+    #        pause_s=args.pause_s,
+    #    )
+    #except(KeyboardInterrupt):
+    #    c.stop()
+    #finally:
+    #    c.stop()
 
 
 if __name__ == "__main__":

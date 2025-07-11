@@ -94,10 +94,7 @@ void calibrate_imu(EigsepImu *eimu) {
 // calibrate if user sends {calibrate: true} in JSON
 void imu_server(uint8_t app_id, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
-    if (root == NULL) {
-        // Invalid JSON input, exit early
-        return;
-    }
+    if (!root == NULL) return;
     cJSON *cal_json = cJSON_GetObjectItem(root, "calibrate");
     if (cal_json && cJSON_IsTrue(cal_json)) {
         imu.do_calibration = true;

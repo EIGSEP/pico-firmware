@@ -10,266 +10,158 @@
 #include <math.h>
 
 // Static instances
-static TempControl tempctrl1;
-static TempControl tempctrl2;
-static TempSensor temp_sensor1;
-static TempSensor temp_sensor2;
+static TempControl tempctrlA;
+static TempControl tempctrlB;
 
 // Forward declarations
-static void tempctrl_drive_raw(TempControl *pc);
-static void tempctrl_hysteresis_drive(TempControl *pc);
+static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
+static void tempctrl_update_sensor_drive(TempControl *);
+static void tempctrl_drive_raw(TempControl *);
+static void tempctrl_hysteresis_drive(TempControl *);
+
+void init_single_tempctrl(TempControl *tempctrl,
+                          uint dir_pin1, uint dir_pin2, uint pwm_pin,
+                          pwm_config *config, uint temp_sensor_pin, PIO pio) {
+    // Initialize GPIO for Peltier 
+    gpio_init(dir_pin1);
+    gpio_set_dir(dir_pin1, GPIO_OUT);
+    gpio_init(dir_pin2);
+    gpio_set_dir(dir_pin2, GPIO_OUT);
+    // Set up PWM for Peltier 
+    gpio_set_function(pwm_pin, GPIO_FUNC_PWM);
+    tempctrl->pwm_slice = pwm_gpio_to_slice_num(pwm_pin);
+    pwm_init(tempctrl->pwm_slice, config, true);
+    
+    uint offset = pio_add_program(pio, &onewire_program);
+    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
+
+    // Initialize Temperature Control structure
+    tempctrl->T_target = 30.0;
+    tempctrl->gain = 0.2;
+    tempctrl->baseline = 0.4;  // Baseline drive level
+    tempctrl->clamp = 0.6;  // Maximum drive level
+    tempctrl->hysteresis = 0.5;
+    tempctrl->enabled = false;
+    tempctrl->active = false;
+    tempctrl->internally_disabled = false;
+    tempctrl->T_now = 0;
+    tempctrl->drive = 0.0;
+}
 
 void tempctrl_init(uint8_t app_id) {
-    // Initialize GPIO for Peltier 1
-    gpio_init(PELTIER1_DIR_PIN1);
-    gpio_set_dir(PELTIER1_DIR_PIN1, GPIO_OUT);
-    gpio_init(PELTIER1_DIR_PIN2);
-    gpio_set_dir(PELTIER1_DIR_PIN2, GPIO_OUT);
-    
-    // Initialize GPIO for Peltier 2
-    gpio_init(PELTIER2_DIR_PIN3);
-    gpio_set_dir(PELTIER2_DIR_PIN3, GPIO_OUT);
-    gpio_init(PELTIER2_DIR_PIN4);
-    gpio_set_dir(PELTIER2_DIR_PIN4, GPIO_OUT);
-    
-    // Set up PWM for Peltier 1
-    gpio_set_function(PELTIER1_PWM_PIN, GPIO_FUNC_PWM);
-    tempctrl1.pwm_slice = pwm_gpio_to_slice_num(PELTIER1_PWM_PIN);
     pwm_config config = pwm_get_default_config();
     pwm_config_set_wrap(&config, PWM_WRAP);
-    pwm_init(tempctrl1.pwm_slice, &config, true);
-    
-    // Set up PWM for Peltier 2
-    gpio_set_function(PELTIER2_PWM_PIN, GPIO_FUNC_PWM);
-    tempctrl2.pwm_slice = pwm_gpio_to_slice_num(PELTIER2_PWM_PIN);
-    pwm_init(tempctrl2.pwm_slice, &config, true);
-    
-    // Initialize Temperature Control 1 structure
-    tempctrl1.T_target = 30.0;
-    tempctrl1.gain = 0.2;
-    tempctrl1.baseline = 0.4;  // Baseline drive level
-    tempctrl1.clamp = 0.6;  // Maximum drive level
-    tempctrl1.hysteresis = 0.5;
-    tempctrl1.enabled = false;
-    tempctrl1.active = false;
-    tempctrl1.permanently_disabled = false;
-    tempctrl1.channel = 1;
-    tempctrl1.T_now = 0;
-    tempctrl1.drive = 0.0;
-    tempctrl1.error_count = 0;
-    tempctrl1.last_error_time = 0;
-    
-    // Initialize Temperature Control 2 structure
-    tempctrl2.T_target = 32.0;
-    tempctrl2.gain = 0.2;
-    tempctrl2.baseline = 0.4;  // Baseline drive level
-    tempctrl2.clamp = 0.6;  // Maximum drive level
-    tempctrl2.hysteresis = 0.5;
-    tempctrl2.enabled = false;
-    tempctrl2.active = false;
-    tempctrl2.permanently_disabled = false;
-    tempctrl2.channel = 2;
-    tempctrl2.T_now = 0;
-    tempctrl2.drive = 0.0;
-    tempctrl2.error_count = 0;
-    tempctrl2.last_error_time = 0;
-    
-    // Initialize temperature sensors on separate pins
-    uint offset1 = pio_add_program(pio0, &onewire_program);
-    uint offset2 = pio_add_program(pio1, &onewire_program);
-    
-    temp_sensor_init(&temp_sensor1, TEMP_SENSOR1_PIN, pio0, offset1);
-    temp_sensor_init(&temp_sensor2, TEMP_SENSOR2_PIN, pio1, offset2);
+    init_single_tempctrl(&tempctrlA, PELTIER1_DIR_PIN1, PELTIER1_DIR_PIN2,
+            PELTIER1_PWM_PIN, &config, TEMP_SENSOR1_PIN, pio0);
+    init_single_tempctrl(&tempctrlB, PELTIER2_DIR_PIN3, PELTIER2_DIR_PIN4,
+            PELTIER2_PWM_PIN, &config, TEMP_SENSOR2_PIN, pio1);
 }
 
 void tempctrl_server(uint8_t app_id, const char *json_str) {
+    cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
     if (!root) return;
     
     // Parse channel selection (default to both)
-    cJSON *channel_json = cJSON_GetObjectItem(root, "channel");
-    int channel = channel_json ? channel_json->valueint : 0;
-    
-    // Parse command
-    cJSON *cmd_json = cJSON_GetObjectItem(root, "cmd");
-    const char *cmd = cmd_json ? cmd_json->valuestring : "";
-    
-    if (strcmp(cmd, "set_temp") == 0) {
-        cJSON *temp_json = cJSON_GetObjectItem(root, "temperature");
-        if (temp_json) {
-            float temp = temp_json->valuedouble;
-            if (channel == 0 || channel == 1) {
-                tempctrl1.T_target = temp;
-            }
-            if (channel == 0 || channel == 2) {
-                tempctrl2.T_target = temp;
-            }
-        }
-    } else if (strcmp(cmd, "set_hysteresis") == 0) {
-        cJSON *hyst_json = cJSON_GetObjectItem(root, "hysteresis");
-        if (hyst_json) {
-            float hyst = hyst_json->valuedouble;
-            if (channel == 0 || channel == 1) {
-                tempctrl1.hysteresis = hyst;
-            }
-            if (channel == 0 || channel == 2) {
-                tempctrl2.hysteresis = hyst;
-            }
-        }
-    } else if (strcmp(cmd, "enable") == 0) {
-        if (channel == 0 || channel == 1) {
-            if (!tempctrl1.permanently_disabled) {
-                tempctrl1.enabled = true;
-            }
-        }
-        if (channel == 0 || channel == 2) {
-            if (!tempctrl2.permanently_disabled) {
-                tempctrl2.enabled = true;
-            }
-        }
-    } else if (strcmp(cmd, "disable") == 0) {
-        if (channel == 0 || channel == 1) {
-            tempctrl1.enabled = false;
-            tempctrl1.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl1);
-        }
-        if (channel == 0 || channel == 2) {
-            tempctrl2.enabled = false;
-            tempctrl2.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl2);
-        }
-    }
-    
+    item_json = cJSON_GetObjectItem(root, "A_temp_target");
+    tempctrlA.T_target = item_json ? item_json->valuedouble : tempctrlA.T_target;
+    item_json = cJSON_GetObjectItem(root, "A_enable");
+    if (item_json) tempctrlA.enabled = item_json->valueint ? true : false;
+    item_json = cJSON_GetObjectItem(root, "A_hysteresis");
+    tempctrlA.hysteresis = item_json ? item_json->valuedouble : tempctrlA.hysteresis;
+    item_json = cJSON_GetObjectItem(root, "B_temp_target");
+    tempctrlB.T_target = item_json ? item_json->valuedouble : tempctrlB.T_target;
+    item_json = cJSON_GetObjectItem(root, "B_enable");
+    if (item_json) tempctrlB.enabled = item_json->valueint ? true : false;
+    item_json = cJSON_GetObjectItem(root, "B_hysteresis");
+    tempctrlB.hysteresis = item_json ? item_json->valuedouble : tempctrlB.hysteresis;
     cJSON_Delete(root);
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const float time1 = temp_sensor_get_conversion_time(&temp_sensor1);
-    const float time2 = temp_sensor_get_conversion_time(&temp_sensor2);
+    const float timeA = temp_sensor_get_conversion_time(&tempctrlA.temp_sensor);
+    const float timeB = temp_sensor_get_conversion_time(&tempctrlB.temp_sensor);
     
-    const char *status1 = temp_sensor_has_error(&temp_sensor1) ? "error" : "update";
-    const char *status2 = temp_sensor_has_error(&temp_sensor2) ? "error" : "update";
+    const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
+    const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
     
     send_json(18,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
-        KV_STR, "A_status", status1,
-        KV_FLOAT, "A_temp_now", tempctrl1.T_now,
-        KV_FLOAT, "A_timestamp", time1,
-        KV_FLOAT, "A_temp_target", tempctrl1.T_target,
-        KV_FLOAT, "A_drive_level", tempctrl1.drive,
-        KV_BOOL, "A_enabled", tempctrl1.enabled,
-        KV_BOOL, "A_perm_disabled", tempctrl1.permanently_disabled,
-        KV_FLOAT, "A_hysteresis", tempctrl1.hysteresis,
-        KV_STR, "B_status", status2,
-        KV_FLOAT, "B_temp_now", tempctrl2.T_now,
-        KV_FLOAT, "B_timestamp", time2,
-        KV_FLOAT, "B_temp_target", tempctrl2.T_target,
-        KV_FLOAT, "B_drive_level", tempctrl2.drive,
-        KV_BOOL, "B_enabled", tempctrl2.enabled,
-        KV_BOOL, "B_perm_disabled", tempctrl2.permanently_disabled,
-        KV_FLOAT, "B_hysteresis", tempctrl2.hysteresis
+        KV_STR, "A_status", statusA,
+        KV_FLOAT, "A_T_now", tempctrlA.T_now,
+        KV_FLOAT, "A_timestamp", timeA,
+        KV_FLOAT, "A_T_target", tempctrlA.T_target,
+        KV_FLOAT, "A_drive_level", tempctrlA.drive,
+        KV_BOOL, "A_enabled", tempctrlA.enabled,
+        KV_BOOL, "A_int_disabled", tempctrlA.internally_disabled,
+        KV_FLOAT, "A_hysteresis", tempctrlA.hysteresis,
+        KV_STR, "B_status", statusB,
+        KV_FLOAT, "B_T_now", tempctrlB.T_now,
+        KV_FLOAT, "B_timestamp", timeB,
+        KV_FLOAT, "B_T_target", tempctrlB.T_target,
+        KV_FLOAT, "B_drive_level", tempctrlB.drive,
+        KV_BOOL, "B_enabled", tempctrlB.enabled,
+        KV_BOOL, "B_int_disabled", tempctrlB.internally_disabled,
+        KV_FLOAT, "B_hysteresis", tempctrlB.hysteresis
     );
+}
+
+void tempctrl_update_sensor_drive(TempControl *tempctrl) {
+    // Start conversions if not already started
+    if (!tempctrl->temp_sensor.conversion_started) {
+        temp_sensor_start_conversion(&tempctrl->temp_sensor);
+    }
+    
+    // Read sensors (auto-skip if conversion not ready)
+    temp_sensor_read(&tempctrl->temp_sensor);
+    
+    // Update current temperatures
+    tempctrl->T_now = temp_sensor_get_temp(&tempctrl->temp_sensor);
+    
+    // Handle sensor 1 error or drive Peltiers based on hysteresis control
+    tempctrl->internally_disabled = temp_sensor_has_error(&tempctrl->temp_sensor) ? true : false;
+
+    if (tempctrl->enabled && !tempctrl->internally_disabled) {
+        tempctrl_hysteresis_drive(tempctrl);
+    } else {
+        tempctrl->drive = 0.0;
+        tempctrl_drive_raw(tempctrl);
+    }
 }
 
 void tempctrl_op(uint8_t app_id) {
     // Start conversions if not already started
-    if (!temp_sensor1.conversion_started) {
-        temp_sensor_start_conversion(&temp_sensor1);
-    }
-    if (!temp_sensor2.conversion_started) {
-        temp_sensor_start_conversion(&temp_sensor2);
-    }
-    
-    // Read sensors (auto-skip if conversion not ready)
-    temp_sensor_read(&temp_sensor1);
-    temp_sensor_read(&temp_sensor2);
-    
-    // Update current temperatures
-    tempctrl1.T_now = temp_sensor_get_temp(&temp_sensor1);
-    tempctrl2.T_now = temp_sensor_get_temp(&temp_sensor2);
-    
-    // Check for sensor errors and track error counts
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    
-    // Handle sensor 1 error or drive Peltiers based on hysteresis control
-    if (temp_sensor_has_error(&temp_sensor1)) {
-        if ((now - tempctrl1.last_error_time) > ERROR_TIME_WINDOW_MS) {
-            tempctrl1.error_count = 0;  // Reset count if outside time window
-        }
-        tempctrl1.error_count++;
-        tempctrl1.last_error_time = now;
-        
-        if (tempctrl1.error_count >= ERROR_COUNT_THRESHOLD) {
-            tempctrl1.permanently_disabled = true;
-        }
-        
-        if (tempctrl1.enabled) {
-            tempctrl1.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl1);
-        }
-    }
-    else if (tempctrl1.enabled && !tempctrl1.permanently_disabled) {
-        tempctrl_hysteresis_drive(&tempctrl1);
-    }
-    
-    // Handle sensor 2 errors or drive Peltiers based on hysteresis control
-    if (temp_sensor_has_error(&temp_sensor2)) {
-        if ((now - tempctrl2.last_error_time) > ERROR_TIME_WINDOW_MS) {
-            tempctrl2.error_count = 0;  // Reset count if outside time window
-        }
-        tempctrl2.error_count++;
-        tempctrl2.last_error_time = now;
-        
-        if (tempctrl2.error_count >= ERROR_COUNT_THRESHOLD) {
-            tempctrl2.permanently_disabled = true;
-        }
-        
-        if (tempctrl2.enabled) {
-            tempctrl2.drive = 0.0;
-            tempctrl_drive_raw(&tempctrl2);
-        }
-    }
-    else if (tempctrl2.enabled && !tempctrl2.permanently_disabled) {
-        tempctrl_hysteresis_drive(&tempctrl2);
-    }
+    tempctrl_update_sensor_drive(&tempctrlA);
+    tempctrl_update_sensor_drive(&tempctrlB);
 }
 
 // Helper functions
-static void tempctrl_drive_raw(TempControl *pc) {
-    uint32_t pwm_level = (uint32_t)(fabsf(pc->drive) * PWM_WRAP);
-    bool forward = (pc->drive >= 0);
-    if (pc->channel == 1) {
-        gpio_put(PELTIER1_DIR_PIN1, forward);
-        gpio_put(PELTIER1_DIR_PIN2, !forward);
-        pwm_set_gpio_level(PELTIER1_PWM_PIN, pwm_level);
-    } else if (pc->channel == 2) {
-        gpio_put(PELTIER2_DIR_PIN3, forward);
-        gpio_put(PELTIER2_DIR_PIN4, !forward);
-        pwm_set_gpio_level(PELTIER2_PWM_PIN, pwm_level);
-    }
+static void tempctrl_drive_raw(TempControl *tempctrl) {
+    uint32_t pwm_level = (uint32_t)(fabsf(tempctrl->drive) * PWM_WRAP);
+    bool forward = (tempctrl->drive >= 0);
+    gpio_put(tempctrl->dir_pin1, forward);
+    gpio_put(tempctrl->dir_pin2, !forward);
+    pwm_set_gpio_level(tempctrl->pwm_pin, pwm_level);
 }
 
-static void tempctrl_hysteresis_drive(TempControl *pc) {
-    float error = pc->T_target - pc->T_now;
-    int sign = (error >= 0) ? 1 : -1;
+static void tempctrl_hysteresis_drive(TempControl *tempctrl) {
+    float T_delta = tempctrl->T_target - tempctrl->T_now;
+    int sign = (T_delta >= 0) ? 1 : -1;
     
-    if (fabsf(error) <= pc->hysteresis) {
+    if (fabsf(T_delta) <= tempctrl->hysteresis) {
         // Within hysteresis band - turn off
-        pc->drive = 0.0;
-        pc->active = false;
+        tempctrl->drive = 0.0;
+        tempctrl->active = false;
     } else {
         // Outside hysteresis band - engage control
-        pc->active = true;
-        
+        tempctrl->active = true;
         // Simple proportional control using gain and baseline drive
-        pc->drive = error * pc->gain + sign * pc->baseline;
-        
+        tempctrl->drive = T_delta * tempctrl->gain + sign * tempctrl->baseline;
         // Limit drive to maximum power (clamp acts as max power)
-        if (fabsf(pc->drive) > pc->clamp) {
-            pc->drive = sign * pc->clamp;
+        if (fabsf(tempctrl->drive) > tempctrl->clamp) {
+            tempctrl->drive = sign * tempctrl->clamp;
         }
     }
-    
-    tempctrl_drive_raw(pc);
+    tempctrl_drive_raw(tempctrl);
 }
