@@ -55,11 +55,17 @@ def main():
     c = PicoMotor(port, verbose=True)
     c.stop()
     #c.scan(az_first=not args.el_first, repeat_count=args.count, pause_s=args.pause_s)
-    #for steps in (1000, -2000, 1000):
-    for steps in (1000,):
-        c.az_move_steps(steps)
-        c.wait_for_start()
-        c.wait_for_stop()
+    #c.az_move_deg(-360)
+    c.reset_deg_position(az_deg=0)
+    for deg in (90, -90, 0):
+        c.az_target_deg(deg)
+        try:
+            while c.is_moving():
+                time.sleep(0.1)
+        except(KeyboardInterrupt):
+            c.stop()
+            continue
+            
     c.stop()
 
 

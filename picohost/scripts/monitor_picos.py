@@ -1,5 +1,6 @@
 import sys
 import json
+from serial.serialutil import SerialException
 from serial import Serial
 
 
@@ -9,7 +10,10 @@ def watch_json_from_serial(dev, baud):
     """
     with Serial(dev, baudrate=baud) as ser:
         while True:
-            line = ser.readline().decode("utf-8", errors="ignore").strip()
+            try:
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
+            except(SerialException):
+                continue
             if not line:
                 continue
             try:

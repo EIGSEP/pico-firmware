@@ -81,9 +81,9 @@ class PicoMotor(PicoDevice):
 
     def reset_deg_position(self, az_deg=None, el_deg=None):
         """Set az and el position to specified count."""
-        az_pos = None if az_deg is None else self.steps_to_deg(az_deg)
-        el_pos = None if el_deg is None else self.steps_to_deg(el_deg)
-        self.reset_step_pos(az_pos=az_pos, el_pos=el_pos)
+        az_pos = None if az_deg is None else self.deg_to_steps(az_deg)
+        el_pos = None if el_deg is None else self.deg_to_steps(el_deg)
+        self.reset_step_position(az_pos=az_pos, el_pos=el_pos)
 
     def set_delay(self, az_delay_us=2300, el_delay_us=2300):
         self.motor_command(az_delay_us=az_delay_us, el_delay_us=el_delay_us)
@@ -97,35 +97,43 @@ class PicoMotor(PicoDevice):
             cmd['el_add_pulses'] = 0
         self.motor_command(**cmd)
 
-    def az_move_steps(self, delta_steps):
+    def _do_wait(self, wait_for_start, wait_for_stop):
+        if wait_for_start:
+            self.wait_for_start()
+        if wait_for_stop:
+            self.wait_for_stop()
+
+    def az_move_steps(self, delta_steps, wait_for_start=True, wait_for_stop=False):
         self.motor_command(az_add_pulses=delta_steps)
+        self._do_wait(wait_for_start, wait_for_stop)
 
-    def az_move_deg(self, delta_deg):
-        self.az_incmove_steps(self.deg_to_steps(delta_deg))
+    def az_move_deg(self, delta_deg, wait_for_start=True, wait_for_stop=False):
+        self.az_move_steps(self.deg_to_steps(delta_deg), wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
-    def az_target_steps(self, target_steps):
+    def az_target_steps(self, target_steps, wait_for_start=True, wait_for_stop=False):
         cur_steps = self.status['az_pos'] + self.status['az_remaining_steps']
-        self.az_move_steps(target_steps - cur_steps)
+        self.az_move_steps(target_steps - cur_steps, wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
-    def az_target_deg(self, target_deg):
+    def az_target_deg(self, target_deg, wait_for_start=True, wait_for_stop=False):
         cur_steps = self.status['az_pos'] + self.status['az_remaining_steps']
         target_steps = self.deg_to_steps(target_deg)
-        self.az_move_steps(target_steps - cur_steps)
+        self.az_move_steps(target_steps - cur_steps, wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
-    def el_move_steps(self, delta_steps):
+    def el_move_steps(self, delta_steps, wait_for_start=True, wait_for_stop=False):
         self.motor_command(el_add_pulses=delta_steps)
+        self._do_wait(wait_for_start, wait_for_stop)
 
-    def el_move_deg(self, delta_deg):
-        self.el_incmove_steps(self.deg_to_steps(delta_deg))
+    def el_move_deg(self, delta_deg, wait_for_start=True, wait_for_stop=False):
+        self.el_move_steps(self.deg_to_steps(delta_deg), wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
-    def el_target_steps(self, target_steps):
+    def el_target_steps(self, target_steps, wait_for_start=True, wait_for_stop=False):
         cur_steps = self.status['el_pos'] + self.status['el_remaining_steps']
-        self.el_move_steps(target_steps - cur_steps)
+        self.el_move_steps(target_steps - cur_steps, wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
-    def el_target_deg(self, target_deg):
+    def el_target_deg(self, target_deg, wait_for_start=True, wait_for_stop=False):
         cur_steps = self.status['el_pos'] + self.status['el_remaining_steps']
         target_steps = self.deg_to_steps(target_deg)
-        self.el_move_steps(target_steps - cur_steps)
+        self.el_move_steps(target_steps - cur_steps, wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
 
     def is_moving(self):
         return self.status['az_remaining_steps'] != 0 or \
