@@ -169,9 +169,9 @@ void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
         status = "update";
     }
     if (!eimu->do_calibration) {
-        calibrated = "False"
+        calibrated = "False";
     } else {
-        calibrated = "True"
+        calibrated = "True";
     }
     
     send_json(22,
