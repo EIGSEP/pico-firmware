@@ -20,8 +20,10 @@ temp_data = []
 
 
 t = PicoPeltier(args.port, verbose=True) # Control mode for Peltier
-#t = PicoStatus(args.port, verbose=True) # temperature monitor
-
-while True:
-    temp_data.append(t.status.copy())
-    time.sleep(0.1)
+t.set_temperature(T_A=25, T_B=25)
+t.set_enable(A=True, B=True)
+try:
+    while True:
+        time.sleep(0.1)
+except(KeyboardInterrupt):
+    t.set_enable(A=False, B=False)
