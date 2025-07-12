@@ -59,13 +59,28 @@ void lidar_status(uint8_t app_id) {
     );
 }
 
-void lidar_op(uint8_t app_id) {
-    uint8_t resp[2];
-    lidar_init(app_id);
-    int read = i2c_read_timeout_us(I2C_PORT, I2C_ADDR, resp, 2, false, 1000); // time in us
-    
-    if (read == 2) {
-        int32_t dist_raw = (int32_t)(resp[0] << 8) | (resp[1]) ;
-        lidar_data.distance = dist_raw / 100.0;
-    }
+bool sf30d_init(void) {
+    const uint8_t start[2] = {0x00, 0x04};
+    if (i2c_write_timeout_us(I2C_PORT, I2C_ADDR, start, 2, false, 1000) < 0)
+        return false;
+    sleep_ms(50);
+    return true;
 }
+
+void lidar_op(uint8_t app_id) {
+    uint8_t buf[2];
+    lidar_init(app_id);
+    if (i2c_read_timeout_us(I2C_PORT, I2C_ADDR, buf, 2, false, 1000) != 2) {
+        free_i2c_bus();                 // bus recovery
+        sf30d_init();                   // re-issue start cmd
+        return;
+    }
+
+    uint16_t dist_cm = (uint16_t)(buf[0] << 8) | buf[1];
+    if (dist_cm == 0) {                  // still not ready – ignore
+        return;
+    }
+    lidar_data.distance = dist_cm / 100.0;
+}
+
+
