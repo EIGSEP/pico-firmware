@@ -36,6 +36,9 @@ void init_single_tempctrl(TempControl *tempctrl,
     temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
 
     // Initialize Temperature Control structure
+    tempctrl->dir_pin1 = dir_pin1;
+    tempctrl->dir_pin2 = dir_pin2;
+    tempctrl->pwm_pin = pwm_pin;
     tempctrl->T_target = 30.0;
     tempctrl->gain = 0.2;
     tempctrl->baseline = 0.4;  // Baseline drive level
@@ -85,7 +88,7 @@ void tempctrl_status(uint8_t app_id) {
     const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
     const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
     
-    send_json(18,
+    send_json(20,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_STR, "A_status", statusA,
@@ -94,6 +97,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "A_T_target", tempctrlA.T_target,
         KV_FLOAT, "A_drive_level", tempctrlA.drive,
         KV_BOOL, "A_enabled", tempctrlA.enabled,
+        KV_BOOL, "A_active", tempctrlA.active,
         KV_BOOL, "A_int_disabled", tempctrlA.internally_disabled,
         KV_FLOAT, "A_hysteresis", tempctrlA.hysteresis,
         KV_STR, "B_status", statusB,
@@ -102,6 +106,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "B_T_target", tempctrlB.T_target,
         KV_FLOAT, "B_drive_level", tempctrlB.drive,
         KV_BOOL, "B_enabled", tempctrlB.enabled,
+        KV_BOOL, "B_active", tempctrlB.active,
         KV_BOOL, "B_int_disabled", tempctrlB.internally_disabled,
         KV_FLOAT, "B_hysteresis", tempctrlB.hysteresis
     );
@@ -140,9 +145,17 @@ void tempctrl_op(uint8_t app_id) {
 static void tempctrl_drive_raw(TempControl *tempctrl) {
     uint32_t pwm_level = (uint32_t)(fabsf(tempctrl->drive) * PWM_WRAP);
     bool forward = (tempctrl->drive >= 0);
-    gpio_put(tempctrl->dir_pin1, forward);
-    gpio_put(tempctrl->dir_pin2, !forward);
-    pwm_set_gpio_level(tempctrl->pwm_pin, pwm_level);
+
+    if (tempctrl->drive == 0.0f) {
+        /* tri-state / brake-off */
+        gpio_put(tempctrl->dir_pin1, 0);
+        gpio_put(tempctrl->dir_pin2, 0);
+        pwm_set_gpio_level(tempctrl->pwm_pin, 0);
+    } else {
+        gpio_put(tempctrl->dir_pin1, forward);
+        gpio_put(tempctrl->dir_pin2, !forward);
+        pwm_set_gpio_level(tempctrl->pwm_pin, pwm_level);
+    }
 }
 
 static void tempctrl_hysteresis_drive(TempControl *tempctrl) {
