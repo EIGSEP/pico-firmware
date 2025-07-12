@@ -385,25 +385,20 @@ class PicoStatus(PicoDevice):
 class PicoPeltier(PicoStatus):
     """Specialized class for Peltier temperature control Pico devices."""
 
-    def set_temperature(self, temperature: float, channel: int = 0) -> bool:
+    def set_temperature(self, T_A=None, A_hyst=0.5, T_B=None, B_hyst=0.5):
         """Set target temperature."""
-        return self.send_command(
-            {"cmd": "set_temp", "temperature": temperature, "channel": channel}
-        )
+        cmd = {}
+        if T_A is not None:
+            cmd['A_temp_target'] = T_A
+            cmd['A_hysteresis'] = A_hyst
+        if T_B is not None:
+            cmd['B_temp_target'] = T_B
+            cmd['B_hysteresis'] = B_hyst
+        return self.send_command(cmd)
 
-    def set_hysteresis(self, hysteresis: float, channel: int = 0) -> bool:
-        """Set temperature hysteresis band."""
-        return self.send_command(
-            {"cmd": "set_hysteresis", "hysteresis": hysteresis, "channel": channel}
-        )
-
-    def enable(self, channel: int = 0) -> bool:
+    def set_enable(self, A=True, B=True):
         """Enable temperature control."""
-        return self.send_command({"cmd": "enable", "channel": channel})
-
-    def disable(self, channel: int = 0) -> bool:
-        """Disable temperature control."""
-        return self.send_command({"cmd": "disable", "channel": channel})
+        return self.send_command({'A_enable': A, 'B_enable': B})
 
 
 class PicoIMU(PicoDevice):
