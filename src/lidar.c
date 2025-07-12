@@ -23,8 +23,29 @@ static void init_i2c() {
     gpio_pull_up(I2C_SCL);
 }
 
+
+static void free_i2c_bus() {
+    /* Temporarily bit-bang SCL as a GPIO to clock out any half-byte */
+    gpio_set_function(I2C_SCL, GPIO_FUNC_SIO);
+    gpio_set_dir(I2C_SCL, GPIO_OUT);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_SIO);
+    gpio_set_dir(I2C_SDA, GPIO_IN);          // SDA as input (pull-up already on)
+
+    for (int i = 0; i < 9; ++i) {        // 9 clocks releases most slaves
+        gpio_put(I2C_SCL, 0); sleep_us(5);
+        gpio_put(I2C_SCL, 1); sleep_us(5);
+        if (gpio_get(I2C_SDA)) break;        // bus released
+    }
+
+    /* Restore pins to I²C mode */
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+}
+
+
 void lidar_init(uint8_t app_id) {
     init_i2c();
+    free_i2c_bus();
 }
 
 void lidar_server(uint8_t app_id, const char *json_str) {}
@@ -40,11 +61,11 @@ void lidar_status(uint8_t app_id) {
 
 void lidar_op(uint8_t app_id) {
     uint8_t resp[2];
-    int read = i2c_read_blocking(I2C_PORT, I2C_ADDR, resp, 2, false);
+    lidar_init(app_id);
+    int read = i2c_read_timeout_us(I2C_PORT, I2C_ADDR, resp, 2, false, 1000); // time in us
     
     if (read == 2) {
         int32_t dist_raw = (int32_t)(resp[0] << 8) | (resp[1]) ;
-        
         lidar_data.distance = dist_raw / 100.0;
     }
 }
