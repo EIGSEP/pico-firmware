@@ -16,7 +16,7 @@
 /* Board-specific hardware constants                                  */
 /* ------------------------------------------------------------------ */
 #define I2C_BAUDRATE      400000
-#define SAMPLE_PERIOD     10      /* ms */
+#define SAMPLE_PERIOD     300      /* ms */
 #define IMU_ADDR          0x4A
 
 #define IMU_SDA_GPIO     0

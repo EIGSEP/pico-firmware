@@ -361,8 +361,13 @@ class PicoRFSwitch(PicoDevice):
 
 class PicoStatus(PicoDevice):
     """Adds status monitoring to PicoDevice."""
-    def __init__(self, port, verbose=False):
-        super().__init__(port)
+    def __init__(
+        self, port, verbose=False, timeout=5., name="", eig_redis=None
+    ):
+        """ kwargs passed to super()"""
+        super().__init__(
+            port, timeout=timeout, name=name, eig_redis=eig_redis
+        )
         self.verbose = verbose
         self.status = {}
         self.set_response_handler(self.update_status)
