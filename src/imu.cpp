@@ -36,7 +36,6 @@ static void free_i2c_bus(i2c_inst_t *i2c, uint sda_pin, uint scl_pin)
 }
 
 void init_eigsep_imu(EigsepImu *eimu, uint app_id) {
-    eimu->is_initialized = false;
     eimu->do_calibration = false;
     if (app_id == APP_IMU) {
         strncpy(eimu->name, "imu_panda", IMU_NAME_LEN - 1);
@@ -50,7 +49,6 @@ void init_eigsep_imu(EigsepImu *eimu, uint app_id) {
     eimu->rst_pin = IMU_RST_GPIO;
 
     init_i2c_bus(eimu->i2c, eimu->sda_pin, eimu->scl_pin);
-
     free_i2c_bus(eimu->i2c, eimu->sda_pin, eimu->scl_pin);
 
     if (eimu->imu.begin(IMU_ADDR, eimu->i2c, -1, eimu->rst_pin)) {
@@ -72,22 +70,23 @@ void imu_init(uint8_t app_id) {
 
 void calibrate_imu(EigsepImu *eimu) {
     if (!eimu->is_initialized) return;
-    eimu->sensor_data.accel_status = -1;
-    eimu->sensor_data.mag_status = -1;        
-    while (eimu->imu.getSensorEvent()) {
-        sh2_SensorValue_t event = eimu->imu.sensorValue;
-        switch (event.sensorId) {
-            case SENSOR_REPORTID_ACCELEROMETER:
-                eimu->sensor_data.accel_status = event.status;
-                break;
-            case SENSOR_REPORTID_MAGNETIC_FIELD:
-                eimu->sensor_data.mag_status = event.status;
-                break;
-        }
-    }
+    //eimu->sensor_data.accel_status = -1;
+    //eimu->sensor_data.mag_status = -1;        
+    //while (eimu->imu.getSensorEvent()) {
+    //    sh2_SensorValue_t event = eimu->imu.sensorValue;
+    //    switch (event.sensorId) {
+    //        case SENSOR_REPORTID_ACCELEROMETER:
+    //            eimu->sensor_data.accel_status = event.status;
+    //            break;
+    //        case SENSOR_REPORTID_MAGNETIC_FIELD:
+    //            eimu->sensor_data.mag_status = event.status;
+    //            break;
+    //    }
+    //}
         
     if (eimu->sensor_data.accel_status == 3 && eimu->sensor_data.mag_status == 3 && eimu->is_initialized && eimu->do_calibration) {
         eimu->imu.saveCalibration();
+        eimu->do_calibration = false;
     }
 }
 
@@ -98,8 +97,6 @@ void imu_server(uint8_t app_id, const char *json_str) {
     cJSON *cal_json = cJSON_GetObjectItem(root, "calibrate");
     if (cal_json && cJSON_IsTrue(cal_json)) {
         imu.do_calibration = true;
-    } else {
-        imu.do_calibration = false;
     }
     cJSON_Delete(root);
 }
