@@ -43,6 +43,12 @@ def main():
         default=None,
         help="Seconds to pause at each pointing",
     )
+    parser.add_argument(
+        "--sleep_s",
+        type=float,
+        default=None,
+        help="Seconds to sleep between each scan",
+    )
 
     args = parser.parse_args()
     port = None
@@ -84,6 +90,7 @@ def main():
             el_first=args.el_first,
             repeat_count=args.count,
             pause_s=args.pause_s,
+            sleep_between=sleep_s,
         )
     except(KeyboardInterrupt):
         c.stop()

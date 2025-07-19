@@ -160,11 +160,31 @@ class PicoMotor(PicoDevice):
         while self.is_moving():
             time.sleep(.1)
         
-    def scan(self,
-            az_range_deg=np.arange(-180.0, 180.0, 5),
-            el_range_deg=np.arange(-180.0, 180.0, 5),
-            el_first=False, repeat_count=None, pause_s=None, reset_pos=False):
-        """Perform beam scanning strategy."""
+    def scan(
+        self,
+        az_range_deg=np.arange(-180.0, 180.0, 5),
+        el_range_deg=np.arange(-180.0, 180.0, 5),
+        el_first=False,
+        repeat_count=None,
+        pause_s=None,
+        reset_pos=False,
+        sleep_between=None,
+    ):
+        """
+        Perform beam scanning strategy.
+
+        Parameters
+        ---------
+        az_range : array_like
+        el_range : array_like
+        el_first : bool
+        repeat_count : int
+        pause_s : float
+            Pause time at each position.
+        reset_pos : bool
+        sleep_between : float
+            Sleep between every scan (if `repeat_count` is not None).
+        """
         if reset_pos:
             self.reset_deg_position(az_deg=0.0, el_deg=0.0)
         # set order of scanning
@@ -197,6 +217,11 @@ class PicoMotor(PicoDevice):
                             time.sleep(pause_s)
                     axis2_rng = axis2_rng[::-1]  # reverse direction each time
                 axis1_rng = axis1_rng[::-1]  # reverse direction each time
+                i += 1
+                if sleep_between is not None:
+                    if self.verbose:
+                        print(f"Sleeping for {sleep_between} s)")
+                    time.sleep(sleep_between)
         finally:
             self.stop()
             
