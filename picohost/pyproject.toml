@@ -18,6 +18,7 @@ classifiers = [
   "Topic :: System :: Hardware",
 ]
 dependencies = [
+  "numpy",
   "pyserial",
 ]
 
