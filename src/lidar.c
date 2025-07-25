@@ -70,7 +70,7 @@ bool sf30d_init(void) {
 
 bool lidar_reset(uint8_t app_id) {
     i2c_deinit(I2C_PORT);
-    sleep_ms(50);
+    sleep_ms(100);
     lidar_init(app_id);
 }
 
