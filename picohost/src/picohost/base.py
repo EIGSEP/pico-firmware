@@ -404,6 +404,15 @@ class PicoPeltier(PicoStatus):
     def set_enable(self, A=True, B=True):
         """Enable temperature control."""
         return self.send_command({'A_enable': A, 'B_enable': B})
+        
+    def set_clamp(self, A=None, B=None):
+        """Set maximum drive level [0.0, 1.0], 0.6 default."""
+        cmd = {}
+        if A is not None:
+            cmd["A_clamp"] = A
+        if B is not None:
+            cmd["B_clamp"] = B
+        return self.send_command(cmd)
 
 
 class PicoIMU(PicoDevice):
