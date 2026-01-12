@@ -1,6 +1,8 @@
 """
 Base class for Pico device communication.
 Provides common functionality for serial communication with Pico devices.
+
+XXX TODO: make sure everyone has redis handlers
 """
 
 import json
@@ -59,14 +61,12 @@ class PicoDevice:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.ser: Optional[Serial] = None
+        self.ser = None
         self._running = False
-        self._reader_thread: Optional[threading.Thread] = None
-        self._response_handler: Optional[Callable[[Dict[str, Any]], None]] = (
-            None
-        )
-        self._raw_handler: Optional[Callable[[str], None]] = None
-        self.last_status: Dict[str, Any] = {}
+        self._reader_thread = None
+        self._response_handler = None
+        self._raw_handler = None
+        self.last_status = {}
         if name is None:
             self.name = port.split("/")[-1] if "/" in port else port
         else:
