@@ -15,6 +15,7 @@ from .base import PicoDevice, logger, redis_handler
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
+    #XXX this ignores several args from base class
     def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
         super().__init__(port)
         self.verbose = verbose

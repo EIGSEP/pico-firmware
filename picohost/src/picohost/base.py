@@ -1,8 +1,6 @@
 """
 Base class for Pico device communication.
 Provides common functionality for serial communication with Pico devices.
-
-XXX TODO: make sure everyone has redis handlers
 """
 
 import json
@@ -22,6 +20,20 @@ PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
 
 def redis_handler(redis):
+    """
+    Create a handler function to upload data to Redis.
+
+    Parameters
+    ----------
+    redis : EigsepRedis
+        Custom EIGSEP Redis client instance.
+
+    Returns
+    -------
+    handler : callable
+        Function that takes a data dictionary and uploads it to Redis.
+
+    """
     def handler(data):
         try:
             name = data["sensor_name"]
