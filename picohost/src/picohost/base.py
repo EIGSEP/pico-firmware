@@ -52,22 +52,25 @@ class PicoDevice:
 
     def __init__(
         self,
-        port: str,
-        baudrate: int = 115200,
-        timeout: float = 5.0,
+        port,
+        eig_redis,
+        baudrate=115200,
+        timeout=5.0,
         name=None,
-        eig_redis=None,
         response_handler=None,
     ):
         """
-        Initialize a Pico device connection.
+        Initialize a Pico device connection. Reads data and uploads to
+        Redis.
 
-        Args:
-            port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
-            baudrate: Serial baud rate (default: 115200)
-            timeout: Serial read timeout in seconds (default: 1.0)
-            name: str
-            eig_redis: EigsepRedis instance
+        Parameters
+        ----------
+        port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
+        eig_redis: EigsepRedis instance
+        baudrate: Serial baud rate (default: 115200)
+        timeout: Serial read timeout in seconds (default: 1.0)
+        name: str
+        
         """
         self.logger = logger
         self.port = port
@@ -85,10 +88,7 @@ class PicoDevice:
             self.name = name
 
         self.connect()
-        if eig_redis is not None:
-            self.redis_handler = redis_handler(eig_redis)
-        else:
-            self.redis_handler = None
+        self.redis_handler = redis_handler(eig_redis)
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
