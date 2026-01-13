@@ -60,8 +60,8 @@ def main():
                 break
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
+    r = EigsepRedis()
     try:
-        r = EigsepRedis()
         last_status = r.get_live_metadata(keys='motor')
     except(KeyError):
         last_status = None
