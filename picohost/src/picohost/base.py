@@ -34,6 +34,7 @@ def redis_handler(redis):
         Function that takes a data dictionary and uploads it to Redis.
 
     """
+
     def handler(data):
         try:
             name = data["sensor_name"]
@@ -220,7 +221,7 @@ class PicoDevice:
                     if self._response_handler:
                         self._response_handler(data)
                     # else:
-                        # Default: print the response
+                    # Default: print the response
                     #    print(json.dumps(data))
                 # Call raw handler on non-json if set
                 elif self._raw_handler:
@@ -305,7 +306,6 @@ class PicoDevice:
         self.disconnect()
 
 
-
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
@@ -379,15 +379,13 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
+
 class PicoStatus(PicoDevice):
     """Adds status monitoring to PicoDevice."""
-    def __init__(
-        self, port, eig_redis, verbose=False, timeout=5., name=""
-    ):
-        """ kwargs passed to super()"""
-        super().__init__(
-            port, eig_redis, timeout=timeout, name=name
-        )
+
+    def __init__(self, port, eig_redis, verbose=False, timeout=5.0, name=""):
+        """kwargs passed to super()"""
+        super().__init__(port, eig_redis, timeout=timeout, name=name)
         self.verbose = verbose
         self.status = {}
         self.set_response_handler(self.update_status)
@@ -407,6 +405,7 @@ class PicoStatus(PicoDevice):
             assert time.time() - t < timeout
             time.sleep(0.1)
 
+
 class PicoPeltier(PicoStatus):
     """Specialized class for Peltier temperature control Pico devices."""
 
@@ -414,16 +413,16 @@ class PicoPeltier(PicoStatus):
         """Set target temperature."""
         cmd = {}
         if T_A is not None:
-            cmd['A_temp_target'] = T_A
-            cmd['A_hysteresis'] = A_hyst
+            cmd["A_temp_target"] = T_A
+            cmd["A_hysteresis"] = A_hyst
         if T_B is not None:
-            cmd['B_temp_target'] = T_B
-            cmd['B_hysteresis'] = B_hyst
+            cmd["B_temp_target"] = T_B
+            cmd["B_hysteresis"] = B_hyst
         return self.send_command(cmd)
 
     def set_enable(self, A=True, B=True):
         """Enable temperature control."""
-        return self.send_command({'A_enable': A, 'B_enable': B})
+        return self.send_command({"A_enable": A, "B_enable": B})
 
 
 class PicoIMU(PicoDevice):
