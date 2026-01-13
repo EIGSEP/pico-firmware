@@ -65,12 +65,20 @@ class PicoDevice:
 
         Parameters
         ----------
-        port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
-        eig_redis: EigsepRedis instance
-        baudrate: Serial baud rate (default: 115200)
-        timeout: Serial read timeout in seconds (default: 1.0)
-        name: str
-        
+        port : str
+            Serial port device (e.g., '/dev/ttyACM0' or 'COM3').
+        eig_redis : EigsepRedis
+            Custom EIGSEP Redis client instance used to store device data.
+        baudrate : int, optional
+            Serial baud rate. Defaults to 115200.
+        timeout : float, optional
+            Serial read timeout in seconds. Defaults to 5.0.
+        name : str, optional
+            Logical name for this Pico device. If not provided, derived from
+            the serial port identifier.
+        response_handler : Callable, optional
+            Optional callable to handle responses from the device. If
+            provided, it will be registered as the response handler.
         """
         self.logger = logger
         self.port = port
