@@ -5,11 +5,30 @@ try:
 except ImportError:
     logging.warning("Mockserial not found, dummy devices will not work")
 
-from .base import PicoDevice, PicoRFSwitch, PicoPeltier
+from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoStatus
 from .motor import PicoMotor
 
 
+class MockRedis:
+    """Mock Redis client for testing purposes."""
+    def add_metadata(self, name, data):
+        pass
+
+
+def _get_mock_redis(eig_redis=None):
+    """Helper function to get a mock Redis instance if none provided."""
+    return eig_redis if eig_redis is not None else MockRedis()
+
+
 class DummyPicoDevice(PicoDevice):
+
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """
+        Initialize dummy device with optional eig_redis.
+        
+        For testing, eig_redis can be None since we don't actually upload data.
+        """
+        super().__init__(port, _get_mock_redis(eig_redis), **kwargs)
 
     def connect(self):
         self.ser = mockserial.MockSerial()
@@ -27,6 +46,11 @@ class DummyPicoDevice(PicoDevice):
 
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy motor with optional eig_redis."""
+        # Call PicoMotor's __init__ which will handle the rest
+        PicoMotor.__init__(self, port, _get_mock_redis(eig_redis), **kwargs)
+    
     def wait_for_updates(self, timeout=10):
         """Override to provide immediate dummy status for tests."""
         self.status = {
@@ -40,10 +64,18 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
 
 
 class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
-    pass
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy RF switch with optional eig_redis."""
+        # Use DummyPicoDevice's __init__ which handles mock redis
+        DummyPicoDevice.__init__(self, port, eig_redis, **kwargs)
 
 
 class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy Peltier with optional eig_redis."""
+        # Call PicoPeltier's parent (PicoStatus) __init__ which will handle the rest
+        PicoStatus.__init__(self, port, _get_mock_redis(eig_redis), **kwargs)
+    
     def wait_for_updates(self, timeout=3):
         """Override to provide immediate dummy status for tests."""
         self.status = {
