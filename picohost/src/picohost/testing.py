@@ -66,10 +66,25 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
 
 
 class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
-    pass
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy RF switch with optional eig_redis."""
+        # Use DummyPicoDevice's __init__ which handles mock redis
+        DummyPicoDevice.__init__(self, port, eig_redis, **kwargs)
 
 
 class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy Peltier with optional eig_redis."""
+        # Create a mock redis if none provided
+        if eig_redis is None:
+            class MockRedis:
+                def add_metadata(self, name, data):
+                    pass
+            eig_redis = MockRedis()
+        # Call PicoPeltier's parent (PicoStatus) __init__ which will handle the rest
+        from .base import PicoStatus
+        PicoStatus.__init__(self, port, eig_redis, **kwargs)
+    
     def wait_for_updates(self, timeout=3):
         """Override to provide immediate dummy status for tests."""
         self.status = {
