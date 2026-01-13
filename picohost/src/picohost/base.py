@@ -34,6 +34,7 @@ def redis_handler(redis):
         Function that takes a data dictionary and uploads it to Redis.
 
     """
+
     def handler(data):
         try:
             name = data["sensor_name"]
@@ -52,22 +53,33 @@ class PicoDevice:
 
     def __init__(
         self,
-        port: str,
-        baudrate: int = 115200,
-        timeout: float = 5.0,
+        port,
+        eig_redis,
+        baudrate=115200,
+        timeout=5.0,
         name=None,
-        eig_redis=None,
         response_handler=None,
     ):
         """
-        Initialize a Pico device connection.
+        Initialize a Pico device connection. Reads data and uploads to
+        Redis.
 
-        Args:
-            port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
-            baudrate: Serial baud rate (default: 115200)
-            timeout: Serial read timeout in seconds (default: 1.0)
-            name: str
-            eig_redis: EigsepRedis instance
+        Parameters
+        ----------
+        port : str
+            Serial port device (e.g., '/dev/ttyACM0' or 'COM3').
+        eig_redis : EigsepRedis
+            Custom EIGSEP Redis client instance used to store device data.
+        baudrate : int, optional
+            Serial baud rate. Defaults to 115200.
+        timeout : float, optional
+            Serial read timeout in seconds. Defaults to 5.0.
+        name : str, optional
+            Logical name for this Pico device. If not provided, derived from
+            the serial port identifier.
+        response_handler : Callable, optional
+            Optional callable to handle responses from the device. If
+            provided, it will be registered as the response handler.
         """
         self.logger = logger
         self.port = port
@@ -85,10 +97,7 @@ class PicoDevice:
             self.name = name
 
         self.connect()
-        if eig_redis is not None:
-            self.redis_handler = redis_handler(eig_redis)
-        else:
-            self.redis_handler = None
+        self.redis_handler = redis_handler(eig_redis)
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
@@ -212,7 +221,7 @@ class PicoDevice:
                     if self._response_handler:
                         self._response_handler(data)
                     # else:
-                        # Default: print the response
+                    # Default: print the response
                     #    print(json.dumps(data))
                 # Call raw handler on non-json if set
                 elif self._raw_handler:
@@ -297,7 +306,6 @@ class PicoDevice:
         self.disconnect()
 
 
-
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
@@ -371,15 +379,13 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
+
 class PicoStatus(PicoDevice):
     """Adds status monitoring to PicoDevice."""
-    def __init__(
-        self, port, verbose=False, timeout=5., name="", eig_redis=None
-    ):
-        """ kwargs passed to super()"""
-        super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
-        )
+
+    def __init__(self, port, eig_redis, verbose=False, timeout=5.0, name=""):
+        """kwargs passed to super()"""
+        super().__init__(port, eig_redis, timeout=timeout, name=name)
         self.verbose = verbose
         self.status = {}
         self.set_response_handler(self.update_status)
@@ -399,6 +405,7 @@ class PicoStatus(PicoDevice):
             assert time.time() - t < timeout
             time.sleep(0.1)
 
+
 class PicoPeltier(PicoStatus):
     """Specialized class for Peltier temperature control Pico devices."""
 
@@ -406,16 +413,16 @@ class PicoPeltier(PicoStatus):
         """Set target temperature."""
         cmd = {}
         if T_A is not None:
-            cmd['A_temp_target'] = T_A
-            cmd['A_hysteresis'] = A_hyst
+            cmd["A_temp_target"] = T_A
+            cmd["A_hysteresis"] = A_hyst
         if T_B is not None:
-            cmd['B_temp_target'] = T_B
-            cmd['B_hysteresis'] = B_hyst
+            cmd["B_temp_target"] = T_B
+            cmd["B_hysteresis"] = B_hyst
         return self.send_command(cmd)
 
     def set_enable(self, A=True, B=True):
         """Enable temperature control."""
-        return self.send_command({'A_enable': A, 'B_enable': B})
+        return self.send_command({"A_enable": A, "B_enable": B})
 
 
 class PicoIMU(PicoDevice):

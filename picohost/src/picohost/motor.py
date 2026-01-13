@@ -15,9 +15,26 @@ from .base import PicoDevice, logger, redis_handler
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
-    #XXX this ignores several args from base class
-    def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
-        super().__init__(port)
+    def __init__(self, port, eig_redis, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
+        """
+        Initialize a motor control Pico device.
+
+        Parameters
+        ----------
+        port : str
+            Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
+        eig_redis : EigsepRedis
+            Redis client instance for uploading motor data
+        step_angle_deg : float, optional
+            Motor step angle in degrees (default: 1.8)
+        gear_teeth : int, optional
+            Number of teeth on the gear (default: 113)
+        microstep : int, optional
+            Microstep setting (default: 1)
+        verbose : bool, optional
+            Enable verbose output (default: False)
+        """
+        super().__init__(port, eig_redis)
         self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
