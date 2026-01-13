@@ -48,8 +48,8 @@ class DummyPicoDevice(PicoDevice):
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
     def __init__(self, port, eig_redis=None, **kwargs):
         """Initialize dummy motor with optional eig_redis."""
-        # Call PicoMotor's __init__ which will handle the rest
-        PicoMotor.__init__(self, port, _get_mock_redis(eig_redis), **kwargs)
+        # Use cooperative initialization to ensure DummyPicoDevice logic is applied
+        super().__init__(port, eig_redis, **kwargs)
     
     def wait_for_updates(self, timeout=10):
         """Override to provide immediate dummy status for tests."""
