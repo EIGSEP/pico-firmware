@@ -65,7 +65,7 @@ def main():
         last_status = r.get_live_metadata(keys='motor')
     except(KeyError):
         last_status = None
-    c = PicoMotor(port, verbose=True)
+    c = PicoMotor(port, r, verbose=True)
     #zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
     #if zeroed and (last_status is not None):
     #    print('Resetting to last known position.')

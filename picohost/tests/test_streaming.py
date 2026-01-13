@@ -2,7 +2,7 @@
 Tests for streaming data handling.
 """
 
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from mockserial import MockSerial
 from picohost import PicoDevice
 
@@ -17,7 +17,8 @@ class TestStreamingData:
         mock_serial_instance.add_peer(peer)
         mock_serial.return_value = mock_serial_instance
 
-        device = PicoDevice("/dev/ttyACM0")
+        mock_redis = MagicMock()
+        device = PicoDevice("/dev/ttyACM0", mock_redis)
         device.connect()
 
         # Simulate data coming from peer
@@ -33,7 +34,8 @@ class TestStreamingData:
         mock_serial_instance.add_peer(MockSerial())
         mock_serial.return_value = mock_serial_instance
 
-        device = PicoDevice("/dev/ttyACM0")
+        mock_redis = MagicMock()
+        device = PicoDevice("/dev/ttyACM0", mock_redis)
         device.connect()
 
         # Test valid JSON
@@ -47,7 +49,8 @@ class TestStreamingData:
         mock_serial_instance.add_peer(MockSerial())
         mock_serial.return_value = mock_serial_instance
 
-        device = PicoDevice("/dev/ttyACM0")
+        mock_redis = MagicMock()
+        device = PicoDevice("/dev/ttyACM0", mock_redis)
         device.connect()
 
         # Test invalid JSON
@@ -62,7 +65,8 @@ class TestStreamingData:
         mock_serial_instance.timeout = 0.1
         mock_serial.return_value = mock_serial_instance
 
-        device = PicoDevice("/dev/ttyACM0")
+        mock_redis = MagicMock()
+        device = PicoDevice("/dev/ttyACM0", mock_redis)
         device.connect()
 
         # No data written to peer, should return None

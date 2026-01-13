@@ -39,9 +39,9 @@ def main(screen):
                 break
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
+    r = EigsepRedis()
 
-
-    c = PicoMotor(port, verbose=True)
+    c = PicoMotor(port, r, verbose=True)
     c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
 
     def move_up(deg): c.el_move_deg(deg, wait_for_stop=True)

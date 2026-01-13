@@ -2,6 +2,7 @@ from argparse import ArgumentParser
 import json
 import time
 import queue
+from eigsep_observing import EigsepRedis
 from picohost import PicoIMU
 
 parser = ArgumentParser(
@@ -41,8 +42,8 @@ def request_calibration(imu, name):
     else:
         print(f"Failed to send calibration request to {name}")
 
-imu1 = PicoIMU(args.port1)
-imu2 = PicoIMU(args.port2)
+imu1 = PicoIMU(args.port1, EigsepRedis())
+imu2 = PicoIMU(args.port2, EigsepRedis())
 
 imu1.set_response_handler(make_callback(1))
 imu2.set_response_handler(make_callback(2))

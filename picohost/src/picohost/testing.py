@@ -11,6 +11,21 @@ from .motor import PicoMotor
 
 class DummyPicoDevice(PicoDevice):
 
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """
+        Initialize dummy device with optional eig_redis.
+        
+        For testing, eig_redis can be None since we don't actually upload data.
+        """
+        # Create a mock redis handler if none provided
+        if eig_redis is None:
+            # Create a no-op mock redis object
+            class MockRedis:
+                def add_metadata(self, name, data):
+                    pass
+            eig_redis = MockRedis()
+        super().__init__(port, eig_redis, **kwargs)
+
     def connect(self):
         self.ser = mockserial.MockSerial()
         # MockSerial needs a peer to be considered "open"
@@ -27,6 +42,17 @@ class DummyPicoDevice(PicoDevice):
 
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
+    def __init__(self, port, eig_redis=None, **kwargs):
+        """Initialize dummy motor with optional eig_redis."""
+        # Create a mock redis if none provided
+        if eig_redis is None:
+            class MockRedis:
+                def add_metadata(self, name, data):
+                    pass
+            eig_redis = MockRedis()
+        # Call PicoMotor's __init__ which will handle the rest
+        PicoMotor.__init__(self, port, eig_redis, **kwargs)
+    
     def wait_for_updates(self, timeout=10):
         """Override to provide immediate dummy status for tests."""
         self.status = {
