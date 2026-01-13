@@ -50,7 +50,6 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
         """Initialize dummy motor with optional eig_redis."""
         # Use cooperative initialization to ensure DummyPicoDevice logic is applied
         super().__init__(port, eig_redis, **kwargs)
-    
     def wait_for_updates(self, timeout=10):
         """Override to provide immediate dummy status for tests."""
         self.status = {
