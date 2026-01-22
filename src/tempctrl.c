@@ -53,7 +53,7 @@ void init_single_tempctrl(TempControl *tempctrl,
 
 void tempctrl_init(uint8_t app_id) {
     pwm_config config = pwm_get_default_config();
-    pwm_config_set_clkdiv(&config, 50.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1))
+    pwm_config_set_clkdiv(&config, 145.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1)), system_clock = 150 MHz default
     pwm_config_set_wrap(&config, PWM_WRAP);
     init_single_tempctrl(&tempctrlA, PELTIER1_DIR_PIN1, PELTIER1_DIR_PIN2,
             PELTIER1_PWM_PIN, &config, TEMP_SENSOR1_PIN, pio0);
