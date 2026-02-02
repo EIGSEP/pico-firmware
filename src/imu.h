@@ -19,8 +19,8 @@
 #define SAMPLE_PERIOD     300      /* ms */
 #define IMU_ADDR          0x4A
 
-#define IMU_SDA_GPIO     0
-#define IMU_SCL_GPIO     1
+#define IMU_SDA_GPIO     16 
+#define IMU_SCL_GPIO     17
 #define IMU_RST_GPIO     13
 #define IMU_I2C          i2c0
 
