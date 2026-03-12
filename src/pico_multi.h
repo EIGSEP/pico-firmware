@@ -4,9 +4,9 @@
 #include "eigsep_command.h"
 
 // DIP switch GPIO pins
-#define DIP0_PIN 2
-#define DIP1_PIN 3
-#define DIP2_PIN 4
+#define DIP0_PIN 20 
+#define DIP1_PIN 21 
+#define DIP2_PIN 22 
 
 // LED GPIO pin
 #define LED_PIN PICO_DEFAULT_LED_PIN

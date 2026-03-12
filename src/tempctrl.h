@@ -10,13 +10,13 @@
 #include "temp_simple.h"
 
 // Temperature Control 1 configuration
-#define TEMP_SENSOR1_PIN    21  // thermistor data pin
+#define TEMP_SENSOR1_PIN    26  // thermistor data pin
 #define PELTIER1_PWM_PIN    8 // enable1
 #define PELTIER1_DIR_PIN1   10  // in1
 #define PELTIER1_DIR_PIN2   12  // in2
 
 // Temperature Control 2 configuration
-#define TEMP_SENSOR2_PIN    22
+#define TEMP_SENSOR2_PIN    27
 #define PELTIER2_PWM_PIN    9 // enable2
 #define PELTIER2_DIR_PIN3   11  // in3
 #define PELTIER2_DIR_PIN4   13  // in4
