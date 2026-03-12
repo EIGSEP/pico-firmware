@@ -9,7 +9,7 @@
 #include "motor.h"
 #include "rfswitch.h"
 #include "tempctrl.h"
-#include "tempmon.h"
+#include "potmon.h"
 #include "imu.h"
 #include "lidar.h"
 
@@ -59,10 +59,9 @@ int main(void) {
     // Run app-dependent initialization
     switch (app_id) {
         case APP_MOTOR: motor_init(app_id); break;
-        case APP_RFSWITCH: imu_init(app_id); rfswitch_init(app_id); break;
-        //case APP_RFSWITCH: imu_init(app_id); break;
+        case APP_RFSWITCH: rfswitch_init(app_id); break;
         case APP_TEMPCTRL: tempctrl_init(app_id); break;
-        case APP_TEMPMON: tempmon_init(app_id); break;
+        case APP_POTMON: potmon_init(app_id); break;
         case APP_IMU: imu_init(app_id); break;
         case APP_LIDAR: lidar_init(app_id); break;
         default: break;
@@ -79,10 +78,9 @@ int main(void) {
                 // Dispatch command to appropriate app
                 switch (app_id) {
                     case APP_MOTOR: motor_server(app_id, line); break;
-                    case APP_RFSWITCH: imu_server(app_id, line); rfswitch_server(app_id, line); break;
-                    //case APP_RFSWITCH: imu_server(app_id, line); break;
+                    case APP_RFSWITCH: rfswitch_server(app_id, line); break;
                     case APP_TEMPCTRL: tempctrl_server(app_id, line); break;
-                    case APP_TEMPMON: tempmon_server(app_id, line); break;
+                    case APP_POTMON: potmon_server(app_id, line); break;
                     case APP_IMU: imu_server(app_id, line); break;
                     case APP_LIDAR: lidar_server(app_id, line); break;
                     default:
@@ -104,10 +102,9 @@ int main(void) {
         // Perform every-loop operations
         switch (app_id) {
             case APP_MOTOR: motor_op(app_id); break;
-            case APP_RFSWITCH: imu_op(app_id); rfswitch_op(app_id); break;
-            //case APP_RFSWITCH: imu_op(app_id); break;
+            case APP_RFSWITCH: rfswitch_op(app_id); break;
             case APP_TEMPCTRL: tempctrl_op(app_id); break;
-            case APP_TEMPMON: tempmon_op(app_id); break;
+            case APP_POTMON: potmon_op(app_id); break;
             case APP_IMU: imu_op(app_id); break;
             case APP_LIDAR: lidar_op(app_id); break;
             default:
@@ -120,10 +117,9 @@ int main(void) {
             led_state = !led_state;
             switch (app_id) {
                 case APP_MOTOR: motor_status(app_id); break;
-                case APP_RFSWITCH: imu_status(app_id); rfswitch_status(app_id); break;
-                //case APP_RFSWITCH: imu_status(app_id); break;
+                case APP_RFSWITCH: rfswitch_status(app_id); break;
                 case APP_TEMPCTRL: tempctrl_status(app_id); break;
-                case APP_TEMPMON: tempmon_status(app_id); break;
+                case APP_POTMON: potmon_status(app_id); break;
                 case APP_IMU: imu_status(app_id); break;
                 case APP_LIDAR: lidar_status(app_id); break;
                 default:
