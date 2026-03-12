@@ -5,7 +5,7 @@ try:
 except ImportError:
     logging.warning("Mockserial not found, dummy devices will not work")
 
-from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoIMU
+from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoIMU, PicoPotentiometer
 from .motor import PicoMotor
 from .emulators import (
     MotorEmulator,
@@ -13,6 +13,7 @@ from .emulators import (
     TempMonEmulator,
     ImuEmulator,
     LidarEmulator,
+    PotMonEmulator,
     RFSwitchWithImuEmulator,
 )
 
@@ -82,4 +83,9 @@ class DummyPicoTempMon(DummyPicoDevice):
 
 class DummyPicoLidar(DummyPicoDevice):
     EMULATOR_CLASS = LidarEmulator
+    EMULATOR_CADENCE_MS = 50.0
+
+
+class DummyPicoPotentiometer(DummyPicoDevice, PicoPotentiometer):
+    EMULATOR_CLASS = PotMonEmulator
     EMULATOR_CADENCE_MS = 50.0

@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+import numpy as np
 from typing import Dict, Any, Optional, Callable
 from serial import Serial
 from serial.tools import list_ports
@@ -515,3 +516,125 @@ class PicoIMU(PicoDevice):
             True if command sent successfully
         """
         return self.send_command({"calibrate": True})
+
+class PicoPotentiometer(PicoDevice):
+    """Potentiometer monitoring device with voltage-to-angle calibration."""
+
+    def __init__(
+        self,
+        port,
+        calibration_file=None,
+        timeout=5.,
+        name=None,
+        eig_redis=None,
+    ):
+        """
+        Parameters
+        ----------
+        port : str
+            Serial port device.
+        calibration_file : str, optional
+            Path to a JSON calibration file. If provided, calibration
+            parameters are loaded at init.
+        timeout : float
+            Serial read timeout in seconds (default: 5.0).
+        name : str, optional
+        eig_redis : EigsepRedis, optional
+            EigsepRedis response handler (default: None).
+        """
+        self._cal = {"pot0": None, "pot1": None}
+        super().__init__(
+            port, timeout=timeout, name=name, eig_redis=eig_redis,
+        )
+        if calibration_file is not None:
+            self.load_calibration(calibration_file)
+        # Wrap the base redis handler to convert voltages to angles
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._pot_redis_handler
+
+    def _pot_redis_handler(self, data):
+        """Add angle fields (or None if uncalibrated) before uploading to Redis."""
+        data = data.copy()
+        for key in ("pot0", "pot1"):
+            cal = self._cal[key]
+            v = data.get(f"{key}_voltage")
+            data[f"{key}_cal"] = list(cal) if cal is not None else None
+            if cal is not None and v is not None:
+                m, b = cal
+                data[f"{key}_angle"] = m * v + b
+            else:
+                data[f"{key}_angle"] = None
+        self._base_redis_handler(data)
+
+    def set_calibration(self, pot0_params=None, pot1_params=None):
+        """Set calibration parameters (m, b) for one or both pots.
+
+        Parameters
+        ----------
+        pot0_params : tuple of (float, float), optional
+            (slope, intercept) such that angle = m * voltage + b.
+        pot1_params : tuple of (float, float), optional
+        """
+        if pot0_params is not None:
+            self._cal["pot0"] = tuple(pot0_params)
+        if pot1_params is not None:
+            self._cal["pot1"] = tuple(pot1_params)
+
+    def load_calibration(self, path):
+        """Load calibration from a JSON file.
+
+        Expected format: ``{"pot0": [m, b], "pot1": [m, b], ...}``
+        """
+        with open(path, "r") as f:
+            cal_data = json.load(f)
+        if "pot0" in cal_data:
+            self._cal["pot0"] = tuple(cal_data["pot0"])
+        if "pot1" in cal_data:
+            self._cal["pot1"] = tuple(cal_data["pot1"])
+
+    @property
+    def is_calibrated(self):
+        """True if both pots have calibration parameters."""
+        return self._cal["pot0"] is not None and self._cal["pot1"] is not None
+
+    def read_voltage(self):
+        """Return the latest voltage readings.
+
+        Returns
+        -------
+        dict
+            ``{"pot0_voltage": float, "pot1_voltage": float}``
+        """
+        return {
+            "pot0_voltage": self.last_status.get("pot0_voltage"),
+            "pot1_voltage": self.last_status.get("pot1_voltage"),
+        }
+
+    def read_angle(self):
+        """Convert current voltage readings to angles using calibration.
+
+        Returns
+        -------
+        dict
+            ``{"pot0": float, "pot1": float}`` in degrees.
+
+        Raises
+        ------
+        RuntimeError
+            If calibration has not been set or voltage data is missing.
+        """
+        result = {}
+        for key in ("pot0", "pot1"):
+            v = self.last_status.get(f"{key}_voltage")
+            if v is None:
+                raise RuntimeError(f"No voltage reading for {key}")
+            cal = self._cal[key]
+            if cal is None:
+                raise RuntimeError(
+                    f"No calibration for {key}. "
+                    "Call load_calibration() or set_calibration() first."
+                )
+            m, b = cal
+            result[key] = m * v + b
+        return result
