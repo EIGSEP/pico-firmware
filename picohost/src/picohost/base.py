@@ -441,3 +441,49 @@ class PicoIMU(PicoDevice):
             True if command sent successfully
         """
         return self.send_command({"cmd": "calibrate"})
+
+class PicoPotentiometer(PicoDevice):
+    '''A class for calibrating and calculating angles.'''
+
+    def __init__():
+        self.cal0_values = (0,0) #Need to change these to a default that makes sense
+        self.cal1_values = (0,0) #Need to change these to a default that makes sense
+
+    def calibrate():
+        input("Spin the potentiometers to minimum.") #CW or CCW?
+        zero0 = self.last_status['pot0_resistance']
+        zero1 = self.last_status['pot1_resistance']
+
+        input('Spin the potentiometers to maximum.') #CW or CCW?
+        full0 = self.last_status['pot0_resistance']
+        full1 = self.last_status['pot1_resistance']
+        
+        #fit to linear, IDK how many rotations this pot does
+        self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, 3600]))
+        self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, 3600]))
+ 
+
+    def _calibrate(xs, ys):
+        A= np.array([xs, [1,1]]).T
+        ys = np.array(ys)
+
+        m, b = np.linalg.inv(A) @ ys
+        
+        return (m, b)
+
+    def read_angle():
+        last_status = self.last_status
+        res0 = last_status['pot0_resistance']
+        res1 = last_status['pot1_resistance']
+        
+        angle0 = self._calc_angle(res0, self.cal0_values)
+        angle1 = self._calc_angle(res1, self.cal1_values)
+
+        return {"pot0":angle0, "pot1":angle1}
+
+    def _calc_angle(res, params):
+        m, b = params
+        return m*res + b
+    
+
+
