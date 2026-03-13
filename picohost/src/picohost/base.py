@@ -448,8 +448,10 @@ class PicoPotentiometer(PicoDevice):
 
     def __init__( self, port, verbose=False, timeout=5., name="", eig_redis=None): 
         super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
+            port, timeout=timeout, name=name, eig_redis=eig_redis, turns=10
         )
+        self.turns = turns
+        self.degrees = 360*turns
 
         self.cal0_values = (0.4,-8.) #Need to change these to a default that makes sense
         self.cal1_values = (0.4,-8.) #Need to change these to a default that makes sense
@@ -464,8 +466,8 @@ class PicoPotentiometer(PicoDevice):
         full1 = self.last_status['pot1_resistance']
         
         #fit to linear, IDK how many rotations this pot does
-        self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, 3600])
-        #self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, 3600])
+        self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, self.degrees])
+        #self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, self.degrees])
  
 
     def _calibrate(self, xs, ys):
