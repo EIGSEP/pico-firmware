@@ -49,7 +49,7 @@ class DummyPicoDevice(PicoDevice):
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
     def __init__(self, port, eig_redis=None, **kwargs):
         """Initialize dummy motor with optional eig_redis."""
-        super().__init__(port, _get_mock_redis(eig_redis), **kwargs)
+        super().__init__(port, eig_redis, **kwargs)
 
     def wait_for_updates(self, timeout=10):
         """Override to provide immediate dummy status for tests."""
@@ -64,15 +64,10 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
 
 
 class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
-    def __init__(self, port, eig_redis=None, **kwargs):
-        """Initialize dummy RF switch with optional eig_redis."""
-        super().__init__(port, _get_mock_redis(eig_redis), **kwargs)
+    pass
 
 
 class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
-    def __init__(self, port, eig_redis=None, **kwargs):
-        """Initialize dummy Peltier with optional eig_redis."""
-        super().__init__(port, _get_mock_redis(eig_redis), **kwargs)
 
     def wait_for_updates(self, timeout=3):
         """Override to provide immediate dummy status for tests."""
