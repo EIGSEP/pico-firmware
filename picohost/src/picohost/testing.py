@@ -1,4 +1,3 @@
-import json
 import logging
 
 try:
@@ -6,7 +5,9 @@ try:
 except ImportError:
     logging.warning("Mockserial not found, dummy devices will not work")
 
-from .base import PicoDevice, PicoRFSwitch, PicoPeltier
+from .base import (
+    PicoDevice, PicoRFSwitch, PicoPeltier, PicoTherm, PicoLidar,
+)
 from .motor import PicoMotor
 
 
@@ -140,15 +141,29 @@ class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
         }
 
 
+class DummyPicoTherm(DummyPicoDevice, PicoTherm):
+
+    def wait_for_updates(self, timeout=3):
+        """Override to provide immediate dummy status for tests."""
+        self.status = {"sensor_name": "therm"}
+
+
+class DummyPicoLidar(DummyPicoDevice, PicoLidar):
+
+    def wait_for_updates(self, timeout=3):
+        """Override to provide immediate dummy status for tests."""
+        self.status = {"sensor_name": "lidar"}
+
+
 # --- PicoManager testing support ---
 
 # Dummy class mapping (mirrors PICO_CLASSES in manager.py)
 DUMMY_PICO_CLASSES = {
     "motor": DummyPicoMotor,
     "imu": DummyPicoDevice,
-    "therm": DummyPicoDevice,
+    "therm": DummyPicoTherm,
     "peltier": DummyPicoPeltier,
-    "lidar": DummyPicoDevice,
+    "lidar": DummyPicoLidar,
     "switch": DummyPicoRFSwitch,
 }
 
@@ -156,30 +171,36 @@ DUMMY_PICO_CLASSES = {
 class DummyPicoManager:
     """PicoManager replacement using dummy devices for testing.
 
-    Provides the same command-processing interface as PicoManager
-    without real serial ports or Redis. Use add_dummy_device() to
+    Inherits command processing logic from PicoManager but does not
+    start threads or read config files. Use add_dummy_device() to
     register devices manually.
     """
 
     def __init__(self, eig_redis=None):
-        from .manager import PICOS_SET
+        from .manager import PicoManager
 
-        self.eig_redis = _get_mock_redis(eig_redis)
-        self.picos = {}
+        self._mgr = PicoManager.__new__(PicoManager)
+        self._mgr.eig_redis = _get_mock_redis(eig_redis)
+        self._mgr.picos = {}
+        self._mgr._running = False
+        self._mgr._health_thread = None
+        self._mgr._cmd_thread = None
+        self._mgr.logger = logging.getLogger(__name__)
+        self._mgr.config_file = None
+
+        # Expose same attributes for test access
+        self.eig_redis = self._mgr.eig_redis
+        self.picos = self._mgr.picos
         self._running = False
-        self.logger = logging.getLogger(__name__)
-        self._picos_set_key = PICOS_SET
+        self.logger = self._mgr.logger
 
     def _redis(self):
-        if hasattr(self.eig_redis, "r"):
-            return self.eig_redis.r
-        return self.eig_redis
+        return self._mgr._redis()
 
     @staticmethod
     def _decode(value):
-        if isinstance(value, bytes):
-            return value.decode("utf-8")
-        return str(value) if value is not None else ""
+        from .manager import PicoManager
+        return PicoManager._decode(value)
 
     def add_dummy_device(self, name):
         """Add a dummy pico device by name.
@@ -194,6 +215,8 @@ class DummyPicoManager:
         PicoDevice
             The instantiated dummy device.
         """
+        from .manager import PICOS_SET
+
         cls = DUMMY_PICO_CLASSES.get(name, DummyPicoDevice)
         pico = cls(
             port=f"/dev/dummy_{name}",
@@ -202,118 +225,29 @@ class DummyPicoManager:
         )
         self.picos[name] = pico
         r = self._redis()
-        r.sadd(self._picos_set_key, name)
+        r.sadd(PICOS_SET, name)
         return pico
 
     def discover(self):
         pass
 
+    # Delegate command processing to real PicoManager methods
     def _process_command(self, r, msg_id, fields):
-        """Process a command (delegates to manager module logic)."""
-        from .manager import (
-            RESP_STREAM, CLAIM_TTL, _BLOCKED_ACTIONS,
-        )
-        f = {
-            self._decode(k): self._decode(v)
-            for k, v in fields.items()
-        }
-        target = f.get("target", "")
-        source = f.get("source", "unknown")
-        cmd_raw = f.get("cmd", "{}")
-
-        try:
-            cmd = json.loads(cmd_raw)
-        except json.JSONDecodeError:
-            r.xadd(RESP_STREAM, {
-                "target": target,
-                "status": "error",
-                "data": json.dumps({"error": "invalid JSON"}),
-            })
-            return
-
-        pico = self.picos.get(target)
-        if pico is None:
-            r.xadd(RESP_STREAM, {
-                "target": target,
-                "status": "error",
-                "data": json.dumps(
-                    {"error": f"unknown target: {target}"}
-                ),
-            })
-            return
-
-        resp = {"target": target, "source": source}
-        claim_key = f"pico_claim:{target}"
-        current_owner = r.get(claim_key)
-        if current_owner is not None:
-            current_owner = self._decode(current_owner)
-            if current_owner != source:
-                resp["warning"] = (
-                    f"overriding claim by {current_owner}"
-                )
-
-        action = cmd.get("action")
-        if action == "claim":
-            ttl = cmd.get("ttl", CLAIM_TTL)
-            r.set(claim_key, source, ex=int(ttl))
-            resp.update({
-                "status": "ok",
-                "data": json.dumps(
-                    {"claimed": target, "ttl": ttl}
-                ),
-            })
-            r.xadd(RESP_STREAM, resp)
-            return
-        if action == "release":
-            r.delete(claim_key)
-            resp.update({
-                "status": "ok",
-                "data": json.dumps({"released": target}),
-            })
-            r.xadd(RESP_STREAM, resp)
-            return
-
-        try:
-            result = self._route_command(pico, target, cmd)
-            resp.update({
-                "status": "ok",
-                "data": json.dumps(
-                    result if result is not None else {}
-                ),
-            })
-        except Exception as e:
-            resp.update({
-                "status": "error",
-                "data": json.dumps({"error": str(e)}),
-            })
-        r.xadd(RESP_STREAM, resp)
+        return self._mgr._process_command(r, msg_id, fields)
 
     def _route_command(self, pico, target, cmd):
-        from .manager import _BLOCKED_ACTIONS
+        return self._mgr._route_command(pico, target, cmd)
 
-        action = cmd.pop("action", None)
-        if action is None:
-            success = pico.send_command(cmd)
-            if not success:
-                raise RuntimeError("send_command failed")
-            return {"sent": True}
-
-        if action in _BLOCKED_ACTIONS or action.startswith("_"):
-            raise ValueError(f"Action '{action}' is not allowed")
-
-        method = getattr(pico, action, None)
-        if method is None or not callable(method):
-            raise ValueError(
-                f"Unknown action '{action}' for {target}"
-            )
-        result = method(**cmd)
-        return {"action": action, "result": result}
+    def _check_health(self):
+        return self._mgr._check_health()
 
     def start(self):
         self._running = True
+        self._mgr._running = True
 
     def stop(self):
         self._running = False
+        self._mgr._running = False
         for pico in self.picos.values():
             try:
                 pico.disconnect()

@@ -154,6 +154,8 @@ class PicoDevice:
     def reconnect(self) -> bool:
         """
         Disconnect and reconnect to the device.
+        Calls on_reconnect() after a successful reconnection to allow
+        subclasses to re-send configuration.
 
         Returns:
             True if reconnection successful, False otherwise
@@ -161,8 +163,14 @@ class PicoDevice:
         self.disconnect()
         if self.connect():
             self.start()
+            self.on_reconnect()
             return True
         return False
+
+    def on_reconnect(self):
+        """Called after successful reconnect. Override in subclasses
+        to re-send configuration (e.g. motor delay settings)."""
+        pass
 
     def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
         """
@@ -398,13 +406,34 @@ class PicoRFSwitch(PicoDevice):
 class PicoStatus(PicoDevice):
     """Adds status monitoring to PicoDevice."""
 
-    def __init__(self, port, eig_redis, verbose=False, timeout=5.0, name=""):
-        """kwargs passed to super()"""
+    def __init__(
+        self, port, eig_redis, verbose=False, timeout=5.0,
+        name=None, auto_wait=True,
+    ):
+        """
+        Parameters
+        ----------
+        port : str
+            Serial port device.
+        eig_redis : EigsepRedis
+            Redis client instance.
+        verbose : bool, optional
+            Print status updates to stdout.
+        timeout : float, optional
+            Serial read timeout in seconds.
+        name : str, optional
+            Logical device name.
+        auto_wait : bool, optional
+            If True (default), block until the first status update
+            arrives. Set to False when a subclass needs to do setup
+            before waiting (e.g. PicoMotor calls set_delay() first).
+        """
         super().__init__(port, eig_redis, timeout=timeout, name=name)
         self.verbose = verbose
         self.status = {}
         self.set_response_handler(self.update_status)
-        self.wait_for_updates()
+        if auto_wait:
+            self.wait_for_updates()
 
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
@@ -413,11 +442,21 @@ class PicoStatus(PicoDevice):
         self.status.update(data)
 
     def wait_for_updates(self, timeout=3):
+        """Block until the first status update is received.
+
+        Raises
+        ------
+        TimeoutError
+            If no status is received within *timeout* seconds.
+        """
         t = time.time()
         while True:
             if len(self.status) != 0:
                 break
-            assert time.time() - t < timeout
+            if time.time() - t >= timeout:
+                raise TimeoutError(
+                    f"No status from {self.name} within {timeout}s"
+                )
             time.sleep(0.1)
 
 
@@ -456,10 +495,19 @@ class PicoIMU(PicoDevice):
         """
         Send request to calibrate IMU.
 
-        Args:
-            channel: Channel number (0=both, 1/2=individual)
-
         Returns:
             True if command sent successfully
         """
         return self.send_command({"cmd": "calibrate"})
+
+
+class PicoTherm(PicoStatus):
+    """Temperature monitoring device (app_id=2)."""
+
+    pass
+
+
+class PicoLidar(PicoStatus):
+    """Lidar sensor device (app_id=4)."""
+
+    pass

@@ -11,6 +11,8 @@ from picohost.testing import (
     DummyPicoRFSwitch,
     DummyPicoMotor,
     DummyPicoPeltier,
+    DummyPicoTherm,
+    DummyPicoLidar,
     MockRedis,
     DUMMY_PICO_CLASSES,
 )
@@ -367,3 +369,80 @@ class TestLifecycle:
         mgr.stop()
         assert switch.ser is None
         assert motor.ser is None
+
+
+class TestNewDeviceClasses:
+    """Test PicoTherm and PicoLidar dummy devices."""
+
+    def test_therm_device(self):
+        mgr = DummyPicoManager()
+        pico = mgr.add_dummy_device("therm")
+        assert isinstance(pico, DummyPicoTherm)
+        assert pico.is_connected
+        assert "sensor_name" in pico.status
+
+    def test_lidar_device(self):
+        mgr = DummyPicoManager()
+        pico = mgr.add_dummy_device("lidar")
+        assert isinstance(pico, DummyPicoLidar)
+        assert pico.is_connected
+        assert "sensor_name" in pico.status
+
+    def test_therm_raw_command(self):
+        mgr = DummyPicoManager()
+        pico = mgr.add_dummy_device("therm")
+        result = mgr._route_command(
+            pico, "therm", {"query": "temperature"}
+        )
+        assert result["sent"] is True
+
+    def test_lidar_raw_command(self):
+        mgr = DummyPicoManager()
+        pico = mgr.add_dummy_device("lidar")
+        result = mgr._route_command(
+            pico, "lidar", {"query": "distance"}
+        )
+        assert result["sent"] is True
+
+
+class TestMotorInheritance:
+    """Test PicoMotor inherits from PicoStatus correctly."""
+
+    def test_motor_has_status_methods(self):
+        motor = DummyPicoMotor("/dev/dummy")
+        assert hasattr(motor, "update_status")
+        assert hasattr(motor, "status")
+        assert hasattr(motor, "verbose")
+
+    def test_motor_on_reconnect(self):
+        """Test that on_reconnect re-sends set_delay."""
+        motor = DummyPicoMotor("/dev/dummy")
+        # Clear the write buffer
+        motor.ser.peer._read_buffer = bytearray()
+        motor.on_reconnect()
+        # set_delay should have written a command
+        sent = motor.ser.peer._read_buffer.decode("utf-8").strip()
+        assert "az_up_delay_us" in sent
+
+    def test_motor_reconnect_calls_hook(self):
+        """Test that reconnect() calls on_reconnect()."""
+        motor = DummyPicoMotor("/dev/dummy")
+        motor.ser.peer._read_buffer = bytearray()
+        motor.reconnect()
+        assert motor.is_connected
+        # on_reconnect should have sent set_delay
+        sent = motor.ser.peer._read_buffer.decode("utf-8").strip()
+        assert "az_up_delay_us" in sent
+
+
+class TestTimeoutError:
+    """Test that wait_for_updates raises TimeoutError, not AssertionError."""
+
+    def test_pico_status_timeout(self):
+        """PicoStatus.wait_for_updates should raise TimeoutError."""
+        from picohost.base import PicoStatus
+        # DummyPicoTherm inherits from PicoStatus so has .status
+        device = DummyPicoTherm("/dev/dummy")
+        device.status = {}  # clear the dummy status
+        with pytest.raises(TimeoutError, match="No status"):
+            PicoStatus.wait_for_updates(device, timeout=0.2)

@@ -23,6 +23,8 @@ from .base import (
     PicoStatus,
     PicoPeltier,
     PicoIMU,
+    PicoTherm,
+    PicoLidar,
 )
 from .motor import PicoMotor
 
@@ -45,9 +47,9 @@ APP_IDS = {v: k for k, v in APP_NAMES.items()}
 PICO_CLASSES = {
     "motor": PicoMotor,
     "imu": PicoIMU,
-    "therm": PicoDevice,
+    "therm": PicoTherm,
     "peltier": PicoPeltier,
-    "lidar": PicoDevice,
+    "lidar": PicoLidar,
     "switch": PicoRFSwitch,
 }
 
