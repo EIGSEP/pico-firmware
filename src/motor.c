@@ -177,6 +177,11 @@ void motor_status(uint8_t app_id) {
     );
 }
 
+// No communication watchdog needed for motor app:
+// stepper_op() calls stepper_disable() after every stepping batch, so the
+// driver enable pin is held HIGH (disabled) between calls. Once position
+// reaches target, nsteps=0 and the motor is idle with driver disabled.
+// Loss of host communication causes no continuous power draw or thermal risk.
 void motor_op(uint8_t app_id) {
 	// move the stepper motors max_move steps
     stepper_op(&elevation);

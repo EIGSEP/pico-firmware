@@ -400,7 +400,92 @@ class PicoStatus(PicoDevice):
             time.sleep(0.1)
 
 class PicoPeltier(PicoStatus):
-    """Specialized class for Peltier temperature control Pico devices."""
+    """Specialized class for Peltier temperature control Pico devices.
+
+    Sends periodic keepalive commands to prevent the firmware communication
+    watchdog from tripping and disabling the peltiers.
+    """
+
+    def __init__(
+        self,
+        port,
+        eig_redis,
+        verbose=False,
+        timeout=5.0,
+        name="",
+        keepalive_interval=10.0,
+    ):
+        """
+        Parameters
+        ----------
+        port : str
+            Serial port device.
+        eig_redis : EigsepRedis
+            Redis client instance.
+        verbose : bool, optional
+            Enable verbose output.
+        timeout : float, optional
+            Serial read timeout in seconds.
+        name : str, optional
+            Logical device name.
+        keepalive_interval : float, optional
+            Seconds between keepalive commands sent to the firmware.
+            Must be less than the firmware watchdog timeout (default 30s).
+            Set to 0 to disable keepalive. Default: 10.0.
+        """
+        self._keepalive_running = False
+        self._keepalive_thread = None
+        self._keepalive_interval = keepalive_interval
+        super().__init__(port, eig_redis, verbose=verbose, timeout=timeout, name=name)
+        self._start_keepalive()
+
+    def _start_keepalive(self):
+        """Start the background keepalive thread."""
+        if self._keepalive_interval > 0:
+            self._keepalive_running = True
+            self._keepalive_thread = threading.Thread(
+                target=self._keepalive_thread_func, daemon=True
+            )
+            self._keepalive_thread.start()
+
+    def _keepalive_thread_func(self):
+        """Send empty commands periodically to reset the firmware watchdog."""
+        while self._keepalive_running:
+            self.send_command({})
+            # Sleep in small increments so thread stops promptly
+            for _ in range(int(self._keepalive_interval * 10)):
+                if not self._keepalive_running:
+                    break
+                time.sleep(0.1)
+
+    def stop(self):
+        """Stop keepalive and reader threads."""
+        self._keepalive_running = False
+        if self._keepalive_thread:
+            self._keepalive_thread.join(timeout=2.0)
+            self._keepalive_thread = None
+        super().stop()
+
+    @property
+    def watchdog_tripped(self):
+        """Whether the firmware watchdog has tripped and disabled the peltiers."""
+        return self.status.get("watchdog_tripped", False)
+
+    def set_watchdog_timeout(self, timeout_ms):
+        """
+        Configure the firmware communication watchdog timeout.
+
+        Parameters
+        ----------
+        timeout_ms : int
+            Watchdog timeout in milliseconds. 0 disables the watchdog.
+
+        Returns
+        -------
+        bool
+            True if command sent successfully.
+        """
+        return self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
 
     def set_temperature(self, T_A=None, A_hyst=0.5, T_B=None, B_hyst=0.5):
         """Set target temperature."""
