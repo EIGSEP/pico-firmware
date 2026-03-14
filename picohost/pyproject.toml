@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 flash-picos = "picohost.flash_picos:main"
+pico-manager = "picohost.manager:main"
 
 [project.optional-dependencies]
 dev = [

@@ -91,6 +91,7 @@ class PicoDevice:
         self._response_handler = None
         self._raw_handler = None
         self.last_status = {}
+        self.last_status_time = None
         if name is None:
             self.name = port.split("/")[-1] if "/" in port else port
         else:
@@ -149,6 +150,19 @@ class PicoDevice:
         if self.is_connected:
             self.ser.close()
             self.ser = None
+
+    def reconnect(self) -> bool:
+        """
+        Disconnect and reconnect to the device.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        self.disconnect()
+        if self.connect():
+            self.start()
+            return True
+        return False
 
     def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
         """
@@ -214,6 +228,7 @@ class PicoDevice:
                 data = self.parse_response(line)
                 if data:  # is json
                     self.last_status = data
+                    self.last_status_time = time.time()
                     # upload to redis
                     if self.redis_handler:
                         self.redis_handler(data)

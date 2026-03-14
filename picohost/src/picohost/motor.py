@@ -15,7 +15,7 @@ from .base import PicoDevice, logger, redis_handler
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
-    def __init__(self, port, eig_redis, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
+    def __init__(self, port, eig_redis, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False, name=None):
         """
         Initialize a motor control Pico device.
 
@@ -33,8 +33,10 @@ class PicoMotor(PicoDevice):
             Microstep setting (default: 1)
         verbose : bool, optional
             Enable verbose output (default: False)
+        name : str, optional
+            Logical name for this device.
         """
-        super().__init__(port, eig_redis)
+        super().__init__(port, eig_redis, name=name)
         self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
