@@ -1,24 +1,37 @@
 """
-Base class for Pico device communication.
-Provides common functionality for serial communication with Pico devices.
+Motor control Pico device.
 """
 
-import json
-import logging
 import time
-import queue
 import numpy as np
-from typing import Dict, Any, Optional, Callable
-from .base import PicoDevice, logger, redis_handler
+from .base import PicoStatus
 
 
-class PicoMotor(PicoDevice):
+class PicoMotor(PicoStatus):
     """Specialized class for motor control Pico devices."""
 
-    #XXX this ignores several args from base class
-    def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
-        super().__init__(port)
-        self.verbose = verbose
+    def __init__(self, port, eig_redis, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False, name=None):
+        """
+        Initialize a motor control Pico device.
+
+        Parameters
+        ----------
+        port : str
+            Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
+        eig_redis : EigsepRedis
+            Redis client instance for uploading motor data
+        step_angle_deg : float, optional
+            Motor step angle in degrees (default: 1.8)
+        gear_teeth : int, optional
+            Number of teeth on the gear (default: 113)
+        microstep : int, optional
+            Microstep setting (default: 1)
+        verbose : bool, optional
+            Enable verbose output (default: False)
+        name : str, optional
+            Logical name for this device.
+        """
+        super().__init__(port, eig_redis, verbose=verbose, name=name, auto_wait=False)
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
         self.microstep = microstep
@@ -33,24 +46,16 @@ class PicoMotor(PicoDevice):
             'el_up_delay_us': int,
             'el_dn_delay_us': int,
         }
-        self.status = {}
-        self.set_response_handler(self.update_status)
         self.set_delay()
         self.wait_for_updates()
 
-    def update_status(self, data):
-        """Update internal status based on unpacked json packets from picos."""
-        if self.verbose:
-            print(json.dumps(data, indent=2, sort_keys=True))
-        self.status.update(data)
-
     def wait_for_updates(self, timeout=10):
-        t = time.time()
-        while True:
-            if len(self.status) != 0:
-                break
-            assert time.time() - t < timeout
-            time.sleep(0.1)
+        """Wait for status with motor-appropriate timeout."""
+        super().wait_for_updates(timeout=timeout)
+
+    def on_reconnect(self):
+        """Re-send motor delay configuration after reconnect."""
+        self.set_delay()
 
     def deg_to_steps(self, degrees: float) -> int:
         """Convert degrees to motor pulses."""
@@ -58,7 +63,7 @@ class PicoMotor(PicoDevice):
         return int(s * self.microstep * self.gear_teeth)
 
     def steps_to_deg(self, steps: int) -> float:
-        """Convert degrees to motor pulses."""
+        """Convert motor pulses to degrees."""
         s = steps / self.microstep / self.gear_teeth
         deg = s * self.step_angle_deg
         return float(deg)
@@ -72,7 +77,7 @@ class PicoMotor(PicoDevice):
                 raise ValueError(f"command {k} not in {self.commands}")
             cmd[k] = self.commands[k](v)
         self.send_command(cmd)
-        
+
     def reset_step_position(self, az_step=None, el_step=None):
         """Set az and el position to specified count."""
         cmd = {}
@@ -160,7 +165,7 @@ class PicoMotor(PicoDevice):
             print('Waiting for stop.')
         while self.is_moving():
             time.sleep(.1)
-        
+
     def scan(
         self,
         az_range_deg=np.arange(-180.0, 180.0, 5),
@@ -225,5 +230,3 @@ class PicoMotor(PicoDevice):
                     time.sleep(sleep_between)
         finally:
             self.stop()
-            
-

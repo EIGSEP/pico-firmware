@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "picohost"
-version = "0.0.2"
+version = "0.0.3"
 description = "Host control and management tools for Raspberry Pi Pico devices"
 readme = "README.md"
 license = {text = "MIT"}
@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 flash-picos = "picohost.flash_picos:main"
+pico-manager = "picohost.manager:main"
 
 [project.optional-dependencies]
 dev = [

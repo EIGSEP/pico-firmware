@@ -4,6 +4,7 @@ import sys
 from threading import Thread
 import time
 import queue
+from eigsep_observing import EigsepRedis
 from picohost import PicoDevice, PicoPeltier
 
 parser = ArgumentParser(description="Record temperature from Pico device")
@@ -19,7 +20,7 @@ args = parser.parse_args()
 temp_data = []
 
 
-t = PicoPeltier(args.port, verbose=True) # Control mode for Peltier
+t = PicoPeltier(args.port, EigsepRedis(), verbose=True) # Control mode for Peltier
 t.set_temperature(T_A=25, T_B=25)
 t.set_enable(A=True, B=True)
 try:

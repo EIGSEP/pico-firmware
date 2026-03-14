@@ -1,0 +1,14 @@
+[Unit]
+Description=EIGSEP Pico Manager
+After=redis.service
+Wants=redis.service
+
+[Service]
+ExecStart=/home/eigsep/venv/bin/python -m picohost.manager --config /home/eigsep/eigsep/pico-firmware/pico_config.json
+Restart=always
+RestartSec=5
+User=eigsep
+WorkingDirectory=/home/eigsep/eigsep/pico-firmware
+
+[Install]
+WantedBy=multi-user.target

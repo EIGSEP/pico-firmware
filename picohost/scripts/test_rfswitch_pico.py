@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+from eigsep_observing import EigsepRedis
 import picohost
 import time
 
@@ -19,7 +20,7 @@ def main():
     """
     Open the serial port, read until a valid JSON line appears or timeout.
     """
-    rfsw = picohost.PicoRFSwitch(sys.argv[-1])
+    rfsw = picohost.PicoRFSwitch(sys.argv[-1], EigsepRedis())
     for state in STATES:
         print(f"RF switch state: {state}")
         rfsw.switch(state)

@@ -34,6 +34,7 @@ def redis_handler(redis):
         Function that takes a data dictionary and uploads it to Redis.
 
     """
+
     def handler(data):
         try:
             name = data["sensor_name"]
@@ -52,22 +53,33 @@ class PicoDevice:
 
     def __init__(
         self,
-        port: str,
-        baudrate: int = 115200,
-        timeout: float = 5.0,
+        port,
+        eig_redis,
+        baudrate=115200,
+        timeout=5.0,
         name=None,
-        eig_redis=None,
         response_handler=None,
     ):
         """
-        Initialize a Pico device connection.
+        Initialize a Pico device connection. Reads data and uploads to
+        Redis.
 
-        Args:
-            port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
-            baudrate: Serial baud rate (default: 115200)
-            timeout: Serial read timeout in seconds (default: 1.0)
-            name: str
-            eig_redis: EigsepRedis instance
+        Parameters
+        ----------
+        port : str
+            Serial port device (e.g., '/dev/ttyACM0' or 'COM3').
+        eig_redis : EigsepRedis
+            Custom EIGSEP Redis client instance used to store device data.
+        baudrate : int, optional
+            Serial baud rate. Defaults to 115200.
+        timeout : float, optional
+            Serial read timeout in seconds. Defaults to 5.0.
+        name : str, optional
+            Logical name for this Pico device. If not provided, derived from
+            the serial port identifier.
+        response_handler : Callable, optional
+            Optional callable to handle responses from the device. If
+            provided, it will be registered as the response handler.
         """
         self.logger = logger
         self.port = port
@@ -79,16 +91,14 @@ class PicoDevice:
         self._response_handler = None
         self._raw_handler = None
         self.last_status = {}
+        self.last_status_time = None
         if name is None:
             self.name = port.split("/")[-1] if "/" in port else port
         else:
             self.name = name
 
         self.connect()
-        if eig_redis is not None:
-            self.redis_handler = redis_handler(eig_redis)
-        else:
-            self.redis_handler = None
+        self.redis_handler = redis_handler(eig_redis)
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
@@ -140,6 +150,27 @@ class PicoDevice:
         if self.is_connected:
             self.ser.close()
             self.ser = None
+
+    def reconnect(self) -> bool:
+        """
+        Disconnect and reconnect to the device.
+        Calls on_reconnect() after a successful reconnection to allow
+        subclasses to re-send configuration.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        self.disconnect()
+        if self.connect():
+            self.start()
+            self.on_reconnect()
+            return True
+        return False
+
+    def on_reconnect(self):
+        """Called after successful reconnect. Override in subclasses
+        to re-send configuration (e.g. motor delay settings)."""
+        pass
 
     def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
         """
@@ -205,6 +236,7 @@ class PicoDevice:
                 data = self.parse_response(line)
                 if data:  # is json
                     self.last_status = data
+                    self.last_status_time = time.time()
                     # upload to redis
                     if self.redis_handler:
                         self.redis_handler(data)
@@ -212,7 +244,7 @@ class PicoDevice:
                     if self._response_handler:
                         self._response_handler(data)
                     # else:
-                        # Default: print the response
+                    # Default: print the response
                     #    print(json.dumps(data))
                 # Call raw handler on non-json if set
                 elif self._raw_handler:
@@ -297,7 +329,6 @@ class PicoDevice:
         self.disconnect()
 
 
-
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
@@ -371,19 +402,38 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
+
 class PicoStatus(PicoDevice):
     """Adds status monitoring to PicoDevice."""
+
     def __init__(
-        self, port, verbose=False, timeout=5., name="", eig_redis=None
+        self, port, eig_redis, verbose=False, timeout=5.0,
+        name=None, auto_wait=True,
     ):
-        """ kwargs passed to super()"""
-        super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
-        )
+        """
+        Parameters
+        ----------
+        port : str
+            Serial port device.
+        eig_redis : EigsepRedis
+            Redis client instance.
+        verbose : bool, optional
+            Print status updates to stdout.
+        timeout : float, optional
+            Serial read timeout in seconds.
+        name : str, optional
+            Logical device name.
+        auto_wait : bool, optional
+            If True (default), block until the first status update
+            arrives. Set to False when a subclass needs to do setup
+            before waiting (e.g. PicoMotor calls set_delay() first).
+        """
+        super().__init__(port, eig_redis, timeout=timeout, name=name)
         self.verbose = verbose
         self.status = {}
         self.set_response_handler(self.update_status)
-        self.wait_for_updates()
+        if auto_wait:
+            self.wait_for_updates()
 
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
@@ -392,12 +442,23 @@ class PicoStatus(PicoDevice):
         self.status.update(data)
 
     def wait_for_updates(self, timeout=3):
+        """Block until the first status update is received.
+
+        Raises
+        ------
+        TimeoutError
+            If no status is received within *timeout* seconds.
+        """
         t = time.time()
         while True:
             if len(self.status) != 0:
                 break
-            assert time.time() - t < timeout
+            if time.time() - t >= timeout:
+                raise TimeoutError(
+                    f"No status from {self.name} within {timeout}s"
+                )
             time.sleep(0.1)
+
 
 class PicoPeltier(PicoStatus):
     """Specialized class for Peltier temperature control Pico devices."""
@@ -406,11 +467,11 @@ class PicoPeltier(PicoStatus):
         """Set target temperature."""
         cmd = {}
         if T_A is not None:
-            cmd['A_temp_target'] = T_A
-            cmd['A_hysteresis'] = A_hyst
+            cmd["A_temp_target"] = T_A
+            cmd["A_hysteresis"] = A_hyst
         if T_B is not None:
-            cmd['B_temp_target'] = T_B
-            cmd['B_hysteresis'] = B_hyst
+            cmd["B_temp_target"] = T_B
+            cmd["B_hysteresis"] = B_hyst
         return self.send_command(cmd)
 
     def set_enable(self, A=True, B=True):
@@ -434,10 +495,19 @@ class PicoIMU(PicoDevice):
         """
         Send request to calibrate IMU.
 
-        Args:
-            channel: Channel number (0=both, 1/2=individual)
-
         Returns:
             True if command sent successfully
         """
         return self.send_command({"cmd": "calibrate"})
+
+
+class PicoTherm(PicoStatus):
+    """Temperature monitoring device (app_id=2)."""
+
+    pass
+
+
+class PicoLidar(PicoStatus):
+    """Lidar sensor device (app_id=4)."""
+
+    pass
