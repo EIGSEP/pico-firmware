@@ -53,6 +53,7 @@ void init_single_tempctrl(TempControl *tempctrl,
 
 void tempctrl_init(uint8_t app_id) {
     pwm_config config = pwm_get_default_config();
+    pwm_config_set_clkdiv(&config, 145.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1)), system_clock = 150 MHz default
     pwm_config_set_wrap(&config, PWM_WRAP);
     init_single_tempctrl(&tempctrlA, PELTIER1_DIR_PIN1, PELTIER1_DIR_PIN2,
             PELTIER1_PWM_PIN, &config, TEMP_SENSOR1_PIN, pio0);
@@ -72,12 +73,16 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     if (item_json) tempctrlA.enabled = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "A_hysteresis");
     tempctrlA.hysteresis = item_json ? item_json->valuedouble : tempctrlA.hysteresis;
+    item_json = cJSON_GetObjectItem(root, "A_clamp");
+    if (item_json) tempctrlA.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
     item_json = cJSON_GetObjectItem(root, "B_temp_target");
     tempctrlB.T_target = item_json ? item_json->valuedouble : tempctrlB.T_target;
     item_json = cJSON_GetObjectItem(root, "B_enable");
     if (item_json) tempctrlB.enabled = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "B_hysteresis");
     tempctrlB.hysteresis = item_json ? item_json->valuedouble : tempctrlB.hysteresis;
+    item_json = cJSON_GetObjectItem(root, "B_clamp");
+    if (item_json) tempctrlB.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
     cJSON_Delete(root);
 }
 
@@ -88,7 +93,7 @@ void tempctrl_status(uint8_t app_id) {
     const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
     const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
     
-    send_json(20,
+    send_json(22,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_STR, "A_status", statusA,
@@ -100,6 +105,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "A_active", tempctrlA.active,
         KV_BOOL, "A_int_disabled", tempctrlA.internally_disabled,
         KV_FLOAT, "A_hysteresis", tempctrlA.hysteresis,
+        KV_FLOAT, "A_clamp", tempctrlA.clamp,
         KV_STR, "B_status", statusB,
         KV_FLOAT, "B_T_now", tempctrlB.T_now,
         KV_FLOAT, "B_timestamp", timeB,
@@ -108,7 +114,8 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "B_enabled", tempctrlB.enabled,
         KV_BOOL, "B_active", tempctrlB.active,
         KV_BOOL, "B_int_disabled", tempctrlB.internally_disabled,
-        KV_FLOAT, "B_hysteresis", tempctrlB.hysteresis
+        KV_FLOAT, "B_hysteresis", tempctrlB.hysteresis,
+        KV_FLOAT, "B_clamp", tempctrlB.clamp
     );
 }
 
