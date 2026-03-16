@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 #include "potmon.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
@@ -52,12 +51,12 @@ void potmon_op(uint8_t app_id)
 /*send status json with voltage, resistance, r_ref, and valid status*/
 void potmon_status(uint8_t app_id)
 {
-    send_json(7,
+    send_json(5,
         KV_STR,   "sensor_name",     "potmon",
         KV_INT,   "app_id",          (int)app_id,
         KV_STR,   "status",          "update",
         KV_FLOAT, "pot0_voltage",    pot0.voltage,
-        KV_FLOAT, "pot1_voltage",    pot1.voltage,
+        KV_FLOAT, "pot1_voltage",    pot1.voltage
     );
 }
 
