@@ -16,10 +16,15 @@
 #define POTMON_ADC_MAX          ((1 << POTMON_ADC_BITS) - 1)
 #define POTMON_VREF             3.3f
 
+#define POTMON_DEFAULT_R_TOTAL  10000.0f
+
 typedef struct {
     uint    gpio_pin;
     uint    adc_channel;
+    float   r_total;
     float   voltage;
+    float   resistance;
+
 } PotSensor;
 
 void potmon_init(uint8_t app_id);

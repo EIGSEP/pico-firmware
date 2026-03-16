@@ -12,7 +12,9 @@ static void pot_sensor_init(PotSensor *pot, uint gpio_pin, uint adc_channel)
 {
     pot->gpio_pin = gpio_pin;
     pot->adc_channel = adc_channel;
+    pot->r_total = POTMON_DEFAULT_R_TOTAL;
     pot->voltage = 0.0f;
+    pot->resistance = 0.0f;
 
     adc_gpio_init(gpio_pin);
 }
@@ -26,6 +28,9 @@ static void pot_sensor_read(PotSensor *pot)
     
     float v = ((float)raw / (float)POTMON_ADC_MAX) * POTMON_VREF;
     pot->voltage = v;
+    float r = pot->r_total * pot->voltage / POTMON_VREF;
+    pot->resistance = r;
+    
 }
 
 /*app interface*/
@@ -56,7 +61,9 @@ void potmon_status(uint8_t app_id)
         KV_INT,   "app_id",          (int)app_id,
         KV_STR,   "status",          "update",
         KV_FLOAT, "pot0_voltage",    pot0.voltage,
+        KV_FLOAT, "pot0_resistance", pot0.resistance,
         KV_FLOAT, "pot1_voltage",    pot1.voltage,
+        KV_FLOAT, "pot1_resistance", pot1.resistance
     );
 }
 
