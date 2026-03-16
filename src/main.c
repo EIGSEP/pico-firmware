@@ -1,5 +1,6 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
+#include "hardware/adc.h"
 #include "hardware/watchdog.h"
 #include "pico/unique_id.h"
 #include <stdio.h>
