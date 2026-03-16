@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #include "potmon.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"

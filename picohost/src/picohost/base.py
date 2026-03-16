@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+import numpy as np
 from typing import Dict, Any, Optional, Callable
 from serial import Serial
 from serial.tools import list_ports
@@ -445,11 +446,17 @@ class PicoIMU(PicoDevice):
 class PicoPotentiometer(PicoDevice):
     '''A class for calibrating and calculating angles.'''
 
-    def __init__():
-        self.cal0_values = (0,0) #Need to change these to a default that makes sense
-        self.cal1_values = (0,0) #Need to change these to a default that makes sense
+    def __init__( self, port, verbose=False, timeout=5., name="", eig_redis=None): 
+        super().__init__(
+            port, timeout=timeout, name=name, eig_redis=eig_redis, turns=10
+        )
+        self.turns = turns
+        self.degrees = 360*turns
 
-    def calibrate():
+        self.cal0_values = (0.4,-8.) #Need to change these to a default that makes sense
+        self.cal1_values = (0.4,-8.) #Need to change these to a default that makes sense
+
+    def calibrate(self):
         input("Spin the potentiometers to minimum.") #CW or CCW?
         zero0 = self.last_status['pot0_resistance']
         zero1 = self.last_status['pot1_resistance']
@@ -459,11 +466,11 @@ class PicoPotentiometer(PicoDevice):
         full1 = self.last_status['pot1_resistance']
         
         #fit to linear, IDK how many rotations this pot does
-        self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, 3600]))
-        self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, 3600]))
+        self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, self.degrees])
+        #self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, self.degrees])
  
 
-    def _calibrate(xs, ys):
+    def _calibrate(self, xs, ys):
         A= np.array([xs, [1,1]]).T
         ys = np.array(ys)
 
@@ -471,17 +478,17 @@ class PicoPotentiometer(PicoDevice):
         
         return (m, b)
 
-    def read_angle():
+    def read_angle(self):
         last_status = self.last_status
         res0 = last_status['pot0_resistance']
-        res1 = last_status['pot1_resistance']
+        #res1 = last_status['pot1_resistance']
         
         angle0 = self._calc_angle(res0, self.cal0_values)
-        angle1 = self._calc_angle(res1, self.cal1_values)
-
+        #angle1 = self._calc_angle(res1, self.cal1_values)
+        angle1 = 1
         return {"pot0":angle0, "pot1":angle1}
 
-    def _calc_angle(res, params):
+    def _calc_angle(self, res, params):
         m, b = params
         return m*res + b
     

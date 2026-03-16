@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #ifndef POTMON_H
 #define POTMON_H
 
@@ -28,3 +29,5 @@ void potmon_server(uint8_t app_id, const char *json_str);
 void potmon_status(uint_t app_id);
 
 #endif
+=======
+>>>>>>> b69529763b9eb270c09fab9338e394415dd8fefe
