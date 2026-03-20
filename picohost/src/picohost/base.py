@@ -371,35 +371,7 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
-class PicoStatus(PicoDevice):
-    """Adds status monitoring to PicoDevice."""
-    def __init__(
-        self, port, verbose=False, timeout=5., name="", eig_redis=None
-    ):
-        """ kwargs passed to super()"""
-        super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
-        )
-        self.verbose = verbose
-        self.status = {}
-        self.set_response_handler(self.update_status)
-        self.wait_for_updates()
-
-    def update_status(self, data):
-        """Update internal status based on unpacked json packets from picos."""
-        if self.verbose:
-            print(json.dumps(data, indent=2, sort_keys=True))
-        self.status.update(data)
-
-    def wait_for_updates(self, timeout=3):
-        t = time.time()
-        while True:
-            if len(self.status) != 0:
-                break
-            assert time.time() - t < timeout
-            time.sleep(0.1)
-
-class PicoPeltier(PicoStatus):
+class PicoPeltier(PicoDevice):
     """Specialized class for Peltier temperature control Pico devices.
 
     Sends periodic keepalive commands to prevent the firmware communication
@@ -412,7 +384,7 @@ class PicoPeltier(PicoStatus):
         eig_redis,
         verbose=False,
         timeout=5.0,
-        name="",
+        name=None,
         keepalive_interval=10.0,
     ):
         """
@@ -436,8 +408,28 @@ class PicoPeltier(PicoStatus):
         self._keepalive_running = False
         self._keepalive_thread = None
         self._keepalive_interval = keepalive_interval
-        super().__init__(port, eig_redis, verbose=verbose, timeout=timeout, name=name)
+        self.verbose = verbose
+        self.status = {}
+        super().__init__(
+            port, eig_redis, timeout=timeout, name=name,
+        )
+        self.set_response_handler(self.update_status)
+        self.wait_for_updates()
         self._start_keepalive()
+
+    def update_status(self, data):
+        """Update internal status based on unpacked json packets from picos."""
+        if self.verbose:
+            print(json.dumps(data, indent=2, sort_keys=True))
+        self.status.update(data)
+
+    def wait_for_updates(self, timeout=3):
+        t = time.time()
+        while True:
+            if len(self.status) != 0:
+                break
+            assert time.time() - t < timeout
+            time.sleep(0.1)
 
     def _start_keepalive(self):
         """Start the background keepalive thread."""
