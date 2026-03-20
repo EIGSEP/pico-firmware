@@ -1,70 +1,65 @@
 """
 Tests for streaming data handling.
+
+Uses DummyPicoDevice (MockSerial pair) instead of monkeypatching Serial,
+so the tests exercise the same code paths as real devices.
 """
 
-from unittest.mock import patch
-from mockserial import MockSerial
-from picohost import PicoDevice
+import time
+from picohost.testing import DummyPicoDevice
 
 
 class TestStreamingData:
+    """Test that the reader thread correctly processes streaming JSON data."""
 
-    @patch("picohost.base.Serial")
-    def test_read_line_basic(self, mock_serial):
-        """Test basic read_line functionality."""
-        mock_serial_instance = MockSerial()
-        peer = MockSerial()
-        mock_serial_instance.add_peer(peer)
-        mock_serial.return_value = mock_serial_instance
+    def test_read_line_returns_decoded_string(self):
+        """read_line() returns a stripped UTF-8 string from the peer."""
+        device = DummyPicoDevice("/dev/dummy")
+        # Stop reader thread so it doesn't consume our data
+        device.stop()
 
-        device = PicoDevice("/dev/ttyACM0")
-        device.connect()
-
-        # Simulate data coming from peer
-        peer.write(b'{"test": "data"}\n')
-
+        device.ser.peer.write(b'{"test": "data"}\n')
         result = device.read_line()
         assert result == '{"test": "data"}'
+        device.disconnect()
 
-    @patch("picohost.base.Serial")
-    def test_parse_response_valid_json(self, mock_serial):
-        """Test parsing valid JSON responses."""
-        mock_serial_instance = MockSerial()
-        mock_serial_instance.add_peer(MockSerial())
-        mock_serial.return_value = mock_serial_instance
+    def test_reader_thread_parses_json_into_last_status(self):
+        """The background reader thread parses JSON and stores it in last_status."""
+        device = DummyPicoDevice("/dev/dummy")
+        device.ser.peer.write(b'{"status": "ok", "value": 123}\n')
+        time.sleep(0.2)
+        assert device.last_status == {"status": "ok", "value": 123}
+        device.disconnect()
 
-        device = PicoDevice("/dev/ttyACM0")
-        device.connect()
-
-        # Test valid JSON
+    def test_parse_response_valid_json(self):
+        """parse_response() returns a dict for valid JSON."""
+        device = DummyPicoDevice("/dev/dummy")
         result = device.parse_response('{"status": "ok", "value": 123}')
         assert result == {"status": "ok", "value": 123}
+        device.disconnect()
 
-    @patch("picohost.base.Serial")
-    def test_parse_response_invalid_json(self, mock_serial):
-        """Test parsing invalid JSON responses."""
-        mock_serial_instance = MockSerial()
-        mock_serial_instance.add_peer(MockSerial())
-        mock_serial.return_value = mock_serial_instance
+    def test_parse_response_invalid_json(self):
+        """parse_response() returns None for malformed input."""
+        device = DummyPicoDevice("/dev/dummy")
+        assert device.parse_response("not json") is None
+        device.disconnect()
 
-        device = PicoDevice("/dev/ttyACM0")
-        device.connect()
-
-        # Test invalid JSON
-        result = device.parse_response("not json")
-        assert result is None
-
-    @patch("picohost.base.Serial")
-    def test_read_line_handles_empty_data(self, mock_serial):
-        """Test that read_line handles empty data gracefully."""
-        mock_serial_instance = MockSerial()
-        mock_serial_instance.add_peer(MockSerial())
-        mock_serial_instance.timeout = 0.1
-        mock_serial.return_value = mock_serial_instance
-
-        device = PicoDevice("/dev/ttyACM0")
-        device.connect()
-
-        # No data written to peer, should return None
+    def test_read_line_returns_none_on_empty_buffer(self):
+        """read_line() returns None when no data is available (timeout)."""
+        device = DummyPicoDevice("/dev/dummy")
+        device.stop()
         result = device.read_line()
         assert result is None
+        device.disconnect()
+
+    def test_multiple_status_updates_overwrites_last_status(self):
+        """Each new JSON line from the peer overwrites last_status."""
+        device = DummyPicoDevice("/dev/dummy")
+        device.ser.peer.write(b'{"sensor_name":"first","v":1}\n')
+        time.sleep(0.2)
+        assert device.last_status["sensor_name"] == "first"
+
+        device.ser.peer.write(b'{"sensor_name":"second","v":2}\n')
+        time.sleep(0.2)
+        assert device.last_status["sensor_name"] == "second"
+        device.disconnect()

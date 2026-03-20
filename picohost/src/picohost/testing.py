@@ -41,7 +41,13 @@ class DummyPicoDevice(PicoDevice):
         if hasattr(self, '_emulator') and self._emulator:
             self._emulator.stop()
             self._emulator = None
-        super().disconnect()
+        # Stop the reader thread explicitly via PicoDevice.stop() to avoid
+        # PicoMotor.stop() (which sends a halt command instead of stopping
+        # the thread).
+        PicoDevice.stop(self)
+        if self.is_connected:
+            self.ser.close()
+            self.ser = None
 
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):

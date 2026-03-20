@@ -1,158 +1,217 @@
 """
 Unit tests for the picohost base classes.
+
+Tests PicoDevice, PicoMotor, PicoRFSwitch, and PicoPeltier through their
+DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 """
 
 import json
+import time
+import pytest
 from picohost.testing import DummyPicoDevice, DummyPicoMotor, DummyPicoRFSwitch, DummyPicoPeltier
 
 
 class TestPicoDevice:
-    """Test the base PicoDevice class."""
+    """Test the base PicoDevice interface using DummyPicoDevice (no emulator)."""
 
-    def test_find_pico_ports(self):
-        """Test finding Pico ports."""
-        # Note: find_pico_ports is a class method that scans actual ports
-        # We can't easily test it with DummyPicoDevice without mocking
-        # This test will be kept simple - just verify the method exists
+    def test_find_pico_ports_exists(self):
+        """find_pico_ports is a static method on PicoDevice."""
         assert hasattr(DummyPicoDevice, 'find_pico_ports')
+        assert callable(DummyPicoDevice.find_pico_ports)
 
     def test_connect_success(self):
-        """Test successful connection."""
+        """DummyPicoDevice.connect() creates a MockSerial pair."""
         device = DummyPicoDevice("/dev/dummy")
         assert device.is_connected is True
         assert device.ser is not None
+        assert device.ser.is_open
+        device.disconnect()
 
     def test_connect_failure(self):
-        """Test connection failure."""
-        # DummyPicoDevice always connects successfully by design
-        # This test is not applicable for dummy devices
+        """Dummy devices always connect; this test is a placeholder."""
         pass
 
-    def test_send_command(self):
-        """Test sending a command."""
+    def test_send_command_writes_json(self):
+        """send_command() serializes a dict as compact JSON + newline."""
         device = DummyPicoDevice("/dev/dummy")
-        
         cmd = {"cmd": "test", "value": 42}
         assert device.send_command(cmd) is True
 
+        # No emulator on base DummyPicoDevice, so bytes stay in peer buffer
         expected_data = json.dumps(cmd, separators=(",", ":")) + "\n"
-        # Check that data was written to the peer
         assert device.ser.peer._read_buffer == expected_data.encode("utf-8")
+        device.disconnect()
 
-    def test_parse_response(self):
-        """Test parsing JSON responses."""
+    def test_send_command_returns_false_when_disconnected(self):
+        """send_command() returns False when the serial port is closed."""
         device = DummyPicoDevice("/dev/dummy")
+        device.disconnect()
+        assert device.send_command({"cmd": "test"}) is False
 
-        # Valid JSON
+    def test_parse_response_valid_json(self):
+        """parse_response() returns a dict for valid JSON."""
+        device = DummyPicoDevice("/dev/dummy")
         data = device.parse_response('{"status": "ok", "value": 123}')
         assert data == {"status": "ok", "value": 123}
+        device.disconnect()
 
-        # Invalid JSON
+    def test_parse_response_invalid_json(self):
+        """parse_response() returns None for non-JSON input."""
+        device = DummyPicoDevice("/dev/dummy")
         assert device.parse_response("not json") is None
+        device.disconnect()
 
-    def test_context_manager(self):
-        """Test context manager functionality."""
+    def test_context_manager_connects_and_disconnects(self):
+        """__enter__ provides a connected device; __exit__ disconnects."""
         with DummyPicoDevice("/dev/dummy") as device:
             assert device.ser is not None
             assert device._running is True
-
-        # After exiting context, should be disconnected
         assert device.ser is None
         assert device._running is False
 
+    def test_reader_thread_populates_last_status(self):
+        """The reader thread picks up JSON written to the peer and sets last_status."""
+        device = DummyPicoDevice("/dev/dummy")
+        # Simulate firmware writing a JSON status line to host
+        status_json = '{"sensor_name":"test","value":99}\n'
+        device.ser.peer.write(status_json.encode())
+        time.sleep(0.2)
+        assert device.last_status.get("sensor_name") == "test"
+        assert device.last_status.get("value") == 99
+        device.disconnect()
+
 
 class TestPicoMotor:
-    """Test the PicoMotor class."""
+    """Test PicoMotor commands and status via DummyPicoMotor (with emulator)."""
 
-    def test_move_command(self):
-        """Test motor move command."""
+    def test_deg_to_steps_conversion(self):
+        """Verify degree-to-step conversion: 1.8 deg * 113 teeth = 113 steps."""
         motor = DummyPicoMotor("/dev/dummy")
-        
-        # Clear the buffer from any initialization commands
-        motor.ser.peer._read_buffer = bytearray()
+        assert motor.deg_to_steps(0) == 0
+        assert motor.deg_to_steps(1.8) == 113
+        assert motor.deg_to_steps(360) == 22600
+        motor.disconnect()
 
-        # Test move command with degrees
+    def test_steps_to_deg_conversion(self):
+        """Verify step-to-degree conversion is the inverse of deg_to_steps."""
+        motor = DummyPicoMotor("/dev/dummy")
+        assert motor.steps_to_deg(113) == pytest.approx(1.8, abs=0.01)
+        assert motor.steps_to_deg(0) == 0.0
+        motor.disconnect()
+
+    def test_move_command_updates_target(self):
+        """Sending az_target_deg updates az_target_pos in the emulator status."""
+        motor = DummyPicoMotor("/dev/dummy")
         az_deg = 10.0
-        el_deg = -5.0
-        
-        # Use the actual methods from the motor class
+        expected_steps = motor.deg_to_steps(az_deg)
         motor.az_target_deg(az_deg, wait_for_start=False, wait_for_stop=False)
-        
-        # Verify the command was sent
-        sent_data = motor.ser.peer._read_buffer.decode("utf-8").strip()
-        sent_json = json.loads(sent_data)
+        time.sleep(0.2)
+        assert motor.status.get("az_target_pos") == expected_steps
+        motor.disconnect()
 
-        # Calculate expected steps
-        expected_steps_az = motor.deg_to_steps(az_deg)
-
-        assert sent_json == {
-            "az_set_target_pos": expected_steps_az
-        }
+    def test_status_has_motor_fields(self):
+        """Motor status should contain all expected fields from the emulator."""
+        motor = DummyPicoMotor("/dev/dummy")
+        assert motor.status.get("sensor_name") == "motor"
+        for key in ("az_pos", "az_target_pos", "el_pos", "el_target_pos"):
+            assert key in motor.status, f"Missing key: {key}"
+        motor.disconnect()
 
 
 class TestPicoRFSwitch:
-    """Test the PicoRFSwitch class."""
+    """Test PicoRFSwitch command dispatch via DummyPicoRFSwitch (with emulator)."""
 
-    def test_switch_state(self):
-        """Test RF switch state command."""
+    def test_switch_state_updates_emulator(self):
+        """switch('VNAO') sends the correct sw_state to the emulator."""
         switch = DummyPicoRFSwitch("/dev/dummy")
-
-        # Test switch state command with valid state
-        switch.switch("VNAO")
-
-        # Verify the command was sent
-        sent_data = switch.ser.peer._read_buffer.decode("utf-8").strip()
-        sent_json = json.loads(sent_data)
-
-        # The switch method converts the state string to binary
+        assert switch.switch("VNAO") is True
+        time.sleep(0.2)
         expected_state = switch.rbin(switch.path_str["VNAO"])
-        assert sent_json == {"sw_state": expected_state}
+        assert switch.last_status.get("sw_state") == expected_state
+        switch.disconnect()
 
-    def test_switch_invalid_state(self):
-        """Test RF switch with invalid state."""
+    def test_switch_all_valid_states(self):
+        """Every defined path string can be switched without error."""
         switch = DummyPicoRFSwitch("/dev/dummy")
+        for state in switch.paths:
+            assert switch.switch(state) is True
+        switch.disconnect()
 
-        # Test invalid switch state - should raise ValueError
-        try:
+    def test_switch_invalid_state_raises(self):
+        """Switching to an undefined state raises ValueError."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        with pytest.raises(ValueError, match="Invalid switch state"):
             switch.switch("INVALID")
-            assert False, "Should have raised ValueError"
-        except ValueError as e:
-            assert "Invalid switch state" in str(e)
+        switch.disconnect()
+
+    def test_rbin_lsb_first(self):
+        """rbin() interprets the first character as LSB."""
+        assert DummyPicoRFSwitch.rbin("10000000") == 1
+        assert DummyPicoRFSwitch.rbin("01000000") == 2
+        assert DummyPicoRFSwitch.rbin("11000000") == 3
+
+    def test_paths_dict_values(self):
+        """paths property converts path_str to integer values correctly."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        paths = switch.paths
+        assert paths["VNAO"] == 1    # "10000000" LSB-first = 1
+        assert paths["RFANT"] == 0   # "00000000" = 0
+        assert paths["VNAS"] == 3    # "11000000" LSB-first = 3
+        switch.disconnect()
 
 
 class TestPicoPeltier:
-    """Test the PicoPeltier class."""
+    """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
 
-    def test_temperature_commands(self):
-        """Test temperature control commands."""
+    def test_set_temperature_channel_a(self):
+        """Setting channel A target updates emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
+        time.sleep(0.2)
+        assert peltier.status.get("A_T_target") == pytest.approx(25.5)
+        assert peltier.status.get("A_hysteresis") == pytest.approx(0.5)
+        peltier.disconnect()
 
-        # Test set temperature for channel A
-        peltier.set_temperature(T_A=25.5, A_hyst=0.5)
-        sent_data = peltier.ser.peer._read_buffer.decode("utf-8").strip()
-        assert json.loads(sent_data) == {
-            "A_temp_target": 25.5,
-            "A_hysteresis": 0.5,
-        }
+    def test_set_temperature_channel_b(self):
+        """Setting channel B target updates emulator status."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.set_temperature(T_B=30.0, B_hyst=1.0) is True
+        time.sleep(0.2)
+        assert peltier.status.get("B_T_target") == pytest.approx(30.0)
+        assert peltier.status.get("B_hysteresis") == pytest.approx(1.0)
+        peltier.disconnect()
 
-        # Clear buffer for next test
-        peltier.ser.peer._read_buffer = bytearray()
+    def test_set_temperature_both_channels(self):
+        """Setting both channels in one call updates both in emulator."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.set_temperature(T_A=28.0, A_hyst=0.3, T_B=32.0, B_hyst=0.8) is True
+        time.sleep(0.2)
+        assert peltier.status.get("A_T_target") == pytest.approx(28.0)
+        assert peltier.status.get("B_T_target") == pytest.approx(32.0)
+        peltier.disconnect()
 
-        # Test set temperature for channel B
-        peltier.set_temperature(T_B=30.0, B_hyst=1.0)
-        sent_data = peltier.ser.peer._read_buffer.decode("utf-8").strip()
-        assert json.loads(sent_data) == {
-            "B_temp_target": 30.0,
-            "B_hysteresis": 1.0,
-        }
+    def test_enable_channels(self):
+        """set_enable() updates the enabled flags in emulator status."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.set_enable(A=True, B=True) is True
+        time.sleep(0.2)
+        assert peltier.status.get("A_enabled") is True
+        assert peltier.status.get("B_enabled") is True
+        peltier.disconnect()
 
-        # Clear buffer for next test
-        peltier.ser.peer._read_buffer = bytearray()
+    def test_disable_channels(self):
+        """Disabling channels is reflected in emulator status."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.set_enable(A=False, B=False) is True
+        time.sleep(0.2)
+        assert peltier.status.get("A_enabled") is False
+        assert peltier.status.get("B_enabled") is False
+        peltier.disconnect()
 
-        # Test enable both channels
-        peltier.set_enable(A=True, B=True)
-        sent_data = peltier.ser.peer._read_buffer.decode("utf-8").strip()
-        assert json.loads(sent_data) == {"A_enable": True, "B_enable": True}
-
-        # Clear buffer for next test
-        peltier.ser.peer._read_buffer = bytearray()
+    def test_status_has_tempctrl_fields(self):
+        """Peltier status should contain all tempctrl fields from the emulator."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        assert peltier.status.get("sensor_name") == "tempctrl"
+        for key in ("A_T_now", "B_T_now", "A_drive_level", "B_drive_level"):
+            assert key in peltier.status, f"Missing key: {key}"
+        peltier.disconnect()
