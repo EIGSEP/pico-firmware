@@ -2,6 +2,10 @@
 Picohost - Python library for communicating with Raspberry Pi Pico devices.
 """
 
+from importlib.metadata import version
+
+__version__ = version("picohost")
+
 from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoIMU
 from .motor import PicoMotor
 from . import testing
