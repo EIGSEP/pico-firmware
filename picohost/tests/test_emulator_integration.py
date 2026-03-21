@@ -264,6 +264,19 @@ class TestTempMonIntegration:
         assert set(tempmon.last_status.keys()) == TEMPMON_FIELDS
         assert tempmon.last_status["sensor_name"] == "temp_mon"
 
+    def test_status_types(self, tempmon):
+        """Verify tempmon status value types through serial pipeline."""
+        time.sleep(0.2)
+        s = tempmon.last_status
+        assert isinstance(s["sensor_name"], str)
+        assert isinstance(s["app_id"], int)
+        for ch in ("A", "B"):
+            assert isinstance(s[f"{ch}_status"], str)
+            assert isinstance(s[f"{ch}_temp"], (int, float)), \
+                f"{ch}_temp should be numeric"
+            assert isinstance(s[f"{ch}_timestamp"], (int, float)), \
+                f"{ch}_timestamp should be numeric"
+
 
 # --- Lidar ---
 
@@ -274,6 +287,37 @@ class TestLidarIntegration:
         time.sleep(0.2)
         assert set(lidar.last_status.keys()) == LIDAR_FIELDS
         assert lidar.last_status["sensor_name"] == "lidar"
+
+    def test_status_types(self, lidar):
+        """Verify lidar status value types through serial pipeline."""
+        time.sleep(0.2)
+        s = lidar.last_status
+        assert isinstance(s["sensor_name"], str)
+        assert isinstance(s["status"], str)
+        assert isinstance(s["app_id"], int)
+        assert isinstance(s["distance_m"], (int, float))
+
+
+# --- RFSwitch ---
+
+class TestRFSwitchIntegrationTypes:
+
+    def test_status_types(self, rfswitch):
+        """Verify rfswitch status value types through serial pipeline.
+
+        The composite emulator alternates rfswitch and imu status, so
+        we wait until we see the rfswitch message specifically.
+        """
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if rfswitch.last_status.get("sensor_name") == "rfswitch":
+                break
+            time.sleep(0.05)
+        s = rfswitch.last_status
+        assert s["sensor_name"] == "rfswitch"
+        assert isinstance(s["status"], str)
+        assert isinstance(s["app_id"], int)
+        assert isinstance(s["sw_state"], int)
 
 
 # --- Redis ---
