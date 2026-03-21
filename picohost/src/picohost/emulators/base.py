@@ -120,7 +120,11 @@ class PicoEmulator:
             self._write_json(status)
 
     def _write_json(self, data):
-        """Write a single JSON dict to the peer serial."""
+        """Write a single JSON dict to the peer serial.
+
+        Factored out of _send_status so composite emulators (e.g.
+        RFSwitch+IMU) can send multiple status dicts per cadence.
+        """
         if not data or self._peer is None:
             return
         try:

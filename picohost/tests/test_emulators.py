@@ -3,7 +3,7 @@ Unit tests for firmware emulators.
 Tests emulators standalone (no mock serial), calling methods directly.
 """
 
-import math
+import numpy as np
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
@@ -184,8 +184,24 @@ class TestImuEmulator:
         emu = ImuEmulator()
         for _ in range(100):
             emu.op()
-        norm = math.sqrt(sum(x * x for x in emu.q))
-        assert abs(norm - 1.0) < 0.01
+        assert abs(np.linalg.norm(emu.q) - 1.0) < 0.01
+
+    def test_gravity_consistency(self):
+        """Accelerometer should read ~9.81 m/s^2 magnitude (stationary)."""
+        emu = ImuEmulator()
+        for _ in range(10):
+            emu.op()
+        assert abs(np.linalg.norm(emu.a) - 9.81) < 0.1
+
+    def test_orientation_from_angles(self):
+        """Setting az/el angles produces consistent quaternion."""
+        emu = ImuEmulator()
+        emu.az_angle = np.pi / 4  # 45 degrees azimuth
+        emu.el_angle = 0.0
+        emu.op()
+        # Quaternion should represent ~45 deg rotation around z
+        assert abs(emu.q[3] - np.cos(np.pi / 8)) < 0.02  # real part
+        assert abs(emu.q[2] - np.sin(np.pi / 8)) < 0.02  # k component (z-axis)
 
     def test_calibration_flow(self):
         """Calibrate command sets flag, op clears it when statuses == 3."""
@@ -235,14 +251,14 @@ class TestLidarEmulator:
         emu = LidarEmulator()
         status = emu.get_status()
         assert status["sensor_name"] == "lidar"
-        assert status["distance_m"] == 1.5
+        assert status["distance_m"] == 100.0
 
     def test_noise_is_mean_reverting(self):
         emu = LidarEmulator()
         for _ in range(1000):
             emu.op()
         # Mean-reverting noise stays tightly around base distance
-        assert abs(emu.distance - 1.5) < 0.5
+        assert abs(emu.distance - 100.0) < 0.5
 
     def test_status_fields(self):
         emu = LidarEmulator()

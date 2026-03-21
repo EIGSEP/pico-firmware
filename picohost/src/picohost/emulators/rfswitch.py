@@ -36,22 +36,12 @@ class RFSwitchWithImuEmulator(PicoEmulator):
     """
 
     def __init__(self, app_id=5, **kwargs):
-        self._rfswitch = RFSwitchEmulator.__new__(RFSwitchEmulator)
-        self._rfswitch.sw_state = 0
-        self._rfswitch.app_id = app_id
-        self._imu = ImuEmulator.__new__(ImuEmulator)
-        self._imu.q = [0.0, 0.0, 0.0, 1.0]
-        self._imu.a = [0.0, 0.0, 9.81]
-        self._imu.la = [0.0, 0.0, 0.0]
-        self._imu.g = [0.0, 0.0, 0.0]
-        self._imu.m = [0.0, 0.0, 0.0]
-        self._imu.grav = [0.0, 0.0, 9.81]
-        self._imu.accel_status = 3
-        self._imu.mag_status = 3
-        self._imu.do_calibration = False
-        self._imu.is_initialized = True
+        # Use regular constructors to avoid fragile manual attribute copying.
+        # The sub-emulators' own threads/locks are unused since this composite
+        # emulator drives them directly via server()/op()/get_status().
+        self._rfswitch = RFSwitchEmulator(app_id=app_id)
+        self._imu = ImuEmulator(app_id=app_id)
         self._imu.name = "imu_antenna"
-        self._imu.app_id = app_id
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):

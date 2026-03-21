@@ -1,5 +1,6 @@
-import random
 import time
+
+import numpy as np
 
 from .base import PicoEmulator
 
@@ -28,8 +29,8 @@ class TempMonEmulator(PicoEmulator):
         pass  # tempmon does not handle commands
 
     def op(self):
-        self.temp_a = self._base_temp_a + random.gauss(0, NOISE_STDDEV)
-        self.temp_b = self._base_temp_b + random.gauss(0, NOISE_STDDEV)
+        self.temp_a = self._base_temp_a + np.random.normal(0, NOISE_STDDEV)
+        self.temp_b = self._base_temp_b + np.random.normal(0, NOISE_STDDEV)
         self.timestamp_a = time.time()
         self.timestamp_b = time.time()
 

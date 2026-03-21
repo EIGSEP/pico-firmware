@@ -1,4 +1,4 @@
-import random
+import numpy as np
 
 from .base import PicoEmulator
 
@@ -9,7 +9,7 @@ class LidarEmulator(PicoEmulator):
     """Emulates src/lidar.c firmware."""
 
     def __init__(self, app_id=4, **kwargs):
-        self._base_distance = 1.5  # meters
+        self._base_distance = 100.0  # meters
         self.distance = self._base_distance
         super().__init__(app_id=app_id, **kwargs)
 
@@ -20,7 +20,7 @@ class LidarEmulator(PicoEmulator):
         pass  # lidar does not handle commands
 
     def op(self):
-        self.distance = self._base_distance + random.gauss(0, NOISE_STDDEV)
+        self.distance = self._base_distance + np.random.normal(0, NOISE_STDDEV)
 
     def get_status(self):
         return {
