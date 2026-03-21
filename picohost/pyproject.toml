@@ -29,8 +29,7 @@ flash-picos = "picohost.flash_picos:main"
 dev = [
   "build",
   "twine",
-  "black",
-  "flake8",
+  "ruff",
   "pytest",
   "pytest-cov",
   "pytest-timeout",
@@ -58,5 +57,11 @@ addopts = [
   "--timeout=60",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 79
+
+[tool.ruff.lint]
+extend-ignore = ["E203"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/*/__init__.py" = ["F401"]
