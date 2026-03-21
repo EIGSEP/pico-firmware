@@ -1,4 +1,4 @@
-from .base import PicoEmulator
+from .base import PicoEmulator, _safe_int
 
 DEFAULT_DELAY_US = 600
 SLOWDOWN_FACTOR = 2
@@ -65,17 +65,17 @@ class MotorEmulator(PicoEmulator):
 
         # az_set_pos resets both position and target (matching C behavior)
         if "az_set_pos" in cmd:
-            az.position = int(cmd["az_set_pos"])
+            az.position = _safe_int(cmd["az_set_pos"], az.position)
             az.target_pos = az.position
         if "el_set_pos" in cmd:
-            el.position = int(cmd["el_set_pos"])
+            el.position = _safe_int(cmd["el_set_pos"], el.position)
             el.target_pos = el.position
 
         # target overrides (processed after set_pos, matching C order)
         if "az_set_target_pos" in cmd:
-            az.target_pos = int(cmd["az_set_target_pos"])
+            az.target_pos = _safe_int(cmd["az_set_target_pos"], az.target_pos)
         if "el_set_target_pos" in cmd:
-            el.target_pos = int(cmd["el_set_target_pos"])
+            el.target_pos = _safe_int(cmd["el_set_target_pos"], el.target_pos)
 
         # halt sets target = current position
         if "halt" in cmd:
@@ -84,13 +84,13 @@ class MotorEmulator(PicoEmulator):
 
         # delay settings
         if "az_up_delay_us" in cmd:
-            az.up_delay_us = int(cmd["az_up_delay_us"])
+            az.up_delay_us = _safe_int(cmd["az_up_delay_us"], az.up_delay_us)
         if "az_dn_delay_us" in cmd:
-            az.dn_delay_us = int(cmd["az_dn_delay_us"])
+            az.dn_delay_us = _safe_int(cmd["az_dn_delay_us"], az.dn_delay_us)
         if "el_up_delay_us" in cmd:
-            el.up_delay_us = int(cmd["el_up_delay_us"])
+            el.up_delay_us = _safe_int(cmd["el_up_delay_us"], el.up_delay_us)
         if "el_dn_delay_us" in cmd:
-            el.dn_delay_us = int(cmd["el_dn_delay_us"])
+            el.dn_delay_us = _safe_int(cmd["el_dn_delay_us"], el.dn_delay_us)
 
     def op(self):
         stepper_op(self.elevation)

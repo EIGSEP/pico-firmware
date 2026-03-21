@@ -67,9 +67,19 @@ class ImuEmulator(PicoEmulator):
     def init(self):
         pass  # state set in __init__
 
+    def inject_init_failure(self):
+        """Simulate a BNO08x initialization failure.
+
+        In the real firmware, if ``imu.begin()`` fails then
+        ``is_initialized`` stays false and all status reports show
+        ``"status": "error"``.
+        """
+        self.is_initialized = False
+
     def server(self, cmd):
-        # Firmware checks for {"calibrate": true} via cJSON_IsTrue()
-        if cmd.get("calibrate"):
+        # Firmware checks for {"calibrate": true} via cJSON_IsTrue(),
+        # which only accepts literal JSON true — not 1, "yes", etc.
+        if cmd.get("calibrate") is True:
             self.do_calibration = True
 
     def op(self):

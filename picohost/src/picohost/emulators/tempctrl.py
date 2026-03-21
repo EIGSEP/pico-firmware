@@ -1,6 +1,6 @@
 import time
 
-from .base import PicoEmulator
+from .base import PicoEmulator, _safe_float
 
 
 class TempControlState:
@@ -54,7 +54,7 @@ class TempCtrlEmulator(PicoEmulator):
         for prefix, tc in [("A", self.A), ("B", self.B)]:
             key = f"{prefix}_temp_target"
             if key in cmd:
-                tc.T_target = float(cmd[key])
+                tc.T_target = _safe_float(cmd[key], tc.T_target)
 
             key = f"{prefix}_enable"
             if key in cmd:
@@ -62,11 +62,21 @@ class TempCtrlEmulator(PicoEmulator):
 
             key = f"{prefix}_hysteresis"
             if key in cmd:
-                tc.hysteresis = float(cmd[key])
+                tc.hysteresis = _safe_float(cmd[key], tc.hysteresis)
 
             key = f"{prefix}_clamp"
             if key in cmd:
-                tc.clamp = min(1.0, max(0.0, float(cmd[key])))
+                tc.clamp = min(1.0, max(0.0, _safe_float(cmd[key], tc.clamp)))
+
+    def inject_sensor_error(self, channel, error=True):
+        """Simulate a OneWire sensor failure on channel "A" or "B".
+
+        In the real firmware ``temp_sensor_has_error()`` returns true when the
+        DS18B20 read fails, which sets ``internally_disabled`` and causes the
+        status field to report ``"error"`` instead of ``"update"``.
+        """
+        tc = self.A if channel == "A" else self.B
+        tc.internally_disabled = error
 
     def _update_channel(self, tc):
         if tc.enabled and not tc.internally_disabled:
@@ -81,10 +91,12 @@ class TempCtrlEmulator(PicoEmulator):
         self._update_channel(self.B)
 
     def get_status(self):
+        a_status = "error" if self.A.internally_disabled else "update"
+        b_status = "error" if self.B.internally_disabled else "update"
         return {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
-            "A_status": "update",
+            "A_status": a_status,
             "A_T_now": self.A.T_now,
             "A_timestamp": self.A.timestamp,
             "A_T_target": self.A.T_target,
@@ -94,7 +106,7 @@ class TempCtrlEmulator(PicoEmulator):
             "A_int_disabled": self.A.internally_disabled,
             "A_hysteresis": self.A.hysteresis,
             "A_clamp": self.A.clamp,
-            "B_status": "update",
+            "B_status": b_status,
             "B_T_now": self.B.T_now,
             "B_timestamp": self.B.timestamp,
             "B_T_target": self.B.T_target,
