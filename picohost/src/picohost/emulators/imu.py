@@ -29,8 +29,8 @@ class ImuEmulator(PicoEmulator):
         pass  # state set in __init__
 
     def server(self, cmd):
-        # Firmware checks for {"calibrate": true}
-        if cmd.get("calibrate") or cmd.get("cmd") == "calibrate":
+        # Firmware checks for {"calibrate": true} via cJSON_IsTrue()
+        if cmd.get("calibrate"):
             self.do_calibration = True
 
     def op(self):

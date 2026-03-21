@@ -19,7 +19,6 @@ class PicoEmulator:
         self._peer = None
         self._running = False
         self._thread = None
-        self._lock = threading.Lock()
         self._cmd_buffer = ""
         self.init()
 
@@ -71,8 +70,7 @@ class PicoEmulator:
             self._read_commands()
 
             # 2. Advance state
-            with self._lock:
-                self.op()
+            self.op()
 
             # 3. Send status at cadence interval
             now = time.monotonic()
@@ -104,8 +102,7 @@ class PicoEmulator:
                 continue
             try:
                 cmd = json.loads(line)
-                with self._lock:
-                    self.server(cmd)
+                self.server(cmd)
             except json.JSONDecodeError:
                 pass
 
@@ -114,8 +111,7 @@ class PicoEmulator:
         if self._peer is None:
             return
 
-        with self._lock:
-            status = self.get_status()
+        status = self.get_status()
 
         if isinstance(status, list):
             for s in status:

@@ -10,15 +10,17 @@ class TempMonEmulator(PicoEmulator):
     """Emulates src/tempmon.c firmware."""
 
     def __init__(self, app_id=2, **kwargs):
-        self.temp_a = 25.0
-        self.temp_b = 25.0
+        self._base_temp_a = 25.0
+        self._base_temp_b = 25.0
+        self.temp_a = self._base_temp_a
+        self.temp_b = self._base_temp_b
         self.timestamp_a = 0.0
         self.timestamp_b = 0.0
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.temp_a = 25.0
-        self.temp_b = 25.0
+        self.temp_a = self._base_temp_a
+        self.temp_b = self._base_temp_b
         self.timestamp_a = 0.0
         self.timestamp_b = 0.0
 
@@ -26,8 +28,8 @@ class TempMonEmulator(PicoEmulator):
         pass  # tempmon does not handle commands
 
     def op(self):
-        self.temp_a += random.gauss(0, NOISE_STDDEV)
-        self.temp_b += random.gauss(0, NOISE_STDDEV)
+        self.temp_a = self._base_temp_a + random.gauss(0, NOISE_STDDEV)
+        self.temp_b = self._base_temp_b + random.gauss(0, NOISE_STDDEV)
         self.timestamp_a = time.time()
         self.timestamp_b = time.time()
 

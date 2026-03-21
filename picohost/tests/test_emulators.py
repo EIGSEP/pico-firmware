@@ -34,6 +34,10 @@ class TestMotorEmulator:
         for _ in range(20):
             emu.op()
         assert emu.azimuth.position == 1000
+        # Position should remain stable after convergence
+        for _ in range(5):
+            emu.op()
+        assert emu.azimuth.position == 1000
 
     def test_set_pos_resets_target(self):
         """Matching C behavior: az_set_pos resets target to position."""
@@ -52,6 +56,9 @@ class TestMotorEmulator:
             emu.op()
         pos_before = emu.azimuth.position
         assert pos_before > 0 and pos_before < 1000
+        # C firmware only checks key presence via cJSON_GetObjectItem(root, "halt");
+        # the value (0 here) is irrelevant. Using 0 rather than true because
+        # true would imply false disables halt, which is not the case.
         emu.server({"halt": 0})
         assert emu.azimuth.target_pos == emu.azimuth.position
 
@@ -89,14 +96,13 @@ class TestTempCtrlEmulator:
         assert status["A_T_target"] == 30.0
 
     def test_enable_and_converge(self):
-        """Enable channel A with target > initial, verify T_now increases."""
+        """Enable channel A, verify convergence to within hysteresis of target."""
         emu = TempCtrlEmulator()
         emu.A.T_now = 25.0
-        emu.server({"A_temp_target": 30.0, "A_enable": True})
-        initial_temp = emu.A.T_now
-        for _ in range(100):
+        emu.server({"A_temp_target": 30.0, "A_enable": True, "A_hysteresis": 0.5})
+        for _ in range(500):
             emu.op()
-        assert emu.A.T_now > initial_temp
+        assert abs(emu.A.T_now - 30.0) < 0.5
 
     def test_hysteresis_band(self):
         """When T_now is within hysteresis of target, drive should be 0."""
@@ -117,12 +123,16 @@ class TestTempCtrlEmulator:
     def test_status_fields(self):
         emu = TempCtrlEmulator()
         status = emu.get_status()
-        assert "A_T_now" in status
-        assert "B_T_now" in status
-        assert "A_drive_level" in status
-        assert "A_hysteresis" in status
-        assert "A_clamp" in status
-        assert len(status) == 22  # matches C firmware's 22 fields
+        expected_keys = {
+            "sensor_name", "app_id",
+            "A_status", "A_T_now", "A_timestamp", "A_T_target",
+            "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
+            "A_hysteresis", "A_clamp",
+            "B_status", "B_T_now", "B_timestamp", "B_T_target",
+            "B_drive_level", "B_enabled", "B_active", "B_int_disabled",
+            "B_hysteresis", "B_clamp",
+        }
+        assert set(status.keys()) == expected_keys
 
 
 class TestTempMonEmulator:
@@ -133,18 +143,28 @@ class TestTempMonEmulator:
         assert status["sensor_name"] == "temp_mon"
         assert status["app_id"] == 2
 
-    def test_noise_stays_reasonable(self):
+    def test_noise_is_mean_reverting(self):
         emu = TempMonEmulator()
         for _ in range(1000):
             emu.op()
-        # After 1000 iterations, temp should still be roughly near 25
-        assert 20.0 < emu.temp_a < 30.0
-        assert 20.0 < emu.temp_b < 30.0
+        # Mean-reverting noise stays tightly around base temperature
+        assert abs(emu.temp_a - 25.0) < 1.0
+        assert abs(emu.temp_b - 25.0) < 1.0
 
     def test_no_commands(self):
         emu = TempMonEmulator()
         emu.server({"anything": True})  # should be no-op
         assert emu.temp_a == 25.0  # unchanged before any op()
+
+    def test_status_fields(self):
+        emu = TempMonEmulator()
+        status = emu.get_status()
+        expected_keys = {
+            "sensor_name", "app_id",
+            "A_status", "A_temp", "A_timestamp",
+            "B_status", "B_temp", "B_timestamp",
+        }
+        assert set(status.keys()) == expected_keys
 
 
 class TestImuEmulator:
@@ -188,11 +208,11 @@ class TestImuEmulator:
         emu.op()
         assert emu.do_calibration is True  # not cleared yet
 
-    def test_cmd_calibrate(self):
-        """The PicoIMU.calibrate() sends {"cmd": "calibrate"}."""
+    def test_calibrate_false_is_noop(self):
+        """{"calibrate": false} does not trigger calibration (matches cJSON_IsTrue)."""
         emu = ImuEmulator()
-        emu.server({"cmd": "calibrate"})
-        assert emu.do_calibration is True
+        emu.server({"calibrate": False})
+        assert emu.do_calibration is False
 
     def test_status_fields(self):
         emu = ImuEmulator()
@@ -217,19 +237,18 @@ class TestLidarEmulator:
         assert status["sensor_name"] == "lidar"
         assert status["distance_m"] == 1.5
 
-    def test_noise_stays_reasonable(self):
+    def test_noise_is_mean_reverting(self):
         emu = LidarEmulator()
         for _ in range(1000):
             emu.op()
-        assert emu.distance >= 0.0
-        assert emu.distance < 5.0
+        # Mean-reverting noise stays tightly around base distance
+        assert abs(emu.distance - 1.5) < 0.5
 
-    def test_clamp_non_negative(self):
+    def test_status_fields(self):
         emu = LidarEmulator()
-        emu.distance = 0.005
-        for _ in range(1000):
-            emu.op()
-        assert emu.distance >= 0.0
+        status = emu.get_status()
+        expected_keys = {"sensor_name", "status", "app_id", "distance_m"}
+        assert set(status.keys()) == expected_keys
 
 
 class TestRFSwitchEmulator:
@@ -245,6 +264,12 @@ class TestRFSwitchEmulator:
         emu.server({"sw_state": 42})
         assert emu.sw_state == 42
         assert emu.get_status()["sw_state"] == 42
+
+    def test_status_fields(self):
+        emu = RFSwitchEmulator()
+        status = emu.get_status()
+        expected_keys = {"sensor_name", "status", "app_id", "sw_state"}
+        assert set(status.keys()) == expected_keys
 
 
 class TestRFSwitchWithImuEmulator:

@@ -9,19 +9,18 @@ class LidarEmulator(PicoEmulator):
     """Emulates src/lidar.c firmware."""
 
     def __init__(self, app_id=4, **kwargs):
-        self.distance = 1.5  # meters
+        self._base_distance = 1.5  # meters
+        self.distance = self._base_distance
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.distance = 1.5
+        self.distance = self._base_distance
 
     def server(self, cmd):
         pass  # lidar does not handle commands
 
     def op(self):
-        self.distance += random.gauss(0, NOISE_STDDEV)
-        if self.distance < 0:
-            self.distance = 0.0
+        self.distance = self._base_distance + random.gauss(0, NOISE_STDDEV)
 
     def get_status(self):
         return {
