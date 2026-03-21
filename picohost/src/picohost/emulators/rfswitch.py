@@ -46,6 +46,7 @@ class RFSwitchWithImuEmulator(PicoEmulator):
 
     def init(self):
         self._rfswitch.init()
+        self._imu.init()
 
     def server(self, cmd):
         # main.c dispatches to both imu_server and rfswitch_server

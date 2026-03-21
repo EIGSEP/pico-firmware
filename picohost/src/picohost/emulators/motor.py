@@ -93,8 +93,8 @@ class MotorEmulator(PicoEmulator):
             el.dn_delay_us = int(cmd["el_dn_delay_us"])
 
     def op(self):
-        stepper_op(self.azimuth)
         stepper_op(self.elevation)
+        stepper_op(self.azimuth)
 
     def get_status(self):
         return {

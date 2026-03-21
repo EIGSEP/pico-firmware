@@ -106,8 +106,8 @@ class ImuEmulator(PicoEmulator):
             self.do_calibration = False
 
     def get_status(self):
-        # "calibrated" field: "True" when do_calibration is set,
-        # "False" otherwise (matching C firmware's inverted logic)
+        # "calibrated" field: "True" when do_calibration is set (i.e.
+        # calibration in progress), "False" otherwise
         calibrated = "True" if self.do_calibration else "False"
         status = "update" if self.is_initialized else "error"
         return {
