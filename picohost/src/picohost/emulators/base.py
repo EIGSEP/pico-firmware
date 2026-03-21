@@ -10,8 +10,10 @@ def _safe_int(val, default=0):
     """Convert to int, returning *default* on failure.
 
     Matches cJSON behaviour: ``valueint`` silently returns 0 for
-    non-numeric JSON types.
+    non-numeric JSON types (strings, arrays, objects).
     """
+    if isinstance(val, (str, bytes, list, dict)):
+        return default
     try:
         return int(val)
     except (ValueError, TypeError):
@@ -22,8 +24,10 @@ def _safe_float(val, default=0.0):
     """Convert to float, returning *default* on failure.
 
     Matches cJSON behaviour: ``valuedouble`` silently returns 0.0 for
-    non-numeric JSON types.
+    non-numeric JSON types (strings, arrays, objects).
     """
+    if isinstance(val, (str, bytes, list, dict)):
+        return default
     try:
         return float(val)
     except (ValueError, TypeError):

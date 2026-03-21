@@ -26,6 +26,8 @@ class TempMonEmulator(PicoEmulator):
         self.temp_b = self._base_temp_b
         self.timestamp_a = 0.0
         self.timestamp_b = 0.0
+        self._sensor_error_a = False
+        self._sensor_error_b = False
 
     def inject_sensor_error(self, channel, error=True):
         """Simulate a OneWire sensor failure on channel "A" or "B".

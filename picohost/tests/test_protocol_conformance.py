@@ -32,13 +32,32 @@ class TestBaseProtocol:
     """Behaviour defined by main.c's command loop, shared by all apps."""
 
     def test_malformed_json_silently_ignored(self):
-        """C firmware: cJSON_Parse returns NULL → function returns early."""
+        """C firmware: cJSON_Parse returns NULL → function returns early.
+
+        Feed malformed and valid JSON lines into _cmd_buffer and use a
+        minimal peer so _read_commands() processes the buffer through the
+        real JSONDecodeError path.
+        """
+
+        class _NullPeer:
+            """Peer with nothing to read — lets _read_commands() reach the
+            buffer-processing loop without providing new data."""
+            def in_waiting(self):
+                return 0
+
         emu = MotorEmulator()
+        emu.attach(_NullPeer())
         emu.server({"az_set_target_pos": 500})
-        # Simulate what _read_commands does with bad JSON: it catches
-        # JSONDecodeError and skips the line.  Verify via a state-check that
-        # a subsequent valid command still works.
-        emu.server({"az_set_target_pos": 700})
+        initial_pos = emu.azimuth.target_pos
+
+        # Malformed JSON (missing closing brace) — should be silently ignored.
+        emu._cmd_buffer = '{"az_set_target_pos": 999\n'
+        emu._read_commands()
+        assert emu.azimuth.target_pos == initial_pos
+
+        # Valid command after the bad one should still work.
+        emu._cmd_buffer = '{"az_set_target_pos": 700}\n'
+        emu._read_commands()
         assert emu.azimuth.target_pos == 700
 
     def test_no_command_acknowledgment(self):
