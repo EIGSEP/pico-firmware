@@ -446,9 +446,9 @@ class PicoIMU(PicoDevice):
 class PicoPotentiometer(PicoDevice):
     '''A class for calibrating and calculating angles.'''
 
-    def __init__( self, port, verbose=False, timeout=5., name="", eig_redis=None): 
+    def __init__( self, port, turns=10, verbose=False, timeout=5., name="", eig_redis=None): 
         super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis, turns=10
+            port, timeout=timeout, name=name, eig_redis=eig_redis
         )
         self.turns = turns
         self.degrees = 360*turns
@@ -458,16 +458,16 @@ class PicoPotentiometer(PicoDevice):
 
     def calibrate(self):
         input("Spin the potentiometers to minimum.") #CW or CCW?
-        zero0 = self.last_status['pot0_resistance']
-        zero1 = self.last_status['pot1_resistance']
+        zero0 = self.last_status['pot0_voltage']
+        zero1 = self.last_status['pot1_voltage']
 
         input('Spin the potentiometers to maximum.') #CW or CCW?
-        full0 = self.last_status['pot0_resistance']
-        full1 = self.last_status['pot1_resistance']
+        full0 = self.last_status['pot0_voltage']
+        full1 = self.last_status['pot1_voltage']
         
         #fit to linear, IDK how many rotations this pot does
         self.cal0_values = self._calibrate(xs=[zero0, full0], ys=[0, self.degrees])
-        #self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, self.degrees])
+        self.cal1_values = self._calibrate(xs=[zero1, full1], ys=[0, self.degrees])
  
 
     def _calibrate(self, xs, ys):
@@ -480,17 +480,16 @@ class PicoPotentiometer(PicoDevice):
 
     def read_angle(self):
         last_status = self.last_status
-        res0 = last_status['pot0_resistance']
-        #res1 = last_status['pot1_resistance']
+        v0 = last_status['pot0_voltage']
+        v1 = last_status['pot1_voltage']
         
-        angle0 = self._calc_angle(res0, self.cal0_values)
-        #angle1 = self._calc_angle(res1, self.cal1_values)
-        angle1 = 1
+        angle0 = self._calc_angle(v0, self.cal0_values)
+        angle1 = self._calc_angle(v1, self.cal1_values)
         return {"pot0":angle0, "pot1":angle1}
 
-    def _calc_angle(self, res, params):
+    def _calc_angle(self, v, params):
         m, b = params
-        return m*res + b
+        return m*v + b
     
 
 
