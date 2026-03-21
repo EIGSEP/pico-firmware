@@ -41,6 +41,9 @@ def stepper_op(m):
         m.steps_in_direction = 0
     m.dir = new_dir
 
+    if nsteps == 0:
+        return  # nothing to do, matches C early return
+
     for _ in range(nsteps):
         m.position += m.dir
 

@@ -1,8 +1,11 @@
+import time
+
 import numpy as np
 
 from .base import PicoEmulator
 
 NOISE_STDDEV = 0.001
+IMU_EVENT_TIMEOUT_S = 5.0  # matches IMU_EVENT_TIMEOUT_MS in imu.h
 # Earth's magnetic field (approximate, in sensor frame when upright)
 MAG_FIELD = np.array([20.0, 0.0, -45.0])  # microtesla, northern hemisphere
 GRAVITY = np.array([0.0, 0.0, 9.81])
@@ -60,6 +63,8 @@ class ImuEmulator(PicoEmulator):
         self.mag_status = 3
         self.do_calibration = False
         self.is_initialized = True
+        self._last_event_time = time.monotonic()
+        self._sensor_failed = False  # set via simulate_sensor_failure()
         # Name depends on app_id: "imu_panda" if APP_IMU (3), else "imu_antenna"
         self.name = "imu_panda" if app_id == 3 else "imu_antenna"
         super().__init__(app_id=app_id, **kwargs)
@@ -82,7 +87,32 @@ class ImuEmulator(PicoEmulator):
         if cmd.get("calibrate") is True:
             self.do_calibration = True
 
+    def simulate_sensor_failure(self):
+        """Simulate BNO08x crash / power loss (no more events)."""
+        self._sensor_failed = True
+
+    def simulate_sensor_recovery(self):
+        """Simulate BNO08x coming back after a failure."""
+        self._sensor_failed = False
+
     def op(self):
+        # Re-init if previously timed out (matches imu_op -> imu_init)
+        if not self.is_initialized and not self._sensor_failed:
+            self.is_initialized = True
+            self._last_event_time = time.monotonic()
+
+        if not self.is_initialized:
+            return
+
+        # When sensor has failed, no events arrive — check for timeout
+        if self._sensor_failed:
+            if (time.monotonic() - self._last_event_time) > IMU_EVENT_TIMEOUT_S:
+                self.is_initialized = False
+            return
+
+        # Normal operation: sensor produces events
+        self._last_event_time = time.monotonic()
+
         # Small random angular drift (mean-reverting toward 0)
         self.az_angle = 0.99 * self.az_angle + np.random.normal(0, 0.001)
         self.el_angle = 0.99 * self.el_angle + np.random.normal(0, 0.001)
@@ -116,9 +146,7 @@ class ImuEmulator(PicoEmulator):
             self.do_calibration = False
 
     def get_status(self):
-        # "calibrated" field: "True" when do_calibration is set (i.e.
-        # calibration in progress), "False" otherwise
-        calibrated = "True" if self.do_calibration else "False"
+        calibrated = bool(self.do_calibration)
         status = "update" if self.is_initialized else "error"
         return {
             "sensor_name": self.name,

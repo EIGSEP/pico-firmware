@@ -99,6 +99,27 @@ class TestMotorEmulator:
         assert emu.azimuth.up_delay_us == 3000
         assert emu.azimuth.dn_delay_us == 4000
 
+    def test_noop_when_at_target(self):
+        """op() should be a no-op when position == target (no needless work).
+
+        In C firmware, this corresponds to skipping enable/disable GPIO
+        toggling when there are zero steps to take.
+        """
+        emu = MotorEmulator()
+        # Position already at target (both 0)
+        emu.op()
+        assert emu.azimuth.position == 0
+        assert emu.azimuth.dir == 0
+        assert emu.azimuth.steps_in_direction == 0
+        # After convergence, further op() calls should be no-ops
+        emu.server({"az_set_target_pos": 120})
+        for _ in range(5):
+            emu.op()
+        assert emu.azimuth.position == 120
+        steps_before = emu.azimuth.steps_in_direction
+        emu.op()
+        assert emu.azimuth.steps_in_direction == steps_before
+
     def test_status_fields(self):
         emu = MotorEmulator()
         status = emu.get_status()
@@ -232,7 +253,7 @@ class TestImuEmulator:
         assert emu.name == "imu_panda"
         status = emu.get_status()
         assert status["sensor_name"] == "imu_panda"
-        assert status["calibrated"] == "False"
+        assert status["calibrated"] is False
 
     def test_antenna_name(self):
         emu = ImuEmulator(app_id=5)
@@ -268,10 +289,10 @@ class TestImuEmulator:
         emu.mag_status = 3
         emu.server({"calibrate": True})
         assert emu.do_calibration is True
-        assert emu.get_status()["calibrated"] == "True"
+        assert emu.get_status()["calibrated"] is True
         emu.op()
         assert emu.do_calibration is False
-        assert emu.get_status()["calibrated"] == "False"
+        assert emu.get_status()["calibrated"] is False
 
     def test_calibration_waits_for_status(self):
         """Calibration doesn't clear until both statuses reach 3."""
@@ -287,6 +308,48 @@ class TestImuEmulator:
         emu = ImuEmulator()
         emu.server({"calibrate": False})
         assert emu.do_calibration is False
+
+    def test_calibrated_field_is_bool(self):
+        """calibrated field must be a JSON boolean, not a string."""
+        emu = ImuEmulator()
+        status = emu.get_status()
+        assert isinstance(status["calibrated"], bool)
+        assert status["calibrated"] is False
+        emu.server({"calibrate": True})
+        status = emu.get_status()
+        assert isinstance(status["calibrated"], bool)
+        assert status["calibrated"] is True
+
+    def test_sensor_failure_triggers_reinit(self):
+        """IMU reports error after event timeout, then recovers."""
+        import picohost.emulators.imu as imu_mod
+
+        emu = ImuEmulator()
+        emu.op()
+        assert emu.is_initialized is True
+        assert emu.get_status()["status"] == "update"
+
+        # Simulate sensor crash and push last_event_time into the past
+        emu.simulate_sensor_failure()
+        emu._last_event_time -= imu_mod.IMU_EVENT_TIMEOUT_S + 1
+        emu.op()
+        assert emu.is_initialized is False
+        assert emu.get_status()["status"] == "error"
+
+        # Sensor comes back — next op() should re-initialize
+        emu.simulate_sensor_recovery()
+        emu.op()
+        assert emu.is_initialized is True
+        assert emu.get_status()["status"] == "update"
+
+    def test_sensor_failure_before_timeout_stays_initialized(self):
+        """IMU stays initialized if failure is shorter than timeout."""
+        emu = ImuEmulator()
+        emu.op()
+        emu.simulate_sensor_failure()
+        # Without advancing the clock, still within timeout
+        emu.op()
+        assert emu.is_initialized is True
 
     def test_status_fields(self):
         emu = ImuEmulator()

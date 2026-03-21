@@ -74,7 +74,7 @@ with imu1, imu2:
                         print("IMU1:", json.dumps(data1, indent=2))
                         print_time = now
 
-                    if data1.get("accel_cal") == 3 and data1.get("mag_cal") == 3 and data1.get("calibrated") == "True":
+                    if data1.get("accel_cal") == 3 and data1.get("mag_cal") == 3 and data1.get("calibrated") is True:
                         print("IMU1 calibration complete.")
                         imu_done[1] = True
                     else:
@@ -93,7 +93,7 @@ with imu1, imu2:
                         print("IMU2:", json.dumps(data2, indent=2))
                         print_time = now
 
-                    if data2.get("accel_cal") == 3 and data2.get("mag_cal") == 3 and data2.get("calibrated") == "True":
+                    if data2.get("accel_cal") == 3 and data2.get("mag_cal") == 3 and data2.get("calibrated") is True:
                         print("IMU2 calibration complete.")
                         imu_done[2] = True
                     else:

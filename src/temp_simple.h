@@ -7,6 +7,10 @@
 #include "onewire_library.h"
 #include "ds18b20.h"
 
+// DS18B20 requires up to 750ms for 12-bit temperature conversion
+// (hardware limitation, see DS18B20 datasheet Table 2)
+#define DS18B20_CONVERSION_TIME_MS 750
+
 // Temperature sensor structure for direct GPIO connection
 typedef struct {
     OW ow;
@@ -28,6 +32,11 @@ void temp_sensor_read(TempSensor *sensor);
 
 // Get current temperature value
 float temp_sensor_get_temp(TempSensor *sensor);
+
+// Returns the absolute time (ms since boot) when the last conversion was
+// started.  Despite the name, this is NOT a duration — it is used by the host
+// to detect stale readings (if the value stops changing, the sensor may have
+// disconnected).
 float temp_sensor_get_conversion_time(TempSensor *sensor);
 
 // Get error status

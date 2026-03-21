@@ -31,7 +31,7 @@ void temp_sensor_start_conversion(TempSensor *sensor) {
 void temp_sensor_read(TempSensor *sensor) {
     // Check if enough time has passed since conversion start
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    if ((now - sensor->last_conversion_time) < 750) {
+    if ((now - sensor->last_conversion_time) < DS18B20_CONVERSION_TIME_MS) {
         return;
     }
     
