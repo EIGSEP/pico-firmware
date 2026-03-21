@@ -62,6 +62,30 @@ class TestMotorEmulator:
         emu.server({"halt": 0})
         assert emu.azimuth.target_pos == emu.azimuth.position
 
+    def test_retarget(self):
+        """Move to one position, then change target to another."""
+        emu = MotorEmulator()
+        emu.server({"az_set_target_pos": 500})
+        for _ in range(20):
+            emu.op()
+        assert emu.azimuth.position == 500
+        emu.server({"az_set_target_pos": 200})
+        for _ in range(20):
+            emu.op()
+        assert emu.azimuth.position == 200
+
+    def test_reverse_direction(self):
+        """Move forward then backward past origin."""
+        emu = MotorEmulator()
+        emu.server({"az_set_target_pos": 300})
+        for _ in range(20):
+            emu.op()
+        assert emu.azimuth.position == 300
+        emu.server({"az_set_target_pos": -100})
+        for _ in range(20):
+            emu.op()
+        assert emu.azimuth.position == -100
+
     def test_elevation(self):
         emu = MotorEmulator()
         emu.server({"el_set_target_pos": -500})
@@ -103,6 +127,40 @@ class TestTempCtrlEmulator:
         for _ in range(500):
             emu.op()
         assert abs(emu.A.T_now - 30.0) < 0.5
+
+    def test_converge_to_non_default_target(self):
+        """Converge to a target different from the 30.0 default."""
+        emu = TempCtrlEmulator()
+        emu.A.T_now = 25.0
+        emu.server({"A_temp_target": 40.0, "A_enable": True, "A_hysteresis": 0.5})
+        for _ in range(1000):
+            emu.op()
+        assert abs(emu.A.T_now - 40.0) < 0.5
+
+    def test_cool_back_down(self):
+        """Heat to target, then set a lower target and verify cooling."""
+        emu = TempCtrlEmulator()
+        emu.A.T_now = 25.0
+        emu.server({"A_temp_target": 35.0, "A_enable": True, "A_hysteresis": 0.5})
+        for _ in range(1000):
+            emu.op()
+        assert abs(emu.A.T_now - 35.0) < 0.5
+        # Now cool back to 25
+        emu.server({"A_temp_target": 25.0})
+        for _ in range(1000):
+            emu.op()
+        assert abs(emu.A.T_now - 25.0) < 0.5
+
+    def test_channel_b(self):
+        """Channel B works independently of channel A."""
+        emu = TempCtrlEmulator()
+        emu.B.T_now = 20.0
+        emu.server({"B_temp_target": 28.0, "B_enable": True, "B_hysteresis": 0.5})
+        for _ in range(1000):
+            emu.op()
+        assert abs(emu.B.T_now - 28.0) < 0.5
+        # Channel A should not have moved (not enabled)
+        assert emu.A.drive == 0.0
 
     def test_hysteresis_band(self):
         """When T_now is within hysteresis of target, drive should be 0."""
