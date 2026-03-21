@@ -34,7 +34,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: EIGSEP/pico-firmware
-          file: picohost/coverage.xml
+          file: picohost/junit.xml
 
   emulator-coverage:
     runs-on: ubuntu-latest
