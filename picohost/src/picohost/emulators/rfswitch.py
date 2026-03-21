@@ -1,4 +1,4 @@
-from .base import PicoEmulator
+from .base import PicoEmulator, _safe_int
 from .imu import ImuEmulator
 
 
@@ -14,7 +14,7 @@ class RFSwitchEmulator(PicoEmulator):
 
     def server(self, cmd):
         if "sw_state" in cmd:
-            self.sw_state = int(cmd["sw_state"])
+            self.sw_state = _safe_int(cmd["sw_state"], self.sw_state)
 
     def op(self):
         pass  # GPIO writes in firmware, no-op in emulator
