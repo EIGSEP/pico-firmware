@@ -434,10 +434,7 @@ class PicoIMU(PicoDevice):
         """
         Send request to calibrate IMU.
 
-        Args:
-            channel: Channel number (0=both, 1/2=individual)
-
         Returns:
             True if command sent successfully
         """
-        return self.send_command({"cmd": "calibrate"})
+        return self.send_command({"calibrate": True})
