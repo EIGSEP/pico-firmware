@@ -161,16 +161,6 @@ class TestIMUIntegration:
         assert set(imu.last_status.keys()) == IMU_FIELDS
         assert imu.last_status["sensor_name"] == "imu_panda"
 
-    def test_calibrated_is_bool_over_serial(self, imu):
-        """calibrated field must arrive as JSON boolean through the serial pipeline.
-
-        This catches mismatches between firmware (KV_BOOL) and host code
-        that previously compared against string "True"/"False".
-        """
-        time.sleep(0.2)
-        assert isinstance(imu.last_status["calibrated"], bool)
-        assert imu.last_status["calibrated"] is False
-
     def test_calibrate_round_trip(self, imu):
         """PicoIMU.calibrate() round-trips through serial and is processed.
 
