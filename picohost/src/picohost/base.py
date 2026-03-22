@@ -381,10 +381,10 @@ class PicoPeltier(PicoDevice):
     def __init__(
         self,
         port,
-        eig_redis,
         verbose=False,
         timeout=5.0,
         name=None,
+        eig_redis=None,
         keepalive_interval=10.0,
     ):
         """
@@ -411,7 +411,7 @@ class PicoPeltier(PicoDevice):
         self.verbose = verbose
         self.status = {}
         super().__init__(
-            port, eig_redis, timeout=timeout, name=name,
+            port, timeout=timeout, name=name, eig_redis=eig_redis
         )
         self.set_response_handler(self.update_status)
         self.wait_for_updates()
