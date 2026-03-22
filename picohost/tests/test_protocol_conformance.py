@@ -319,12 +319,12 @@ class TestImuProtocol:
         emu.op()
         assert emu.do_calibration is True  # not cleared
 
-    def test_calibrated_field_is_string(self):
-        """imu.cpp line 166-169: KV_STR "True"/"False", not bool."""
+    def test_calibrated_field_is_bool(self):
+        """imu.cpp: KV_BOOL, so calibrated is a JSON boolean."""
         emu = ImuEmulator()
-        assert emu.get_status()["calibrated"] == "False"
+        assert emu.get_status()["calibrated"] is False
         emu.server({"calibrate": True})
-        assert emu.get_status()["calibrated"] == "True"
+        assert emu.get_status()["calibrated"] is True
 
     def test_error_status_when_not_initialized(self):
         """imu.cpp line 159-163: status="error" if !is_initialized."""

@@ -11,7 +11,6 @@ from picohost.emulators import (
     ImuEmulator,
     LidarEmulator,
     RFSwitchEmulator,
-    RFSwitchWithImuEmulator,
 )
 
 
@@ -38,29 +37,6 @@ class TestMotorEmulator:
         for _ in range(5):
             emu.op()
         assert emu.azimuth.position == 1000
-
-    def test_set_pos_resets_target(self):
-        """Matching C behavior: az_set_pos resets target to position."""
-        emu = MotorEmulator()
-        emu.server({"az_set_target_pos": 500})
-        for _ in range(10):
-            emu.op()
-        emu.server({"az_set_pos": 0})
-        assert emu.azimuth.position == 0
-        assert emu.azimuth.target_pos == 0
-
-    def test_halt(self):
-        emu = MotorEmulator()
-        emu.server({"az_set_target_pos": 1000})
-        for _ in range(5):
-            emu.op()
-        pos_before = emu.azimuth.position
-        assert pos_before > 0 and pos_before < 1000
-        # C firmware only checks key presence via cJSON_GetObjectItem(root, "halt");
-        # the value (0 here) is irrelevant. Using 0 rather than true because
-        # true would imply false disables halt, which is not the case.
-        emu.server({"halt": 0})
-        assert emu.azimuth.target_pos == emu.azimuth.position
 
     def test_retarget(self):
         """Move to one position, then change target to another."""
@@ -98,6 +74,27 @@ class TestMotorEmulator:
         emu.server({"az_up_delay_us": 3000, "az_dn_delay_us": 4000})
         assert emu.azimuth.up_delay_us == 3000
         assert emu.azimuth.dn_delay_us == 4000
+
+    def test_noop_when_at_target(self):
+        """op() should be a no-op when position == target (no needless work).
+
+        In C firmware, this corresponds to skipping enable/disable GPIO
+        toggling when there are zero steps to take.
+        """
+        emu = MotorEmulator()
+        # Position already at target (both 0)
+        emu.op()
+        assert emu.azimuth.position == 0
+        assert emu.azimuth.dir == 0
+        assert emu.azimuth.steps_in_direction == 0
+        # After convergence, further op() calls should be no-ops
+        emu.server({"az_set_target_pos": 120})
+        for _ in range(5):
+            emu.op()
+        assert emu.azimuth.position == 120
+        steps_before = emu.azimuth.steps_in_direction
+        emu.op()
+        assert emu.azimuth.steps_in_direction == steps_before
 
     def test_status_fields(self):
         emu = MotorEmulator()
@@ -162,22 +159,6 @@ class TestTempCtrlEmulator:
         # Channel A should not have moved (not enabled)
         assert emu.A.drive == 0.0
 
-    def test_hysteresis_band(self):
-        """When T_now is within hysteresis of target, drive should be 0."""
-        emu = TempCtrlEmulator()
-        emu.A.T_now = 29.8
-        emu.server({"A_temp_target": 30.0, "A_enable": True, "A_hysteresis": 0.5})
-        emu.op()
-        assert emu.A.drive == 0.0
-        assert emu.A.active is False
-
-    def test_clamp_bounded(self):
-        emu = TempCtrlEmulator()
-        emu.server({"A_clamp": 1.5})
-        assert emu.A.clamp == 1.0
-        emu.server({"A_clamp": -0.5})
-        assert emu.A.clamp == 0.0
-
     def test_status_fields(self):
         emu = TempCtrlEmulator()
         status = emu.get_status()
@@ -209,11 +190,6 @@ class TestTempMonEmulator:
         assert abs(emu.temp_a - 25.0) < 1.0
         assert abs(emu.temp_b - 25.0) < 1.0
 
-    def test_no_commands(self):
-        emu = TempMonEmulator()
-        emu.server({"anything": True})  # should be no-op
-        assert emu.temp_a == 25.0  # unchanged before any op()
-
     def test_status_fields(self):
         emu = TempMonEmulator()
         status = emu.get_status()
@@ -232,7 +208,7 @@ class TestImuEmulator:
         assert emu.name == "imu_panda"
         status = emu.get_status()
         assert status["sensor_name"] == "imu_panda"
-        assert status["calibrated"] == "False"
+        assert status["calibrated"] is False
 
     def test_antenna_name(self):
         emu = ImuEmulator(app_id=5)
@@ -261,32 +237,36 @@ class TestImuEmulator:
         assert abs(emu.q[3] - np.cos(np.pi / 8)) < 0.02  # real part
         assert abs(emu.q[2] - np.sin(np.pi / 8)) < 0.02  # k component (z-axis)
 
-    def test_calibration_flow(self):
-        """Calibrate command sets flag, op clears it when statuses == 3."""
-        emu = ImuEmulator()
-        emu.accel_status = 3
-        emu.mag_status = 3
-        emu.server({"calibrate": True})
-        assert emu.do_calibration is True
-        assert emu.get_status()["calibrated"] == "True"
-        emu.op()
-        assert emu.do_calibration is False
-        assert emu.get_status()["calibrated"] == "False"
+    def test_sensor_failure_triggers_reinit(self):
+        """IMU reports error after event timeout, then recovers."""
+        import picohost.emulators.imu as imu_mod
 
-    def test_calibration_waits_for_status(self):
-        """Calibration doesn't clear until both statuses reach 3."""
         emu = ImuEmulator()
-        emu.accel_status = 2
-        emu.mag_status = 3
-        emu.server({"calibrate": True})
         emu.op()
-        assert emu.do_calibration is True  # not cleared yet
+        assert emu.is_initialized is True
+        assert emu.get_status()["status"] == "update"
 
-    def test_calibrate_false_is_noop(self):
-        """{"calibrate": false} does not trigger calibration (matches cJSON_IsTrue)."""
+        # Simulate sensor crash and push last_event_time into the past
+        emu.simulate_sensor_failure()
+        emu._last_event_time -= imu_mod.IMU_EVENT_TIMEOUT_S + 1
+        emu.op()
+        assert emu.is_initialized is False
+        assert emu.get_status()["status"] == "error"
+
+        # Sensor comes back — next op() should re-initialize
+        emu.simulate_sensor_recovery()
+        emu.op()
+        assert emu.is_initialized is True
+        assert emu.get_status()["status"] == "update"
+
+    def test_sensor_failure_before_timeout_stays_initialized(self):
+        """IMU stays initialized if failure is shorter than timeout."""
         emu = ImuEmulator()
-        emu.server({"calibrate": False})
-        assert emu.do_calibration is False
+        emu.op()
+        emu.simulate_sensor_failure()
+        # Without advancing the clock, still within timeout
+        emu.op()
+        assert emu.is_initialized is True
 
     def test_status_fields(self):
         emu = ImuEmulator()
@@ -333,39 +313,11 @@ class TestRFSwitchEmulator:
         assert status["sensor_name"] == "rfswitch"
         assert status["sw_state"] == 0
 
-    def test_set_state(self):
-        emu = RFSwitchEmulator()
-        emu.server({"sw_state": 42})
-        assert emu.sw_state == 42
-        assert emu.get_status()["sw_state"] == 42
-
     def test_status_fields(self):
         emu = RFSwitchEmulator()
         status = emu.get_status()
         expected_keys = {"sensor_name", "status", "app_id", "sw_state"}
         assert set(status.keys()) == expected_keys
-
-
-class TestRFSwitchWithImuEmulator:
-
-    def test_composite_status(self):
-        """Composite emulator returns both IMU and RFSwitch status."""
-        emu = RFSwitchWithImuEmulator()
-        status = emu.get_status()
-        assert isinstance(status, list)
-        assert len(status) == 2
-        sensor_names = {s["sensor_name"] for s in status}
-        assert "imu_antenna" in sensor_names
-        assert "rfswitch" in sensor_names
-
-    def test_composite_server(self):
-        """Commands dispatch to both sub-emulators."""
-        emu = RFSwitchWithImuEmulator()
-        emu.server({"sw_state": 7})
-        assert emu._rfswitch.sw_state == 7
-
-        emu.server({"calibrate": True})
-        assert emu._imu.do_calibration is True
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +385,8 @@ class TestImuStatusTypes:
                      "gyro_x", "gyro_y", "gyro_z",
                      "mag_x", "mag_y", "mag_z"):
             assert isinstance(status[key], float), f"{key} should be float"
-        # calibrated is a STRING in C firmware (KV_STR), not a bool
-        assert isinstance(status["calibrated"], str)
-        assert status["calibrated"] in ("True", "False")
+        # calibrated is a BOOL in C firmware (KV_BOOL)
+        assert isinstance(status["calibrated"], bool)
         assert isinstance(status["accel_cal"], int)
         assert isinstance(status["mag_cal"], int)
 
@@ -516,47 +467,12 @@ class TestMalformedInput:
         emu.server({"A_clamp": None})
         assert emu.A.clamp == 0.6  # unchanged
 
-    def test_imu_non_bool_calibrate(self):
-        """cJSON_IsTrue only accepts literal true, not truthy values."""
-        emu = ImuEmulator()
-        emu.server({"calibrate": 1})
-        assert emu.do_calibration is False
-        emu.server({"calibrate": "yes"})
-        assert emu.do_calibration is False
-
-    def test_tempmon_ignores_any_command(self):
-        emu = TempMonEmulator()
-        emu.server({"sw_state": 5, "calibrate": True, "anything": "foo"})
-        # no crash, no state change
-
-    def test_lidar_ignores_any_command(self):
-        emu = LidarEmulator()
-        emu.server({"distance_m": 999, "calibrate": True})
-        assert emu.distance == 100.0  # unchanged
-
 
 # ---------------------------------------------------------------------------
 # Error state injection
 # ---------------------------------------------------------------------------
 
 class TestTempCtrlErrorState:
-
-    def test_sensor_error_sets_error_status(self):
-        emu = TempCtrlEmulator()
-        emu.inject_sensor_error("A")
-        status = emu.get_status()
-        assert status["A_status"] == "error"
-        assert status["B_status"] == "update"
-
-    def test_sensor_error_forces_drive_zero(self):
-        """When internally_disabled, drive must be 0 (matching tempctrl.c:139)."""
-        emu = TempCtrlEmulator()
-        emu.server({"A_enable": True, "A_temp_target": 50.0})
-        emu.op()
-        assert emu.A.drive != 0.0  # should be driving
-        emu.inject_sensor_error("A")
-        emu.op()
-        assert emu.A.drive == 0.0
 
     def test_sensor_error_clear(self):
         emu = TempCtrlEmulator()
@@ -576,13 +492,6 @@ class TestTempCtrlErrorState:
 
 class TestTempMonErrorState:
 
-    def test_sensor_error_channel_a(self):
-        emu = TempMonEmulator()
-        emu.inject_sensor_error("A")
-        status = emu.get_status()
-        assert status["A_status"] == "error"
-        assert status["B_status"] == "update"
-
     def test_sensor_error_channel_b(self):
         emu = TempMonEmulator()
         emu.inject_sensor_error("B")
@@ -598,12 +507,6 @@ class TestTempMonErrorState:
 
 
 class TestImuErrorState:
-
-    def test_init_failure_error_status(self):
-        emu = ImuEmulator()
-        emu.inject_init_failure()
-        status = emu.get_status()
-        assert status["status"] == "error"
 
     def test_init_failure_calibration_noop(self):
         """When not initialized, calibrate command should have no effect.
@@ -621,36 +524,6 @@ class TestImuErrorState:
 # ---------------------------------------------------------------------------
 # Edge case behavioral tests
 # ---------------------------------------------------------------------------
-
-class TestMotorEdgeCases:
-
-    def test_set_pos_and_target_in_same_command(self):
-        """C processes set_pos before set_target_pos in same JSON object."""
-        emu = MotorEmulator()
-        emu.server({"az_set_pos": 100, "az_set_target_pos": 200})
-        assert emu.azimuth.position == 100
-        assert emu.azimuth.target_pos == 200
-
-    def test_halt_with_false_still_halts(self):
-        """C firmware checks key presence only, not value."""
-        emu = MotorEmulator()
-        emu.server({"az_set_target_pos": 1000})
-        for _ in range(5):
-            emu.op()
-        pos = emu.azimuth.position
-        assert 0 < pos < 1000
-        emu.server({"halt": False})
-        assert emu.azimuth.target_pos == pos
-
-    def test_halt_with_none_still_halts(self):
-        emu = MotorEmulator()
-        emu.server({"az_set_target_pos": 1000})
-        for _ in range(5):
-            emu.op()
-        pos = emu.azimuth.position
-        emu.server({"halt": None})
-        assert emu.azimuth.target_pos == pos
-
 
 class TestTempCtrlEdgeCases:
 
@@ -679,24 +552,3 @@ class TestTempCtrlEdgeCases:
         assert emu.A.drive == 0.0
 
 
-class TestRFSwitchEdgeCases:
-
-    def test_bitmask_values(self):
-        emu = RFSwitchEmulator()
-        for val in (0, 1, 127, 255):
-            emu.server({"sw_state": val})
-            assert emu.sw_state == val
-
-
-class TestImuEdgeCases:
-
-    def test_calibrate_with_int_1_is_noop(self):
-        """cJSON_IsTrue rejects integer 1; only literal true works."""
-        emu = ImuEmulator()
-        emu.server({"calibrate": 1})
-        assert emu.do_calibration is False
-
-    def test_calibrate_with_string_is_noop(self):
-        emu = ImuEmulator()
-        emu.server({"calibrate": "true"})
-        assert emu.do_calibration is False

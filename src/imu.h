@@ -26,6 +26,10 @@
 
 #define IMU_NAME_LEN      32
 
+// If no sensor events arrive within this window, assume the BNO08x has
+// crashed or been power-cycled and trigger re-initialization.
+#define IMU_EVENT_TIMEOUT_MS  5000
+
 /* ------------------------------------------------------------------ */
 /* Data structures                                                    */
 /* ------------------------------------------------------------------ */
@@ -49,6 +53,7 @@ typedef struct {
     ImuDrv_t      imu;            /* BNO08x in C++, opaque in C   */
     bool          is_initialized;
     bool          do_calibration;
+    uint32_t      last_event_time;  /* ms since boot of last sensor event */
     ImuData       sensor_data;
 } EigsepImu;
 
@@ -60,7 +65,7 @@ extern "C" {
 #endif
 
 void imu_init(uint8_t app_id);
-void init_eigsep_imu(EigsepImu *eimu, uint index);
+void init_eigsep_imu(EigsepImu *eimu, uint app_id);
 void calibrate_imu(EigsepImu *eimu);
 void imu_server(uint8_t app_id, const char *json_str);
 void process_imu_events(EigsepImu *eimu);

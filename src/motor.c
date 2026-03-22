@@ -94,6 +94,8 @@ void stepper_op(Stepper *m) {
     bool change_dir = (new_dir != m->dir);
     m->dir = new_dir;
     if (change_dir) m->steps_in_direction = 0;
+    if (nsteps == 0) return;  // nothing to do, skip enable/disable toggling
+
     bool near_start = (m->steps_in_direction <= m->slow_zone);
 
     int extra_delay_us = m->slowdown_factor * m->dn_delay_us;

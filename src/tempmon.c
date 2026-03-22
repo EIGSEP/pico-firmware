@@ -30,11 +30,11 @@ void tempmon_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempmon_status(uint8_t app_id) {
-    const float time1 = temp_sensor_get_conversion_time(&sensor1);
-    const float time2 = temp_sensor_get_conversion_time(&sensor2);
+    const uint32_t time1 = temp_sensor_get_conversion_time(&sensor1);
+    const uint32_t time2 = temp_sensor_get_conversion_time(&sensor2);
     const float temp1 = temp_sensor_get_temp(&sensor1);
     const float temp2 = temp_sensor_get_temp(&sensor2);
-    
+
     const char *status1 = temp_sensor_has_error(&sensor1) ? "error" : "update";
     const char *status2 = temp_sensor_has_error(&sensor2) ? "error" : "update";
 
@@ -43,10 +43,10 @@ void tempmon_status(uint8_t app_id) {
         KV_INT, "app_id", app_id,
         KV_STR, "A_status", status1,
         KV_FLOAT, "A_temp", temp1,
-        KV_FLOAT, "A_timestamp", time1,
+        KV_FLOAT, "A_timestamp", (double)time1,
         KV_STR, "B_status", status2,
         KV_FLOAT, "B_temp", temp2,
-        KV_FLOAT, "B_timestamp", time2
+        KV_FLOAT, "B_timestamp", (double)time2
     );
 }
 

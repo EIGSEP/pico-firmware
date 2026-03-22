@@ -1,7 +1,6 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/watchdog.h"
-#include "pico/unique_id.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -56,14 +55,6 @@ int main(void) {
 
     // Read DIP code early
     uint8_t app_id = read_dip_code();
-
-    // Get unique board ID
-    pico_unique_board_id_t unique_id;
-    pico_get_unique_board_id(&unique_id);
-    char uid_str[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
-    for (int i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
-        sprintf(&uid_str[i*2], "%02X", unique_id.id[i]);
-    }
 
     // Run app-dependent initialization
     switch (app_id) {
