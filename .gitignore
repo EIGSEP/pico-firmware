@@ -30,6 +30,9 @@ coverage.xml
 .hypothesis/
 .pyc
 
+# Claude Code
+.claude/
+
 # IDE
 .vscode/
 .idea/
