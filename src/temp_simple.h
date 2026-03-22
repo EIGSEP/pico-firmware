@@ -37,7 +37,7 @@ float temp_sensor_get_temp(TempSensor *sensor);
 // started.  Despite the name, this is NOT a duration — it is used by the host
 // to detect stale readings (if the value stops changing, the sensor may have
 // disconnected).
-float temp_sensor_get_conversion_time(TempSensor *sensor);
+uint32_t temp_sensor_get_conversion_time(TempSensor *sensor);
 
 // Get error status
 bool temp_sensor_has_error(TempSensor *sensor);

@@ -87,8 +87,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const float timeA = temp_sensor_get_conversion_time(&tempctrlA.temp_sensor);
-    const float timeB = temp_sensor_get_conversion_time(&tempctrlB.temp_sensor);
+    const uint32_t timeA = temp_sensor_get_conversion_time(&tempctrlA.temp_sensor);
+    const uint32_t timeB = temp_sensor_get_conversion_time(&tempctrlB.temp_sensor);
     
     const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
     const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
@@ -98,7 +98,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_INT, "app_id", app_id,
         KV_STR, "A_status", statusA,
         KV_FLOAT, "A_T_now", tempctrlA.T_now,
-        KV_FLOAT, "A_timestamp", timeA,
+        KV_FLOAT, "A_timestamp", (double)timeA,
         KV_FLOAT, "A_T_target", tempctrlA.T_target,
         KV_FLOAT, "A_drive_level", tempctrlA.drive,
         KV_BOOL, "A_enabled", tempctrlA.enabled,
@@ -108,7 +108,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "A_clamp", tempctrlA.clamp,
         KV_STR, "B_status", statusB,
         KV_FLOAT, "B_T_now", tempctrlB.T_now,
-        KV_FLOAT, "B_timestamp", timeB,
+        KV_FLOAT, "B_timestamp", (double)timeB,
         KV_FLOAT, "B_T_target", tempctrlB.T_target,
         KV_FLOAT, "B_drive_level", tempctrlB.drive,
         KV_BOOL, "B_enabled", tempctrlB.enabled,

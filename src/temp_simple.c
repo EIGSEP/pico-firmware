@@ -70,7 +70,7 @@ float temp_sensor_get_temp(TempSensor *sensor) {
     return sensor->temperature;
 }
 
-float temp_sensor_get_conversion_time(TempSensor *sensor) {
+uint32_t temp_sensor_get_conversion_time(TempSensor *sensor) {
     return sensor->last_conversion_time;
 }
 
