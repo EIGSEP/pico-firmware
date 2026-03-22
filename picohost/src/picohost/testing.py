@@ -49,11 +49,6 @@ class DummyPicoDevice(PicoDevice):
             self.ser.close()
             self.ser = None
 
-    def start(self):
-        """Override start to not create a reader thread for dummy devices."""
-        # For dummy devices, we don't need a background thread
-        self._running = True
-
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
     EMULATOR_CLASS = MotorEmulator
@@ -72,17 +67,6 @@ class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
     def _start_keepalive(self):
         """Disable keepalive for dummy devices."""
         pass
-
-    def wait_for_updates(self, timeout=3):
-        """Override to provide immediate dummy status for tests."""
-        self.status = {
-            "temperature": 25.0,
-            "target_temperature": 25.0,
-            "mode": "off",
-            "power": 0.0,
-            "watchdog_tripped": False,
-            "watchdog_timeout_ms": 30000,
-        }
 
 
 class DummyPicoIMU(DummyPicoDevice, PicoIMU):

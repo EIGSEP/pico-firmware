@@ -26,6 +26,7 @@ MOTOR_FIELDS = {
 
 TEMPCTRL_FIELDS = {
     "sensor_name", "app_id",
+    "watchdog_tripped", "watchdog_timeout_ms",
     "A_status", "A_T_now", "A_timestamp", "A_T_target",
     "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
     "A_hysteresis", "A_clamp",

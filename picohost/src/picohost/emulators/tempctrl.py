@@ -1,6 +1,6 @@
 import time
 
-from .base import PicoEmulator, _safe_float
+from .base import PicoEmulator, _safe_float, _safe_int
 
 
 class TempControlState:
@@ -44,13 +44,24 @@ class TempCtrlEmulator(PicoEmulator):
     def __init__(self, app_id=1, **kwargs):
         self.A = TempControlState()
         self.B = TempControlState()
+        self.watchdog_timeout_ms = 30000
+        self.watchdog_tripped = False
+        self._last_cmd_time = time.time()
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
         self.A = TempControlState()
         self.B = TempControlState()
+        self.watchdog_timeout_ms = 30000
+        self.watchdog_tripped = False
+        self._last_cmd_time = time.time()
 
     def server(self, cmd):
+        # Any valid command resets the watchdog timer and clears the trip flag.
+        # The host must explicitly re-enable peltiers after a trip.
+        self._last_cmd_time = time.time()
+        self.watchdog_tripped = False
+
         for prefix, tc in [("A", self.A), ("B", self.B)]:
             key = f"{prefix}_temp_target"
             if key in cmd:
@@ -67,6 +78,11 @@ class TempCtrlEmulator(PicoEmulator):
             key = f"{prefix}_clamp"
             if key in cmd:
                 tc.clamp = min(1.0, max(0.0, _safe_float(cmd[key], tc.clamp)))
+
+        if "watchdog_timeout_ms" in cmd:
+            self.watchdog_timeout_ms = _safe_int(
+                cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms
+            )
 
     def inject_sensor_error(self, channel, error=True):
         """Simulate a OneWire sensor failure on channel "A" or "B".
@@ -87,6 +103,14 @@ class TempCtrlEmulator(PicoEmulator):
         tc.timestamp = time.time()
 
     def op(self):
+        # Communication watchdog: disable peltiers if no command within timeout
+        if self.watchdog_timeout_ms > 0 and not self.watchdog_tripped:
+            elapsed_ms = (time.time() - self._last_cmd_time) * 1000
+            if elapsed_ms > self.watchdog_timeout_ms:
+                self.A.enabled = False
+                self.B.enabled = False
+                self.watchdog_tripped = True
+
         self._update_channel(self.A)
         self._update_channel(self.B)
 
@@ -96,6 +120,8 @@ class TempCtrlEmulator(PicoEmulator):
         return {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
+            "watchdog_tripped": self.watchdog_tripped,
+            "watchdog_timeout_ms": self.watchdog_timeout_ms,
             "A_status": a_status,
             "A_T_now": self.A.T_now,
             "A_timestamp": self.A.timestamp,
