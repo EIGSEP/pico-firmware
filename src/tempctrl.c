@@ -100,7 +100,10 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 
     // Watchdog timeout configuration (0 = disabled)
     item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
-    if (item_json) watchdog_timeout_ms = (uint32_t)item_json->valueint;
+    if (item_json && cJSON_IsNumber(item_json)) {
+        int val = item_json->valueint;
+        watchdog_timeout_ms = val < 0 ? 0 : (uint32_t)val;
+    }
 
     cJSON_Delete(root);
 }
@@ -112,7 +115,7 @@ void tempctrl_status(uint8_t app_id) {
     const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
     const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
     
-    send_json(22,
+    send_json(24,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,

@@ -445,7 +445,7 @@ class PicoPeltier(PicoDevice):
         while self._keepalive_running:
             self.send_command({})
             # Sleep in small increments so thread stops promptly
-            for _ in range(int(self._keepalive_interval * 10)):
+            for _ in range(max(1, int(self._keepalive_interval * 10))):
                 if not self._keepalive_running:
                     break
                 time.sleep(0.1)
