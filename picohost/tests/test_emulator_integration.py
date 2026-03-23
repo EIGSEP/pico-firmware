@@ -311,6 +311,31 @@ class TestRFSwitchIntegrationTypes:
         assert isinstance(s["sw_state"], int)
 
 
+# --- Peltier Watchdog ---
+
+class TestPeltierWatchdog:
+
+    def test_keepalive_prevents_watchdog(self):
+        """Keepalive commands prevent the watchdog from tripping."""
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
+        try:
+            p.set_watchdog_timeout(500)
+            time.sleep(1.0)
+            assert p.status.get("watchdog_tripped") is False
+        finally:
+            p.disconnect()
+
+    def test_watchdog_trips_without_keepalive(self):
+        """Without keepalive, the watchdog trips and disables peltiers."""
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            p.set_watchdog_timeout(200)
+            time.sleep(0.5)
+            assert p.status.get("watchdog_tripped") is True
+        finally:
+            p.disconnect()
+
+
 # --- Redis ---
 
 class TestRedisIntegration:

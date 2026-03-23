@@ -64,9 +64,10 @@ class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
     EMULATOR_CLASS = TempCtrlEmulator
     EMULATOR_CADENCE_MS = 50.0
 
-    def _start_keepalive(self):
-        """Disable keepalive for dummy devices."""
-        pass
+    def disconnect(self):
+        # PicoPeltier.stop() handles keepalive + reader thread cleanup
+        PicoPeltier.stop(self)
+        super().disconnect()
 
 
 class DummyPicoIMU(DummyPicoDevice, PicoIMU):
