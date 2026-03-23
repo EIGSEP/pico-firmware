@@ -26,7 +26,14 @@ void tempmon_init(uint8_t app_id) {
 }
 
 void tempmon_server(uint8_t app_id, const char *json_str) {
-    // tempmon does not handle commands
+    // tempmon does not currently handle commands, but validate anyway
+    // so the guard is in place when commands are added in the future.
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+    cJSON_Delete(root);
 }
 
 void tempmon_status(uint8_t app_id) {

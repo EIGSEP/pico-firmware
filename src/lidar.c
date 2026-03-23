@@ -2,6 +2,7 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "eigsep_command.h"
+#include "cJSON.h"
 #include <stdio.h>
 
 #define I2C_PORT i2c0
@@ -47,7 +48,16 @@ void lidar_init(uint8_t app_id) {
     free_i2c_bus();
 }
 
-void lidar_server(uint8_t app_id, const char *json_str) {}
+void lidar_server(uint8_t app_id, const char *json_str) {
+    // lidar does not currently handle commands, but validate anyway
+    // so the guard is in place when commands are added in the future.
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+    cJSON_Delete(root);
+}
 
 void lidar_status(uint8_t app_id) {
     send_json(4,

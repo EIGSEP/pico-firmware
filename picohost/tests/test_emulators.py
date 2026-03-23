@@ -3,6 +3,8 @@ Unit tests for firmware emulators.
 Tests emulators standalone (no mock serial), calling methods directly.
 """
 
+import time
+
 import numpy as np
 from picohost.emulators import (
     MotorEmulator,
@@ -164,6 +166,7 @@ class TestTempCtrlEmulator:
         status = emu.get_status()
         expected_keys = {
             "sensor_name", "app_id",
+            "watchdog_tripped", "watchdog_timeout_ms",
             "A_status", "A_T_now", "A_timestamp", "A_T_target",
             "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
             "A_hysteresis", "A_clamp",
@@ -172,6 +175,56 @@ class TestTempCtrlEmulator:
             "B_hysteresis", "B_clamp",
         }
         assert set(status.keys()) == expected_keys
+
+
+class TestTempCtrlWatchdog:
+
+    def test_watchdog_trips_after_timeout(self):
+        """Watchdog disables peltiers when no command arrives within timeout."""
+        emu = TempCtrlEmulator()
+        emu.server({"A_enable": True, "B_enable": True})
+        assert emu.A.enabled is True
+        assert emu.B.enabled is True
+        # Simulate time passing beyond the watchdog timeout
+        emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
+        emu.op()
+        assert emu.watchdog_tripped is True
+        assert emu.A.enabled is False
+        assert emu.B.enabled is False
+
+    def test_server_resets_watchdog(self):
+        """Any command resets the watchdog timer and clears the trip flag."""
+        emu = TempCtrlEmulator()
+        # Trip the watchdog
+        emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
+        emu.op()
+        assert emu.watchdog_tripped is True
+        # Any command clears the trip
+        emu.server({"A_enable": True})
+        assert emu.watchdog_tripped is False
+
+    def test_watchdog_does_not_trip_before_timeout(self):
+        """Watchdog stays clear while commands arrive within timeout."""
+        emu = TempCtrlEmulator()
+        emu.server({"A_enable": True})
+        emu.op()
+        assert emu.watchdog_tripped is False
+        assert emu.A.enabled is True
+
+    def test_watchdog_timeout_configurable(self):
+        """Watchdog timeout can be changed via server command."""
+        emu = TempCtrlEmulator()
+        emu.server({"watchdog_timeout_ms": 5000})
+        assert emu.watchdog_timeout_ms == 5000
+
+    def test_watchdog_disabled_with_zero_timeout(self):
+        """Setting watchdog_timeout_ms to 0 disables the watchdog."""
+        emu = TempCtrlEmulator()
+        emu.server({"A_enable": True, "watchdog_timeout_ms": 0})
+        emu._last_cmd_time = time.time() - 999
+        emu.op()
+        assert emu.watchdog_tripped is False
+        assert emu.A.enabled is True
 
 
 class TestTempMonEmulator:

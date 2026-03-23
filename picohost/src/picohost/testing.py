@@ -64,6 +64,11 @@ class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
     EMULATOR_CLASS = TempCtrlEmulator
     EMULATOR_CADENCE_MS = 50.0
 
+    def disconnect(self):
+        # PicoPeltier.stop() handles keepalive + reader thread cleanup
+        PicoPeltier.stop(self)
+        super().disconnect()
+
 
 class DummyPicoIMU(DummyPicoDevice, PicoIMU):
     EMULATOR_CLASS = ImuEmulator

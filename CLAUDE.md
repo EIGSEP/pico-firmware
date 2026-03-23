@@ -144,6 +144,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 - **Shared Utilities**:
   - `src/temp_simple.c` - Reusable DS18B20 temperature sensor helper (used by tempctrl and tempmon)
 - **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
+  - **`send_json(count, ...)`**: The first argument is the number of KV entries — it must exactly match the actual entries or fields will be silently dropped. Always verify the count when adding or removing fields.
 - **Python Host Library**: `picohost/src/picohost/` - src-layout package with device-specific classes
 - **Firmware Emulators**: `picohost/src/picohost/emulators/` - one emulator per app, used for automated testing without hardware
 - **Tests**: `picohost/tests/` - pytest suite covering emulators, protocol conformance, and integration

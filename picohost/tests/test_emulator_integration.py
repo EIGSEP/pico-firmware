@@ -26,6 +26,7 @@ MOTOR_FIELDS = {
 
 TEMPCTRL_FIELDS = {
     "sensor_name", "app_id",
+    "watchdog_tripped", "watchdog_timeout_ms",
     "A_status", "A_T_now", "A_timestamp", "A_T_target",
     "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
     "A_hysteresis", "A_clamp",
@@ -308,6 +309,31 @@ class TestRFSwitchIntegrationTypes:
         assert isinstance(s["status"], str)
         assert isinstance(s["app_id"], int)
         assert isinstance(s["sw_state"], int)
+
+
+# --- Peltier Watchdog ---
+
+class TestPeltierWatchdog:
+
+    def test_keepalive_prevents_watchdog(self):
+        """Keepalive commands prevent the watchdog from tripping."""
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
+        try:
+            p.set_watchdog_timeout(500)
+            time.sleep(1.0)
+            assert p.status.get("watchdog_tripped") is False
+        finally:
+            p.disconnect()
+
+    def test_watchdog_trips_without_keepalive(self):
+        """Without keepalive, the watchdog trips and disables peltiers."""
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            p.set_watchdog_timeout(200)
+            time.sleep(0.5)
+            assert p.status.get("watchdog_tripped") is True
+        finally:
+            p.disconnect()
 
 
 # --- Redis ---

@@ -133,7 +133,10 @@ void stepper_disable(Stepper *m) {
 void motor_server(uint8_t app_id, const char *json_str) {
     cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
-    if (!root) return;
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
     item_json = cJSON_GetObjectItem(root, "az_set_pos");
     azimuth.position = item_json ? item_json->valueint : azimuth.position;
     // if changing position definitions, better reset target too
@@ -177,6 +180,11 @@ void motor_status(uint8_t app_id) {
     );
 }
 
+// No communication watchdog needed for motor app:
+// stepper_op() calls stepper_disable() after every stepping batch, so the
+// driver enable pin is held HIGH (disabled) between calls. Once position
+// reaches target, nsteps=0 and the motor is idle with driver disabled.
+// Loss of host communication causes no continuous power draw or thermal risk.
 void motor_op(uint8_t app_id) {
 	// move the stepper motors max_move steps
     stepper_op(&elevation);

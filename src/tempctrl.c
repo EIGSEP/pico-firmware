@@ -13,6 +13,11 @@
 static TempControl tempctrlA;
 static TempControl tempctrlB;
 
+// Communication watchdog state (app-level, not per-channel)
+static absolute_time_t last_cmd_time;
+static uint32_t watchdog_timeout_ms = 30000;  // default 30s, 0 = disabled
+static bool watchdog_tripped = false;
+
 // Forward declarations
 static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
 static void tempctrl_update_sensor_drive(TempControl *);
@@ -59,13 +64,22 @@ void tempctrl_init(uint8_t app_id) {
             PELTIER1_PWM_PIN, &config, TEMP_SENSOR1_PIN, pio0);
     init_single_tempctrl(&tempctrlB, PELTIER2_DIR_PIN3, PELTIER2_DIR_PIN4,
             PELTIER2_PWM_PIN, &config, TEMP_SENSOR2_PIN, pio1);
+    last_cmd_time = get_absolute_time();
 }
 
 void tempctrl_server(uint8_t app_id, const char *json_str) {
     cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
-    if (!root) return;
-    
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    // Any valid command resets the watchdog timer and clears the trip flag.
+    // The host must explicitly re-enable peltiers after a trip.
+    last_cmd_time = get_absolute_time();
+    watchdog_tripped = false;
+
     // Parse channel selection (default to both)
     item_json = cJSON_GetObjectItem(root, "A_temp_target");
     tempctrlA.T_target = item_json ? item_json->valuedouble : tempctrlA.T_target;
@@ -83,6 +97,14 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     tempctrlB.hysteresis = item_json ? item_json->valuedouble : tempctrlB.hysteresis;
     item_json = cJSON_GetObjectItem(root, "B_clamp");
     if (item_json) tempctrlB.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
+
+    // Watchdog timeout configuration (0 = disabled)
+    item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
+    if (item_json && cJSON_IsNumber(item_json)) {
+        int val = item_json->valueint;
+        watchdog_timeout_ms = val < 0 ? 0 : (uint32_t)val;
+    }
+
     cJSON_Delete(root);
 }
 
@@ -93,9 +115,11 @@ void tempctrl_status(uint8_t app_id) {
     const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
     const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
     
-    send_json(22,
+    send_json(24,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
+        KV_BOOL, "watchdog_tripped", watchdog_tripped,
+        KV_INT, "watchdog_timeout_ms", (int)watchdog_timeout_ms,
         KV_STR, "A_status", statusA,
         KV_FLOAT, "A_T_now", tempctrlA.T_now,
         KV_FLOAT, "A_timestamp", (double)timeA,
@@ -143,7 +167,16 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
 }
 
 void tempctrl_op(uint8_t app_id) {
-    // Start conversions if not already started
+    // Communication watchdog: disable peltiers if no command received within timeout
+    if (watchdog_timeout_ms > 0 && !watchdog_tripped) {
+        int64_t elapsed_us = absolute_time_diff_us(last_cmd_time, get_absolute_time());
+        if (elapsed_us > (int64_t)watchdog_timeout_ms * 1000) {
+            tempctrlA.enabled = false;
+            tempctrlB.enabled = false;
+            watchdog_tripped = true;
+        }
+    }
+
     tempctrl_update_sensor_drive(&tempctrlA);
     tempctrl_update_sensor_drive(&tempctrlB);
 }
