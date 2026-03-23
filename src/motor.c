@@ -133,7 +133,10 @@ void stepper_disable(Stepper *m) {
 void motor_server(uint8_t app_id, const char *json_str) {
     cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
-    if (!root) return;
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
     item_json = cJSON_GetObjectItem(root, "az_set_pos");
     azimuth.position = item_json ? item_json->valueint : azimuth.position;
     // if changing position definitions, better reset target too

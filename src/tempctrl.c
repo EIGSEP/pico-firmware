@@ -70,7 +70,10 @@ void tempctrl_init(uint8_t app_id) {
 void tempctrl_server(uint8_t app_id, const char *json_str) {
     cJSON *item_json;
     cJSON *root = cJSON_Parse(json_str);
-    if (!root) return;
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
 
     // Any valid command resets the watchdog timer and clears the trip flag.
     // The host must explicitly re-enable peltiers after a trip.

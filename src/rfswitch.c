@@ -24,7 +24,10 @@ void rfswitch_init(uint8_t app_id) {
 
 void rfswitch_server(uint8_t app_id, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
-    if (root == NULL) return;
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
     cJSON *sw_state_json = cJSON_GetObjectItem(root, "sw_state");
     if (sw_state_json) {
         rfswitch.sw_state = sw_state_json->valueint;
