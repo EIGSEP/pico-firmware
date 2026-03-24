@@ -4,6 +4,8 @@ build/*
 !build/pico_multi.uf2
 
 *.json
+!release-please-config.json
+!.release-please-manifest.json
 
 .venv/
 
@@ -27,6 +29,9 @@ coverage.xml
 *.cover
 .hypothesis/
 .pyc
+
+# Claude Code
+.claude/
 
 # IDE
 .vscode/

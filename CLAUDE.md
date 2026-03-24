@@ -37,10 +37,10 @@ The build produces `build/pico_multi.uf2` which can be flashed to the Pico by co
 
 ```bash
 # Flash multiple Picos at once
-python3 flash_picos.py --uf2 build/pico_multi.uf2
+flash-picos --uf2 build/pico_multi.uf2
 
 # Flash with custom parameters
-python3 flash_picos.py --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
+flash-picos --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
 
 # Monitor serial output (adjust /dev/ttyACM0 as needed)
 minicom -D /dev/ttyACM0 -b 115200
@@ -48,10 +48,15 @@ minicom -D /dev/ttyACM0 -b 115200
 # Install Python host library for device control
 pip install -e ./picohost
 
-# Run device-specific test scripts
-python3 picohost/test_motor.py    # Test motor control
-python3 picohost/test_tempmon.py  # Test temperature monitoring
-python3 picohost/test_imu.py      # Test IMU sensor
+# Install with dev dependencies (pytest, coverage, etc.)
+pip install -e ./picohost[dev]
+
+# Run automated tests (emulator-based, no hardware needed)
+cd picohost && pytest
+
+# Run hardware test scripts
+python3 picohost/scripts/test_motor_pico.py
+python3 picohost/scripts/test_rfswitch_pico.py
 ```
 
 ### Setup Requirements
@@ -122,7 +127,9 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 
 4. Update `CMakeLists.txt` to include new source files
 
-5. Create corresponding Python host class in `picohost/` following existing patterns
+5. Create corresponding Python host class in `picohost/src/picohost/` following existing patterns
+
+6. Create a firmware emulator in `picohost/src/picohost/emulators/` (CI enforces every app has one)
 
 ### Key Components
 
@@ -134,8 +141,13 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
   - `src/imu.c` - IMU sensor interface (APP_IMU = 3)
   - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
   - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)
+- **Shared Utilities**:
+  - `src/temp_simple.c` - Reusable DS18B20 temperature sensor helper (used by tempctrl and tempmon)
 - **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
-- **Python Host Library**: `picohost/` package with device-specific classes
+  - **`send_json(count, ...)`**: The first argument is the number of KV entries — it must exactly match the actual entries or fields will be silently dropped. Always verify the count when adding or removing fields.
+- **Python Host Library**: `picohost/src/picohost/` - src-layout package with device-specific classes
+- **Firmware Emulators**: `picohost/src/picohost/emulators/` - one emulator per app, used for automated testing without hardware
+- **Tests**: `picohost/tests/` - pytest suite covering emulators, protocol conformance, and integration
 
 ### Hardware Configuration
 
@@ -166,9 +178,9 @@ with MotorDevice() as motor:
 
 ## Development Tools
 
-### flash_picos.py
+### flash-picos
 
-Python script for flashing and configuring multiple Picos:
+CLI tool (installed as `flash-picos` entry point from picohost package) for flashing and configuring multiple Picos:
 - Uses `picotool` to flash via USB serial number
 - Reads JSON device info from each Pico after flashing
 - Updates `devices_info.json` with device configurations
@@ -177,12 +189,14 @@ Python script for flashing and configuring multiple Picos:
 
 ### Python Host Library (picohost)
 
-Complete Python package for controlling Pico devices:
+Complete Python package (`picohost/src/picohost/`, src-layout) for controlling Pico devices:
 - Device-specific classes for each application type
 - Automatic USB device discovery
 - Context manager support for clean connection handling
 - Background status monitoring thread
-- Comprehensive test scripts for each device type
+- Firmware emulators (`picohost/src/picohost/emulators/`) enabling automated testing without hardware
+- Dummy device classes (`picohost/src/picohost/testing.py`) that wire emulators to mock serial for tests
+- Utility scripts in `picohost/scripts/` for hardware testing and device control
 
 ### Libraries and Dependencies
 
@@ -192,11 +206,17 @@ The project includes several libraries:
 - **onewire**: OneWire protocol library with PIO implementation
 - **BNO08x_Pico_Library**: IMU sensor library for BNO08x devices
 
+## CI / Release
+
+- **CI**: GitHub Actions runs pytest across Python 3.9-3.12 on every push/PR, plus a check that every firmware app has a corresponding emulator
+- **Release**: release-please automates version bumps and changelogs
+- **Conventional commits**: Use conventional commit prefixes — `fix:`, `feat:`, `chore:`, `test:`, `ci:`, `docs:`, `refactor:`, etc. release-please uses these to determine version bumps and generate changelogs
+
 ## Important Notes
 
 - The project uses the Pico SDK from the `pico-sdk/` subdirectory
 - USB serial devices enumerate as PICO_000, PICO_001, etc. based on unique board ID
-- No automated firmware tests - testing is hardware-based using Python test scripts
+- Automated tests use firmware emulators (no hardware needed); hardware testing uses scripts in `picohost/scripts/`
 - Apps use a command/response architecture with JSON protocol
 - Currently 6 apps are integrated (0-5), with slots 6-7 reserved for future use
 - All firmware apps are in `src/` directory and fully integrated
