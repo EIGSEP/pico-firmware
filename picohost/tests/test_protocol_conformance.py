@@ -42,6 +42,7 @@ class TestBaseProtocol:
         class _NullPeer:
             """Peer with nothing to read — lets _read_commands() reach the
             buffer-processing loop without providing new data."""
+            @property
             def in_waiting(self):
                 return 0
 

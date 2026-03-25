@@ -288,5 +288,5 @@ class TestMockSerialIntegration:
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         assert device.ser.is_open is True
         device.ser.reset_input_buffer()
-        assert device.ser.in_waiting() == 0
+        assert device.ser.in_waiting == 0
         device.disconnect()
