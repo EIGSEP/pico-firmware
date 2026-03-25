@@ -33,7 +33,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-timeout",
-  "pyserial-mock",
+  "pyserial-mock==1.0.0",
 ]
 
 [tool.setuptools]
