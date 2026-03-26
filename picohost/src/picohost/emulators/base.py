@@ -114,7 +114,7 @@ class PicoEmulator:
             return
 
         try:
-            avail = self._peer.in_waiting()
+            avail = self._peer.in_waiting
             if avail > 0:
                 data = self._peer.read(avail)
                 if data:
