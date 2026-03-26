@@ -17,7 +17,7 @@ add_executable(pico_multi
     src/motor.c
     src/rfswitch.c
     src/tempctrl.c
-    src/tempmon.c
+    src/potmon.c
     src/temp_simple.c
     src/imu.cpp
     src/lidar.c
@@ -62,6 +62,7 @@ target_link_libraries(pico_multi
     hardware_gpio
     hardware_pwm
     hardware_pio
+    hardware_adc
     pico_unique_id
     cjson
     eigsep_command

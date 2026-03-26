@@ -9,6 +9,12 @@ build/*
 
 .venv/
 
+# data files
+*.npz
+
+# backup files
+*.bak
+
 # Python
 __pycache__/
 *.py[cod]
