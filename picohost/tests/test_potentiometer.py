@@ -5,19 +5,18 @@ Tests use DummyPicoPotentiometer which wires a PotMonEmulator to MockSerial.
 """
 
 import json
-import time
 import tempfile
 
 import pytest
 
+from conftest import wait_for_condition
 from picohost.testing import DummyPicoPotentiometer
 
 
 def _make_pot():
     """Create a DummyPicoPotentiometer and wait for first status."""
     pot = DummyPicoPotentiometer("/dev/dummy")
-    # No wait_for_updates — give the emulator time to stream first status
-    time.sleep(0.2)
+    wait_for_condition(lambda: len(pot.last_status) > 0)
     return pot
 
 

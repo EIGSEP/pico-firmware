@@ -6,8 +6,8 @@ DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 """
 
 import json
-import time
 import pytest
+from conftest import wait_for_condition, wait_for_settle
 from picohost.testing import DummyPicoDevice, DummyPicoMotor, DummyPicoRFSwitch, DummyPicoPeltier
 
 
@@ -75,8 +75,10 @@ class TestPicoDevice:
         # Simulate firmware writing a JSON status line to host
         status_json = '{"sensor_name":"test","value":99}\n'
         device.ser.peer.write(status_json.encode())
-        time.sleep(0.2)
-        assert device.last_status.get("sensor_name") == "test"
+        wait_for_condition(
+            lambda: device.last_status.get("sensor_name") == "test",
+            cadence_ms=device.EMULATOR_CADENCE_MS,
+        )
         assert device.last_status.get("value") == 99
         device.disconnect()
 
@@ -102,11 +104,15 @@ class TestPicoMotor:
     def test_move_command_updates_target(self):
         """Sending az_target_deg updates az_target_pos in the emulator status."""
         motor = DummyPicoMotor("/dev/dummy")
+        cadence = motor.EMULATOR_CADENCE_MS
         az_deg = 10.0
         expected_steps = motor.deg_to_steps(az_deg)
+        before = motor.status.get("az_target_pos")
         motor.az_target_deg(az_deg, wait_for_start=False, wait_for_stop=False)
-        time.sleep(0.2)
-        assert motor.status.get("az_target_pos") == expected_steps
+        assert wait_for_settle(
+            lambda: motor.status.get("az_target_pos"),
+            initial=before, cadence_ms=cadence, max_cycles=20,
+        ) == expected_steps
         motor.disconnect()
 
     def test_status_has_motor_fields(self):
@@ -124,10 +130,13 @@ class TestPicoRFSwitch:
     def test_switch_state_updates_emulator(self):
         """switch('VNAO') sends the correct sw_state to the emulator."""
         switch = DummyPicoRFSwitch("/dev/dummy")
-        assert switch.switch("VNAO") is True
-        time.sleep(0.2)
+        cadence = switch.EMULATOR_CADENCE_MS
         expected_state = switch.rbin(switch.path_str["VNAO"])
-        assert switch.last_status.get("sw_state") == expected_state
+        assert switch.switch("VNAO") is True
+        wait_for_condition(
+            lambda: switch.last_status.get("sw_state") == expected_state,
+            cadence_ms=cadence, max_cycles=10,
+        )
         switch.disconnect()
 
     def test_switch_all_valid_states(self):
@@ -166,45 +175,63 @@ class TestPicoPeltier:
     def test_set_temperature_channel_a(self):
         """Setting channel A target updates emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
+        before = peltier.status.get("A_T_target")
         assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
-        time.sleep(0.2)
-        assert peltier.status.get("A_T_target") == pytest.approx(25.5)
+        assert wait_for_settle(
+            lambda: peltier.status.get("A_T_target"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == pytest.approx(25.5)
         assert peltier.status.get("A_hysteresis") == pytest.approx(0.5)
         peltier.disconnect()
 
     def test_set_temperature_channel_b(self):
         """Setting channel B target updates emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
+        before = peltier.status.get("B_hysteresis")
         assert peltier.set_temperature(T_B=30.0, B_hyst=1.0) is True
-        time.sleep(0.2)
+        assert wait_for_settle(
+            lambda: peltier.status.get("B_hysteresis"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == pytest.approx(1.0)
         assert peltier.status.get("B_T_target") == pytest.approx(30.0)
-        assert peltier.status.get("B_hysteresis") == pytest.approx(1.0)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
+        before = peltier.status.get("A_T_target")
         assert peltier.set_temperature(T_A=28.0, A_hyst=0.3, T_B=32.0, B_hyst=0.8) is True
-        time.sleep(0.2)
-        assert peltier.status.get("A_T_target") == pytest.approx(28.0)
+        assert wait_for_settle(
+            lambda: peltier.status.get("A_T_target"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == pytest.approx(28.0)
         assert peltier.status.get("B_T_target") == pytest.approx(32.0)
         peltier.disconnect()
 
     def test_enable_channels(self):
         """set_enable() updates the enabled flags in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(A=True, B=True) is True
-        time.sleep(0.2)
-        assert peltier.status.get("A_enabled") is True
+        wait_for_condition(
+            lambda: peltier.status.get("A_enabled") is True,
+            cadence_ms=cadence,
+        )
         assert peltier.status.get("B_enabled") is True
         peltier.disconnect()
 
     def test_disable_channels(self):
         """Disabling channels is reflected in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(A=False, B=False) is True
-        time.sleep(0.2)
-        assert peltier.status.get("A_enabled") is False
+        wait_for_condition(
+            lambda: peltier.status.get("A_enabled") is False,
+            cadence_ms=cadence,
+        )
         assert peltier.status.get("B_enabled") is False
         peltier.disconnect()
 
