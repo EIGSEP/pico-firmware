@@ -66,7 +66,10 @@ class TestDummyPicoDevice:
         """JSON written by the peer is parsed by the reader thread into last_status."""
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         device.ser.peer.write(b'{"sensor_name":"test","value":42}\n')
-        wait_for_condition(lambda: device.last_status.get("sensor_name") == "test")
+        wait_for_condition(
+            lambda: device.last_status.get("sensor_name") == "test",
+            cadence_ms=device.EMULATOR_CADENCE_MS,
+        )
         assert device.last_status == {"sensor_name": "test", "value": 42}
         device.disconnect()
 
@@ -115,20 +118,29 @@ class TestDummyPicoMotor:
     def test_motor_command_updates_emulator_target(self):
         """motor_command() is dispatched to the emulator and reflected in status."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
+        cadence = motor.EMULATOR_CADENCE_MS
         before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=1000, el_set_target_pos=500)
-        assert wait_for_settle(lambda: motor.status.get("az_target_pos"), initial=before) == 1000
+        assert wait_for_settle(
+            lambda: motor.status.get("az_target_pos"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == 1000
         assert motor.status["el_target_pos"] == 500
         motor.disconnect()
 
     def test_halt_sets_target_to_current(self):
         """After halt, target_pos should equal current pos."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
+        cadence = motor.EMULATOR_CADENCE_MS
         motor.motor_command(az_set_target_pos=1000)
-        wait_for_condition(lambda: motor.status.get("az_target_pos") == 1000)
+        wait_for_condition(
+            lambda: motor.status.get("az_target_pos") == 1000,
+            cadence_ms=cadence,
+        )
         motor.stop()
         wait_for_condition(
-            lambda: motor.status.get("az_target_pos") == motor.status.get("az_pos")
+            lambda: motor.status.get("az_target_pos") == motor.status.get("az_pos"),
+            cadence_ms=cadence,
         )
         motor.disconnect()
 
@@ -173,12 +185,16 @@ class TestDummyPicoRFSwitch:
     def test_switch_valid_state_updates_emulator(self):
         """Each valid switch state is dispatched to the emulator and reflected in status."""
         switch = DummyPicoRFSwitch(port="/dev/ttyUSB0")
+        cadence = switch.EMULATOR_CADENCE_MS
         for state in switch.paths:
             assert switch.switch(state) is True, f"switch('{state}') returned False"
 
         # Verify the last state is reflected
         last_state = list(switch.paths.keys())[-1]
-        assert wait_for_settle(lambda: switch.last_status.get("sw_state")) == switch.paths[last_state]
+        wait_for_condition(
+            lambda: switch.last_status.get("sw_state") == switch.paths[last_state],
+            cadence_ms=cadence, max_cycles=10,
+        )
         switch.disconnect()
 
     def test_switch_invalid_state_raises_valueerror(self):
@@ -203,42 +219,62 @@ class TestDummyPicoPeltier:
     def test_set_temperature_channel_a(self):
         """Setting channel A target and hysteresis updates emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.status.get("A_T_target")
         assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
-        assert wait_for_settle(lambda: peltier.status.get("A_T_target"), initial=before) == pytest.approx(25.5)
+        assert wait_for_settle(
+            lambda: peltier.status.get("A_T_target"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == pytest.approx(25.5)
         assert peltier.status["A_hysteresis"] == pytest.approx(0.5)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.status.get("B_T_target")
         assert peltier.set_temperature(T_A=30.0, A_hyst=1.0, T_B=25.0, B_hyst=0.5) is True
-        assert wait_for_settle(lambda: peltier.status.get("B_T_target"), initial=before) == pytest.approx(25.0)
+        assert wait_for_settle(
+            lambda: peltier.status.get("B_T_target"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == pytest.approx(25.0)
         assert peltier.status["A_T_target"] == pytest.approx(30.0)
         peltier.disconnect()
 
     def test_set_enable_mixed(self):
         """Enabling A and disabling B is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(A=True, B=False) is True
-        wait_for_condition(lambda: peltier.status.get("A_enabled") is True)
+        wait_for_condition(
+            lambda: peltier.status.get("A_enabled") is True,
+            cadence_ms=cadence,
+        )
         assert peltier.status["B_enabled"] is False
         peltier.disconnect()
 
     def test_enable_both_channels(self):
         """Enabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(A=True, B=True) is True
-        wait_for_condition(lambda: peltier.status.get("A_enabled") is True)
+        wait_for_condition(
+            lambda: peltier.status.get("A_enabled") is True,
+            cadence_ms=cadence,
+        )
         assert peltier.status["B_enabled"] is True
         peltier.disconnect()
 
     def test_disable_both_channels(self):
         """Disabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(A=False, B=False) is True
-        wait_for_condition(lambda: peltier.status.get("A_enabled") is False)
+        wait_for_condition(
+            lambda: peltier.status.get("A_enabled") is False,
+            cadence_ms=cadence,
+        )
         assert peltier.status["B_enabled"] is False
         peltier.disconnect()
 
