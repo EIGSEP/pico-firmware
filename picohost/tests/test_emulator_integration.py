@@ -4,9 +4,11 @@ Integration tests: emulators through DummyDevice interface with mock serial.
 These tests verify the pipeline (PicoDevice -> MockSerial -> emulator thread ->
 status -> reader thread). State machine logic is tested in test_emulators.py;
 here we focus on: status arrives with correct fields, commands round-trip
-through serial, and redis handler is called.
+through serial, convergence timing matches emulator model, and redis handler
+is called.
 """
 
+import math
 import time
 import pytest
 from conftest import wait_for_condition, wait_for_settle
@@ -112,10 +114,20 @@ class TestMotorIntegration:
 
     def test_command_round_trip(self, motor):
         """Command sent through serial is processed by emulator."""
+        cadence = motor.EMULATOR_CADENCE_MS
         before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=500)
-        assert wait_for_settle(lambda: motor.status.get("az_target_pos"), initial=before) == 500
-        assert wait_for_settle(lambda: motor.status.get("az_pos"), initial=0, timeout=3.0) == 500
+        assert wait_for_settle(
+            lambda: motor.status.get("az_target_pos"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == 500
+        # Motor moves 60 steps/op -> ceil(500/60)=9 ops + margin
+        steps_per_op = motor._emulator.azimuth.max_pulses
+        expected_ops = math.ceil(500 / steps_per_op)
+        assert wait_for_settle(
+            lambda: motor.status.get("az_pos"),
+            initial=0, cadence_ms=cadence, max_cycles=expected_ops + 10,
+        ) == 500
 
 
 # --- RFSwitch ---
@@ -124,16 +136,24 @@ class TestRFSwitchIntegration:
 
     def test_status_populated(self, rfswitch):
         """RFSwitch+IMU emulator sends status via reader thread."""
-        wait_for_condition(lambda: rfswitch.last_status.get("sensor_name") is not None)
+        cadence = rfswitch.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: rfswitch.last_status.get("sensor_name") is not None,
+            cadence_ms=cadence,
+        )
         # Composite emulator alternates rfswitch and imu status;
         # last_status holds whichever arrived last
         assert rfswitch.last_status["sensor_name"] in ("rfswitch", "imu_antenna")
 
     def test_command_round_trip(self, rfswitch):
         """Switch command round-trips through serial."""
+        cadence = rfswitch.EMULATOR_CADENCE_MS
         before = rfswitch.last_status.get("sw_state")
         rfswitch.switch("VNAO")
-        assert wait_for_settle(lambda: rfswitch.last_status.get("sw_state"), initial=before) == rfswitch.paths["VNAO"]
+        assert wait_for_settle(
+            lambda: rfswitch.last_status.get("sw_state"),
+            initial=before, cadence_ms=cadence, max_cycles=10,
+        ) == rfswitch.paths["VNAO"]
 
 
 # --- Peltier ---
@@ -147,11 +167,14 @@ class TestPeltierIntegration:
 
     def test_command_round_trip(self, peltier):
         """Temperature control converges to target through serial pipeline."""
+        cadence = peltier.EMULATOR_CADENCE_MS
         peltier.set_temperature(T_A=35.0)
         peltier.set_enable(A=True)
+        # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
+        # ~333 ops to converge + margin for hysteresis settling
         settled = wait_for_settle(
             lambda: round(peltier.status.get("A_T_now", 0), 1),
-            timeout=5.0, stable_count=5,
+            cadence_ms=cadence, max_cycles=500, stable_count=5,
         )
         assert abs(settled - 35.0) <= 0.5
 
@@ -162,7 +185,10 @@ class TestIMUIntegration:
 
     def test_status_fields(self, imu):
         """IMU emulator populates all status fields via reader thread."""
-        wait_for_condition(lambda: len(imu.last_status) > 0)
+        cadence = imu.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(imu.last_status) > 0, cadence_ms=cadence,
+        )
         assert set(imu.last_status.keys()) == IMU_FIELDS
         assert imu.last_status["sensor_name"] == "imu_panda"
 
@@ -178,12 +204,19 @@ class TestIMUIntegration:
         To observe the transient True state, we lower accel_status so the
         calibration stays pending until we restore it.
         """
+        cadence = imu.EMULATOR_CADENCE_MS
         imu._emulator.accel_status = 2  # prevent auto-clear
         imu.calibrate()
-        wait_for_condition(lambda: imu.last_status.get("calibrated") is True)
+        wait_for_condition(
+            lambda: imu.last_status.get("calibrated") is True,
+            cadence_ms=cadence, max_cycles=10,
+        )
         # Now let calibration complete
         imu._emulator.accel_status = 3
-        wait_for_condition(lambda: imu.last_status.get("calibrated") is False)
+        wait_for_condition(
+            lambda: imu.last_status.get("calibrated") is False,
+            cadence_ms=cadence, max_cycles=10,
+        )
 
     def test_status_types(self, imu):
         """Verify value types match the JSON protocol, not just field names.
@@ -191,7 +224,10 @@ class TestIMUIntegration:
         Field type mismatches (e.g. string vs bool) silently break host
         code that compares with 'is True' vs '== \"True\"'.
         """
-        wait_for_condition(lambda: len(imu.last_status) > 0)
+        cadence = imu.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(imu.last_status) > 0, cadence_ms=cadence,
+        )
         s = imu.last_status
         # Booleans
         assert isinstance(s["calibrated"], bool)
@@ -253,13 +289,19 @@ class TestTempMonIntegration:
 
     def test_status_fields(self, tempmon):
         """TempMon emulator populates all status fields via reader thread."""
-        wait_for_condition(lambda: len(tempmon.last_status) > 0)
+        cadence = tempmon.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(tempmon.last_status) > 0, cadence_ms=cadence,
+        )
         assert set(tempmon.last_status.keys()) == TEMPMON_FIELDS
         assert tempmon.last_status["sensor_name"] == "temp_mon"
 
     def test_status_types(self, tempmon):
         """Verify tempmon status value types through serial pipeline."""
-        wait_for_condition(lambda: len(tempmon.last_status) > 0)
+        cadence = tempmon.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(tempmon.last_status) > 0, cadence_ms=cadence,
+        )
         s = tempmon.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
@@ -277,13 +319,19 @@ class TestLidarIntegration:
 
     def test_status_fields(self, lidar):
         """Lidar emulator populates all status fields via reader thread."""
-        wait_for_condition(lambda: len(lidar.last_status) > 0)
+        cadence = lidar.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(lidar.last_status) > 0, cadence_ms=cadence,
+        )
         assert set(lidar.last_status.keys()) == LIDAR_FIELDS
         assert lidar.last_status["sensor_name"] == "lidar"
 
     def test_status_types(self, lidar):
         """Verify lidar status value types through serial pipeline."""
-        wait_for_condition(lambda: len(lidar.last_status) > 0)
+        cadence = lidar.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(lidar.last_status) > 0, cadence_ms=cadence,
+        )
         s = lidar.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["status"], str)
@@ -301,8 +349,10 @@ class TestRFSwitchIntegrationTypes:
         The composite emulator alternates rfswitch and imu status, so
         we wait until we see the rfswitch message specifically.
         """
+        cadence = rfswitch.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: rfswitch.last_status.get("sensor_name") == "rfswitch"
+            lambda: rfswitch.last_status.get("sensor_name") == "rfswitch",
+            cadence_ms=cadence,
         )
         s = rfswitch.last_status
         assert s["sensor_name"] == "rfswitch"
@@ -329,10 +379,12 @@ class TestPeltierWatchdog:
         """Without keepalive, the watchdog trips and disables peltiers."""
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
+            cadence = p.EMULATOR_CADENCE_MS
             p.set_watchdog_timeout(200)
+            # 200ms watchdog / 50ms cadence = 4 ops + margin
             wait_for_condition(
                 lambda: p.status.get("watchdog_tripped") is True,
-                timeout=2.0,
+                cadence_ms=cadence, max_cycles=20,
             )
         finally:
             p.disconnect()
@@ -351,7 +403,127 @@ class TestRedisIntegration:
                 received.append((name, data))
 
         mon = DummyPicoTempMon("/dev/dummy", eig_redis=FakeRedis())
-        wait_for_condition(lambda: len(received) > 0)
+        cadence = mon.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: len(received) > 0, cadence_ms=cadence,
+        )
         mon.disconnect()
         names = [name for name, _ in received]
         assert "temp_mon" in names
+
+
+# --- Convergence Timing ---
+
+class TestConvergenceTiming:
+    """Verify that state changes complete within the cycle count predicted
+    by each emulator's physics model.
+
+    These tests catch regressions where the emulator becomes slower than
+    the model predicts (e.g. a change to steps_per_op or drift rate that
+    doesn't get reflected in the expected bounds).
+    """
+
+    def test_motor_convergence_cycles(self, motor):
+        """Motor reaches target within ceil(distance / steps_per_op) + margin."""
+        cadence = motor.EMULATOR_CADENCE_MS
+        target = 500
+        steps_per_op = motor._emulator.azimuth.max_pulses
+        expected_ops = math.ceil(target / steps_per_op)
+        # margin covers serial round-trip + status delivery latency
+        margin = 10
+        motor.motor_command(az_set_target_pos=target)
+        settled = wait_for_settle(
+            lambda: motor.status.get("az_pos"),
+            initial=0, cadence_ms=cadence, max_cycles=expected_ops + margin,
+        )
+        assert settled == target
+
+    def test_motor_large_move(self, motor):
+        """Larger move scales linearly with step count."""
+        cadence = motor.EMULATOR_CADENCE_MS
+        target = 3000
+        steps_per_op = motor._emulator.azimuth.max_pulses
+        expected_ops = math.ceil(target / steps_per_op)
+        margin = 10
+        motor.motor_command(az_set_target_pos=target)
+        settled = wait_for_settle(
+            lambda: motor.status.get("az_pos"),
+            initial=0, cadence_ms=cadence, max_cycles=expected_ops + margin,
+        )
+        assert settled == target
+
+    def test_motor_both_axes(self, motor):
+        """Both axes converge within the slower axis's predicted time."""
+        cadence = motor.EMULATOR_CADENCE_MS
+        az_target, el_target = 600, 300
+        steps_per_op = motor._emulator.azimuth.max_pulses
+        slowest_ops = max(
+            math.ceil(az_target / steps_per_op),
+            math.ceil(el_target / steps_per_op),
+        )
+        margin = 10
+        motor.motor_command(
+            az_set_target_pos=az_target, el_set_target_pos=el_target,
+        )
+        az = wait_for_settle(
+            lambda: motor.status.get("az_pos"),
+            initial=0, cadence_ms=cadence, max_cycles=slowest_ops + margin,
+        )
+        el = wait_for_settle(
+            lambda: motor.status.get("el_pos"),
+            initial=0, cadence_ms=cadence, max_cycles=slowest_ops + margin,
+        )
+        assert az == az_target
+        assert el == el_target
+
+    def test_command_ack_within_few_cycles(self, motor):
+        """Target-position update is visible in status within a few cycles."""
+        cadence = motor.EMULATOR_CADENCE_MS
+        before = motor.status.get("az_target_pos")
+        motor.motor_command(az_set_target_pos=999)
+        # Should appear within ~2-3 status cycles (command + next status send)
+        settled = wait_for_settle(
+            lambda: motor.status.get("az_target_pos"),
+            initial=before, cadence_ms=cadence, max_cycles=6,
+        )
+        assert settled == 999
+
+    def test_peltier_convergence_bounded(self):
+        """Temperature converges within a cycle count derived from the model.
+
+        With default params (gain=0.2, baseline=0.4, clamp=0.6) and
+        THERMAL_DRIFT_RATE=0.05, each op moves ~0.03°C when clamped.
+        A 10°C delta (25->35) needs ~333 ops; we allow 500 as upper bound.
+        """
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
+        try:
+            cadence = p.EMULATOR_CADENCE_MS
+            p.set_temperature(T_A=35.0)
+            p.set_enable(A=True)
+            settled = wait_for_settle(
+                lambda: round(p.status.get("A_T_now", 0), 1),
+                cadence_ms=cadence, max_cycles=500, stable_count=5,
+            )
+            assert abs(settled - 35.0) <= 0.5
+        finally:
+            p.disconnect()
+
+    def test_watchdog_trip_timing(self):
+        """Watchdog trips within predicted wall-time cycles.
+
+        With 200ms timeout and 50ms cadence, the watchdog should trip
+        within ~4-8 emulator cycles (200ms / ~1ms loop + cadence jitter).
+        """
+        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            cadence = p.EMULATOR_CADENCE_MS
+            p.set_watchdog_timeout(200)
+            watchdog_cycles = math.ceil(200 / cadence)
+            # Allow generous margin for thread scheduling, but still
+            # much tighter than the old hardcoded 2s timeout.
+            wait_for_condition(
+                lambda: p.status.get("watchdog_tripped") is True,
+                cadence_ms=cadence, max_cycles=watchdog_cycles + 15,
+            )
+        finally:
+            p.disconnect()
