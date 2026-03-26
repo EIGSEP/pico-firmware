@@ -11,6 +11,7 @@ import time
 import pytest
 import mockserial
 
+from conftest import wait_for_condition, wait_for_settle
 from picohost.testing import (
     DummyPicoDevice,
     DummyPicoMotor,
@@ -65,7 +66,7 @@ class TestDummyPicoDevice:
         """JSON written by the peer is parsed by the reader thread into last_status."""
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         device.ser.peer.write(b'{"sensor_name":"test","value":42}\n')
-        time.sleep(0.2)
+        wait_for_condition(lambda: device.last_status.get("sensor_name") == "test")
         assert device.last_status == {"sensor_name": "test", "value": 42}
         device.disconnect()
 
@@ -114,9 +115,9 @@ class TestDummyPicoMotor:
     def test_motor_command_updates_emulator_target(self):
         """motor_command() is dispatched to the emulator and reflected in status."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
+        before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=1000, el_set_target_pos=500)
-        time.sleep(0.2)
-        assert motor.status["az_target_pos"] == 1000
+        assert wait_for_settle(lambda: motor.status.get("az_target_pos"), initial=before) == 1000
         assert motor.status["el_target_pos"] == 500
         motor.disconnect()
 
@@ -124,10 +125,11 @@ class TestDummyPicoMotor:
         """After halt, target_pos should equal current pos."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
         motor.motor_command(az_set_target_pos=1000)
-        time.sleep(0.1)
+        wait_for_condition(lambda: motor.status.get("az_target_pos") == 1000)
         motor.stop()
-        time.sleep(0.2)
-        assert motor.status["az_target_pos"] == motor.status["az_pos"]
+        wait_for_condition(
+            lambda: motor.status.get("az_target_pos") == motor.status.get("az_pos")
+        )
         motor.disconnect()
 
     def test_status_populated_on_init(self):
@@ -175,9 +177,8 @@ class TestDummyPicoRFSwitch:
             assert switch.switch(state) is True, f"switch('{state}') returned False"
 
         # Verify the last state is reflected
-        time.sleep(0.2)
         last_state = list(switch.paths.keys())[-1]
-        assert switch.last_status["sw_state"] == switch.paths[last_state]
+        assert wait_for_settle(lambda: switch.last_status.get("sw_state")) == switch.paths[last_state]
         switch.disconnect()
 
     def test_switch_invalid_state_raises_valueerror(self):
@@ -202,27 +203,26 @@ class TestDummyPicoPeltier:
     def test_set_temperature_channel_a(self):
         """Setting channel A target and hysteresis updates emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        before = peltier.status.get("A_T_target")
         assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
-        time.sleep(0.2)
-        assert peltier.status["A_T_target"] == pytest.approx(25.5)
+        assert wait_for_settle(lambda: peltier.status.get("A_T_target"), initial=before) == pytest.approx(25.5)
         assert peltier.status["A_hysteresis"] == pytest.approx(0.5)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
+        before = peltier.status.get("B_T_target")
         assert peltier.set_temperature(T_A=30.0, A_hyst=1.0, T_B=25.0, B_hyst=0.5) is True
-        time.sleep(0.2)
+        assert wait_for_settle(lambda: peltier.status.get("B_T_target"), initial=before) == pytest.approx(25.0)
         assert peltier.status["A_T_target"] == pytest.approx(30.0)
-        assert peltier.status["B_T_target"] == pytest.approx(25.0)
         peltier.disconnect()
 
     def test_set_enable_mixed(self):
         """Enabling A and disabling B is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         assert peltier.set_enable(A=True, B=False) is True
-        time.sleep(0.2)
-        assert peltier.status["A_enabled"] is True
+        wait_for_condition(lambda: peltier.status.get("A_enabled") is True)
         assert peltier.status["B_enabled"] is False
         peltier.disconnect()
 
@@ -230,8 +230,7 @@ class TestDummyPicoPeltier:
         """Enabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         assert peltier.set_enable(A=True, B=True) is True
-        time.sleep(0.2)
-        assert peltier.status["A_enabled"] is True
+        wait_for_condition(lambda: peltier.status.get("A_enabled") is True)
         assert peltier.status["B_enabled"] is True
         peltier.disconnect()
 
@@ -239,8 +238,7 @@ class TestDummyPicoPeltier:
         """Disabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         assert peltier.set_enable(A=False, B=False) is True
-        time.sleep(0.2)
-        assert peltier.status["A_enabled"] is False
+        wait_for_condition(lambda: peltier.status.get("A_enabled") is False)
         assert peltier.status["B_enabled"] is False
         peltier.disconnect()
 
@@ -288,5 +286,5 @@ class TestMockSerialIntegration:
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         assert device.ser.is_open is True
         device.ser.reset_input_buffer()
-        assert device.ser.in_waiting() == 0
+        assert device.ser.in_waiting == 0
         device.disconnect()

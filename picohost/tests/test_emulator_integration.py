@@ -9,6 +9,7 @@ through serial, and redis handler is called.
 
 import time
 import pytest
+from conftest import wait_for_condition, wait_for_settle
 from picohost.testing import (
     DummyPicoMotor,
     DummyPicoRFSwitch,
@@ -111,10 +112,10 @@ class TestMotorIntegration:
 
     def test_command_round_trip(self, motor):
         """Command sent through serial is processed by emulator."""
+        before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=500)
-        time.sleep(0.3)
-        assert motor.status["az_target_pos"] == 500
-        assert motor.status["az_pos"] == motor.status["az_target_pos"]
+        assert wait_for_settle(lambda: motor.status.get("az_target_pos"), initial=before) == 500
+        assert wait_for_settle(lambda: motor.status.get("az_pos"), initial=0, timeout=3.0) == 500
 
 
 # --- RFSwitch ---
@@ -123,16 +124,16 @@ class TestRFSwitchIntegration:
 
     def test_status_populated(self, rfswitch):
         """RFSwitch+IMU emulator sends status via reader thread."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: rfswitch.last_status.get("sensor_name") is not None)
         # Composite emulator alternates rfswitch and imu status;
         # last_status holds whichever arrived last
-        assert rfswitch.last_status.get("sensor_name") in ("rfswitch", "imu_antenna")
+        assert rfswitch.last_status["sensor_name"] in ("rfswitch", "imu_antenna")
 
     def test_command_round_trip(self, rfswitch):
         """Switch command round-trips through serial."""
+        before = rfswitch.last_status.get("sw_state")
         rfswitch.switch("VNAO")
-        time.sleep(0.3)
-        assert rfswitch.last_status.get("sw_state") == rfswitch.paths["VNAO"]
+        assert wait_for_settle(lambda: rfswitch.last_status.get("sw_state"), initial=before) == rfswitch.paths["VNAO"]
 
 
 # --- Peltier ---
@@ -148,8 +149,11 @@ class TestPeltierIntegration:
         """Temperature control converges to target through serial pipeline."""
         peltier.set_temperature(T_A=35.0)
         peltier.set_enable(A=True)
-        time.sleep(1.5)
-        assert abs(peltier.status["A_T_now"] - 35.0) < 0.5
+        settled = wait_for_settle(
+            lambda: round(peltier.status.get("A_T_now", 0), 1),
+            timeout=5.0, stable_count=5,
+        )
+        assert abs(settled - 35.0) <= 0.5
 
 
 # --- IMU ---
@@ -158,7 +162,7 @@ class TestIMUIntegration:
 
     def test_status_fields(self, imu):
         """IMU emulator populates all status fields via reader thread."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(imu.last_status) > 0)
         assert set(imu.last_status.keys()) == IMU_FIELDS
         assert imu.last_status["sensor_name"] == "imu_panda"
 
@@ -176,12 +180,10 @@ class TestIMUIntegration:
         """
         imu._emulator.accel_status = 2  # prevent auto-clear
         imu.calibrate()
-        time.sleep(0.3)
-        assert imu.last_status["calibrated"] is True
+        wait_for_condition(lambda: imu.last_status.get("calibrated") is True)
         # Now let calibration complete
         imu._emulator.accel_status = 3
-        time.sleep(0.3)
-        assert imu.last_status["calibrated"] is False
+        wait_for_condition(lambda: imu.last_status.get("calibrated") is False)
 
     def test_status_types(self, imu):
         """Verify value types match the JSON protocol, not just field names.
@@ -189,7 +191,7 @@ class TestIMUIntegration:
         Field type mismatches (e.g. string vs bool) silently break host
         code that compares with 'is True' vs '== \"True\"'.
         """
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(imu.last_status) > 0)
         s = imu.last_status
         # Booleans
         assert isinstance(s["calibrated"], bool)
@@ -251,13 +253,13 @@ class TestTempMonIntegration:
 
     def test_status_fields(self, tempmon):
         """TempMon emulator populates all status fields via reader thread."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(tempmon.last_status) > 0)
         assert set(tempmon.last_status.keys()) == TEMPMON_FIELDS
         assert tempmon.last_status["sensor_name"] == "temp_mon"
 
     def test_status_types(self, tempmon):
         """Verify tempmon status value types through serial pipeline."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(tempmon.last_status) > 0)
         s = tempmon.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
@@ -275,13 +277,13 @@ class TestLidarIntegration:
 
     def test_status_fields(self, lidar):
         """Lidar emulator populates all status fields via reader thread."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(lidar.last_status) > 0)
         assert set(lidar.last_status.keys()) == LIDAR_FIELDS
         assert lidar.last_status["sensor_name"] == "lidar"
 
     def test_status_types(self, lidar):
         """Verify lidar status value types through serial pipeline."""
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(lidar.last_status) > 0)
         s = lidar.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["status"], str)
@@ -299,11 +301,9 @@ class TestRFSwitchIntegrationTypes:
         The composite emulator alternates rfswitch and imu status, so
         we wait until we see the rfswitch message specifically.
         """
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
-            if rfswitch.last_status.get("sensor_name") == "rfswitch":
-                break
-            time.sleep(0.05)
+        wait_for_condition(
+            lambda: rfswitch.last_status.get("sensor_name") == "rfswitch"
+        )
         s = rfswitch.last_status
         assert s["sensor_name"] == "rfswitch"
         assert isinstance(s["status"], str)
@@ -330,8 +330,10 @@ class TestPeltierWatchdog:
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
             p.set_watchdog_timeout(200)
-            time.sleep(0.5)
-            assert p.status.get("watchdog_tripped") is True
+            wait_for_condition(
+                lambda: p.status.get("watchdog_tripped") is True,
+                timeout=2.0,
+            )
         finally:
             p.disconnect()
 
@@ -349,9 +351,7 @@ class TestRedisIntegration:
                 received.append((name, data))
 
         mon = DummyPicoTempMon("/dev/dummy", eig_redis=FakeRedis())
-        time.sleep(0.3)
+        wait_for_condition(lambda: len(received) > 0)
         mon.disconnect()
-
-        assert len(received) > 0
         names = [name for name, _ in received]
         assert "temp_mon" in names

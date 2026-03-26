@@ -5,7 +5,7 @@ Uses DummyPicoDevice (MockSerial pair) instead of monkeypatching Serial,
 so the tests exercise the same code paths as real devices.
 """
 
-import time
+from conftest import wait_for_condition
 from picohost.testing import DummyPicoDevice
 
 
@@ -27,7 +27,7 @@ class TestStreamingData:
         """The background reader thread parses JSON and stores it in last_status."""
         device = DummyPicoDevice("/dev/dummy")
         device.ser.peer.write(b'{"status": "ok", "value": 123}\n')
-        time.sleep(0.2)
+        wait_for_condition(lambda: len(device.last_status) > 0)
         assert device.last_status == {"status": "ok", "value": 123}
         device.disconnect()
 
@@ -56,10 +56,10 @@ class TestStreamingData:
         """Each new JSON line from the peer overwrites last_status."""
         device = DummyPicoDevice("/dev/dummy")
         device.ser.peer.write(b'{"sensor_name":"first","v":1}\n')
-        time.sleep(0.2)
-        assert device.last_status["sensor_name"] == "first"
+        wait_for_condition(lambda: device.last_status.get("sensor_name") == "first")
+        assert device.last_status["v"] == 1
 
         device.ser.peer.write(b'{"sensor_name":"second","v":2}\n')
-        time.sleep(0.2)
-        assert device.last_status["sensor_name"] == "second"
+        wait_for_condition(lambda: device.last_status.get("sensor_name") == "second")
+        assert device.last_status["v"] == 2
         device.disconnect()
