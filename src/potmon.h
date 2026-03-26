@@ -19,6 +19,7 @@
 #define POTMON_ADC_MAX          ((1 << POTMON_ADC_BITS) - 1)
 #define POTMON_VREF             3.3f
 
+<<<<<<< HEAD
 /* ------------------------------------------------------------------ */
 /* Default calibration                                                 */
 /*                                                                     */
@@ -36,12 +37,14 @@
 /* Data structure                                                      */
 /* ------------------------------------------------------------------ */
 
+=======
 typedef struct {
     uint    gpio_pin;
     uint    adc_channel;
     float   voltage;
-    float   cal_m;   /* slope:     angle = cal_m * voltage + cal_b */
-    float   cal_b;   /* intercept                                   */
+    float   cal_m;   
+    float   cal_b;   
+
 } PotSensor;
 
 /* ------------------------------------------------------------------ */

@@ -1,7 +1,6 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/watchdog.h"
-#include "pico/unique_id.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -57,19 +56,10 @@ int main(void) {
     // Read DIP code early
     uint8_t app_id = read_dip_code();
 
-    // Get unique board ID
-    pico_unique_board_id_t unique_id;
-    pico_get_unique_board_id(&unique_id);
-    char uid_str[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
-    for (int i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
-        sprintf(&uid_str[i*2], "%02X", unique_id.id[i]);
-    }
-
     // Run app-dependent initialization
     switch (app_id) {
         case APP_MOTOR: motor_init(app_id); break;
-        case APP_RFSWITCH: imu_init(app_id); rfswitch_init(app_id); break;
-        //case APP_RFSWITCH: imu_init(app_id); break;
+        case APP_RFSWITCH: rfswitch_init(app_id); break;
         case APP_TEMPCTRL: tempctrl_init(app_id); break;
         case APP_POTMON: potmon_init(app_id); break;
         case APP_IMU: imu_init(app_id); break;
@@ -88,8 +78,7 @@ int main(void) {
                 // Dispatch command to appropriate app
                 switch (app_id) {
                     case APP_MOTOR: motor_server(app_id, line); break;
-                    case APP_RFSWITCH: imu_server(app_id, line); rfswitch_server(app_id, line); break;
-                    //case APP_RFSWITCH: imu_server(app_id, line); break;
+                    case APP_RFSWITCH: rfswitch_server(app_id, line); break;
                     case APP_TEMPCTRL: tempctrl_server(app_id, line); break;
                     case APP_POTMON: potmon_server(app_id, line); break;
                     case APP_IMU: imu_server(app_id, line); break;
@@ -113,8 +102,7 @@ int main(void) {
         // Perform every-loop operations
         switch (app_id) {
             case APP_MOTOR: motor_op(app_id); break;
-            case APP_RFSWITCH: imu_op(app_id); rfswitch_op(app_id); break;
-            //case APP_RFSWITCH: imu_op(app_id); break;
+            case APP_RFSWITCH: rfswitch_op(app_id); break;
             case APP_TEMPCTRL: tempctrl_op(app_id); break;
             case APP_POTMON: potmon_op(app_id); break;
             case APP_IMU: imu_op(app_id); break;
@@ -129,8 +117,7 @@ int main(void) {
             led_state = !led_state;
             switch (app_id) {
                 case APP_MOTOR: motor_status(app_id); break;
-                case APP_RFSWITCH: imu_status(app_id); rfswitch_status(app_id); break;
-                //case APP_RFSWITCH: imu_status(app_id); break;
+                case APP_RFSWITCH: rfswitch_status(app_id); break;
                 case APP_TEMPCTRL: tempctrl_status(app_id); break;
                 case APP_POTMON: potmon_status(app_id); break;
                 case APP_IMU: imu_status(app_id); break;

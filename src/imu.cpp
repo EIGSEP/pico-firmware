@@ -58,6 +58,7 @@ void init_eigsep_imu(EigsepImu *eimu, uint app_id) {
         eimu->imu.enableGyro(SAMPLE_PERIOD);
         eimu->imu.enableMagnetometer(SAMPLE_PERIOD);
         eimu->imu.enableGravity();
+        eimu->last_event_time = to_ms_since_boot(get_absolute_time());
         eimu->is_initialized = true;
     } else {
         eimu->imu.hardwareReset();
@@ -70,20 +71,9 @@ void imu_init(uint8_t app_id) {
 
 void calibrate_imu(EigsepImu *eimu) {
     if (!eimu->is_initialized) return;
-    //eimu->sensor_data.accel_status = -1;
-    //eimu->sensor_data.mag_status = -1;        
-    //while (eimu->imu.getSensorEvent()) {
-    //    sh2_SensorValue_t event = eimu->imu.sensorValue;
-    //    switch (event.sensorId) {
-    //        case SENSOR_REPORTID_ACCELEROMETER:
-    //            eimu->sensor_data.accel_status = event.status;
-    //            break;
-    //        case SENSOR_REPORTID_MAGNETIC_FIELD:
-    //            eimu->sensor_data.mag_status = event.status;
-    //            break;
-    //    }
-    //}
-        
+
+    // Calibration statuses are updated by process_imu_events().
+    // Save calibration only when both sensors report fully calibrated (status 3).
     if (eimu->sensor_data.accel_status == 3 && eimu->sensor_data.mag_status == 3 && eimu->is_initialized && eimu->do_calibration) {
         eimu->imu.saveCalibration();
         eimu->do_calibration = false;
@@ -93,7 +83,10 @@ void calibrate_imu(EigsepImu *eimu) {
 // calibrate if user sends {calibrate: true} in JSON
 void imu_server(uint8_t app_id, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
-    if (root == NULL) return;
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
     cJSON *cal_json = cJSON_GetObjectItem(root, "calibrate");
     if (cal_json && cJSON_IsTrue(cal_json)) {
         imu.do_calibration = true;
@@ -103,9 +96,13 @@ void imu_server(uint8_t app_id, const char *json_str) {
 
 void process_imu_events(EigsepImu *eimu) {
     if (!eimu->is_initialized) return;
-    
+
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    bool got_event = false;
+
     // Read sensor events
     while (eimu->imu.getSensorEvent()) {
+        got_event = true;
         sh2_SensorValue_t event = eimu->imu.sensorValue;
         switch (event.sensorId) {
             case SENSOR_REPORTID_ROTATION_VECTOR:
@@ -143,31 +140,33 @@ void process_imu_events(EigsepImu *eimu) {
                 break;
         }
     }
+
+    if (got_event) {
+        eimu->last_event_time = now;
+    } else if ((now - eimu->last_event_time) > IMU_EVENT_TIMEOUT_MS) {
+        // No events for too long — sensor likely crashed or lost power.
+        // Clear flag so imu_init() will re-attempt initialization.
+        eimu->is_initialized = false;
+    }
 }
 
 void imu_op(uint8_t app_id) {
-    // Handle calibration request
+    // Re-attempt init if the BNO08x was reset or lost power.
+    // process_imu_events() clears is_initialized after IMU_EVENT_TIMEOUT_MS
+    // of silence, which triggers re-initialization here.
     imu_init(app_id);
     calibrate_imu(&imu);
     process_imu_events(&imu);
 }    
 
 
+// Note: sensor_data is zero-initialized (static storage).  Before the first
+// sensor event arrives, status reports will contain zeros for all readings.
+// The "status" field ("error" vs "update") indicates whether the IMU has been
+// successfully initialized; check it before trusting sensor values.
 void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
-    const char *status;
-    const char *calibrated;
-    if (!eimu->is_initialized) {
-        status = "error";
-    }
-    else {
-        status = "update";
-    }
-    if (!eimu->do_calibration) {
-        calibrated = "False";
-    } else {
-        calibrated = "True";
-    }
-    
+    const char *status = eimu->is_initialized ? "update" : "error";
+
     send_json(22,
         KV_STR, "sensor_name", eimu->name,
         KV_STR, "status", status,
@@ -188,7 +187,7 @@ void send_imu_report(uint8_t app_id, EigsepImu *eimu) {
         KV_FLOAT, "mag_x", eimu->sensor_data.m[0],
         KV_FLOAT, "mag_y", eimu->sensor_data.m[1],
         KV_FLOAT, "mag_z", eimu->sensor_data.m[2],
-        KV_STR, "calibrated", calibrated,
+        KV_BOOL, "calibrated", eimu->do_calibration,
         KV_INT, "accel_cal", eimu->sensor_data.accel_status,
         KV_INT, "mag_cal", eimu->sensor_data.mag_status
     );

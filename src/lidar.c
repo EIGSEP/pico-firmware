@@ -1,8 +1,8 @@
 #include "lidar.h"
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "cJSON.h"
 #include "eigsep_command.h"
+#include "cJSON.h"
 #include <stdio.h>
 
 #define I2C_PORT i2c0
@@ -48,7 +48,16 @@ void lidar_init(uint8_t app_id) {
     free_i2c_bus();
 }
 
-void lidar_server(uint8_t app_id, const char *json_str) {}
+void lidar_server(uint8_t app_id, const char *json_str) {
+    // lidar does not currently handle commands, but validate anyway
+    // so the guard is in place when commands are added in the future.
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return;
+    }
+    cJSON_Delete(root);
+}
 
 void lidar_status(uint8_t app_id) {
     send_json(4,
@@ -59,16 +68,8 @@ void lidar_status(uint8_t app_id) {
     );
 }
 
-bool sf30d_init(void) {
-    const uint8_t start[2] = {0x00, 0x04};
-    if (i2c_write_timeout_us(I2C_PORT, I2C_ADDR, start, 2, false, 1000) < 0)
-        return false;
-    //sleep_ms(50);
-    sleep_ms(100);
-    return true;
-}
 
-bool lidar_reset(uint8_t app_id) {
+void lidar_reset(uint8_t app_id) {
     i2c_deinit(I2C_PORT);
     sleep_ms(50);
     lidar_init(app_id);
@@ -79,8 +80,6 @@ void lidar_op(uint8_t app_id) {
     //lidar_init(app_id);
     if (i2c_read_timeout_us(I2C_PORT, I2C_ADDR, buf, 2, false, 1000) != 2) {
         lidar_reset(app_id);
-        //free_i2c_bus();                 // bus recovery
-        //sf30d_init();                   // re-issue start cmd
         return;
     }
 

@@ -22,6 +22,7 @@ static void pot_sensor_init(PotSensor *pot, uint gpio_pin, uint adc_channel)
     pot->voltage     = 0.0f;
     pot->cal_m       = POTMON_DEFAULT_M;
     pot->cal_b       = POTMON_DEFAULT_B;
+
     adc_gpio_init(gpio_pin);
 }
 
@@ -29,7 +30,8 @@ static void pot_sensor_read(PotSensor *pot)
 {
     adc_select_input(pot->adc_channel);
     uint16_t raw = adc_read();
-    pot->voltage = ((float)raw / (float)POTMON_ADC_MAX) * POTMON_VREF;
+    float v = ((float)raw / (float)POTMON_ADC_MAX) * POTMON_VREF;
+    pot->voltage = v;
 }
 
 /* ------------------------------------------------------------------ */

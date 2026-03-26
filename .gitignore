@@ -4,8 +4,16 @@ build/*
 !build/pico_multi.uf2
 
 *.json
+!release-please-config.json
+!.release-please-manifest.json
 
 .venv/
+
+# data files
+*.npz
+
+# backup files
+*.bak
 
 # Python
 __pycache__/
@@ -27,6 +35,9 @@ coverage.xml
 *.cover
 .hypothesis/
 .pyc
+
+# Claude Code
+.claude/
 
 # IDE
 .vscode/
