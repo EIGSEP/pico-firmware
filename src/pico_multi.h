@@ -25,10 +25,11 @@
 // Maximum time (µs) to spend reading serial before running app_op().
 // The main loop prioritizes draining the serial FIFO (via continue) so
 // that slow app_op() implementations (e.g. motor stepping at ~144-288ms)
-// don't block command receipt.  However, if serial data arrives
-// continuously without a newline terminator, op() would be starved
-// indefinitely.  This threshold guarantees op() runs at least every
-// MAX_READ_ONLY_US regardless of input.
+// don't block command receipt. However, if serial data arrives
+// continuously without a newline terminator, app_op() would be starved
+// indefinitely. This threshold instead guarantees that serial draining
+// will not defer the next app_op() call for more than MAX_READ_ONLY_US
+// after the previous app_op() completes.
 #define MAX_READ_ONLY_US 50000  // 50 ms
 
 #endif // PICO_MULTI_H

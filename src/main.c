@@ -96,9 +96,10 @@ int main(void) {
                     line[index++] = (char)c;
                 }
                 // Prioritize draining the serial FIFO before running op(),
-                // but guarantee op() runs at least every MAX_READ_ONLY_US
-                // so that app watchdogs and control loops are not starved
-                // by prolonged or unterminated serial input.
+                // but ensure op() is not indefinitely starved by prolonged
+                // or unterminated serial input. last_op_time records when
+                // op() last completed, so the interval between op() starts
+                // may exceed MAX_READ_ONLY_US by up to the op() runtime.
                 if (absolute_time_diff_us(last_op_time, get_absolute_time())
                         < MAX_READ_ONLY_US) {
                     continue;
