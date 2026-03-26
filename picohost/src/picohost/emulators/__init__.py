@@ -4,6 +4,7 @@ from .tempctrl import TempCtrlEmulator
 from .tempmon import TempMonEmulator
 from .imu import ImuEmulator
 from .lidar import LidarEmulator
+from .potmon import PotMonEmulator
 from .rfswitch import RFSwitchEmulator, RFSwitchWithImuEmulator
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "TempMonEmulator",
     "ImuEmulator",
     "LidarEmulator",
+    "PotMonEmulator",
     "RFSwitchEmulator",
     "RFSwitchWithImuEmulator",
 ]
