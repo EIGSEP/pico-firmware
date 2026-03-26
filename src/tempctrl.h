@@ -6,7 +6,6 @@
 #include <time.h>
 #include "hardware/gpio.h"
 #include "eigsep_command.h"
-#include "tempmon.h"
 #include "temp_simple.h"
 
 // Temperature Control 1 configuration
