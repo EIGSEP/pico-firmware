@@ -88,7 +88,7 @@ pip3 install pyserial
 
 The firmware implements a multi-app dispatch system in `src/main.c`:
 
-1. **DIP Switch Selection**: GPIO pins 2, 3, 4 read a 3-bit value (0-7) to select the active application
+1. **DIP Switch Selection**: GPIO pins 20, 21, 22 read a 3-bit value (0-7) to select the active application
 2. **App Dispatch**: Applications are selected via switch statement with defined app IDs
 3. **Execution Model**: Selected app runs with four phases:
    - `app_init()` - One-time initialization
@@ -151,7 +151,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 
 ### Hardware Configuration
 
-- **DIP Switches**: GPIO 2, 3, 4 (3-bit selection, pull-up enabled)
+- **DIP Switches**: GPIO 20, 21, 22 (3-bit selection, pull-up enabled)
 - **Watchdog**: 8-second timeout enabled
 - **USB Serial**: CDC serial for all apps (VID:0x2E8A, PID:0x0009)
 - **Target**: RP2350 (Pico 2), also supports RP2040
