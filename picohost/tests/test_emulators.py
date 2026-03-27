@@ -6,6 +6,7 @@ Tests emulators standalone (no mock serial), calling methods directly.
 import time
 
 import numpy as np
+import pytest
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
@@ -13,6 +14,7 @@ from picohost.emulators import (
     ImuEmulator,
     LidarEmulator,
     RFSwitchEmulator,
+    RFSwitchWithImuEmulator,
 )
 
 
@@ -603,5 +605,30 @@ class TestTempCtrlEdgeCases:
         emu.server({"A_enable": False})
         emu.op()
         assert emu.A.drive == 0.0
+
+
+ALL_EMULATORS = [
+    MotorEmulator,
+    TempCtrlEmulator,
+    TempMonEmulator,
+    ImuEmulator,
+    LidarEmulator,
+    RFSwitchEmulator,
+    RFSwitchWithImuEmulator,
+]
+
+
+class TestSensorName:
+    """Ensure every emulator status contains 'sensor_name' for redis_handler."""
+
+    @pytest.mark.parametrize("emu_cls", ALL_EMULATORS, ids=lambda c: c.__name__)
+    def test_get_status_has_sensor_name(self, emu_cls):
+        emu = emu_cls()
+        result = emu.get_status()
+        # Normalize to list — composite emulators return multiple dicts,
+        # each of which reaches redis_handler individually.
+        statuses = result if isinstance(result, list) else [result]
+        for status in statuses:
+            assert "sensor_name" in status
 
 
