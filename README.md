@@ -35,29 +35,11 @@ Multi-application firmware for Raspberry Pi Pico 2 (RP2350) that implements hard
 ```bash
 # Install build dependencies
 sudo apt update
-sudo apt install build-essential pkg-config libusb-1.0-0-dev cmake
+sudo apt install build-essential pkg-config libusb-1.0-0-dev cmake gcc-arm-none-eabi libstdc++-arm-none-eabi-newlib
 
 # Install Python dependencies
 pip3 install pyserial
 ```
-
-### Install picotool
-Picotool is required for flashing firmware to Pico devices.
-
-```bash
-# Clone and build picotool
-cd ~/
-git clone https://github.com/raspberrypi/picotool.git
-cd picotool
-mkdir build && cd build
-cmake ..
-sudo make
-
-# Set up udev rules for non-root access
-sudo cp udev/99-picotool.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
 ---
 
 ## 2. Clone and Build Firmware
@@ -75,7 +57,30 @@ git submodule update --init lib/BNO08x_Pico_Library
 git submodule update --init pico-sdk
 cd pico-sdk && git submodule update --init && cd ..
 
-# Build the firmware for Pico 2 (default)
+#Pico-sdk path must be in bashrc for the picotool make to work.
+export "PICO_SDK_PATH=$HOME/pico-firmware/pico-sdk" >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 3. Install picotool
+Picotool is required for flashing firmware to Pico devices. 
+
+```bash
+# Clone and build picotool
+cd ~/
+git clone https://github.com/raspberrypi/picotool.git
+cd picotool
+mkdir build && cd build
+cmake ..
+sudo make
+
+# Set up udev rules for non-root access
+cd ..
+sudo cp udev/99-picotool.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+### 4. Build the firmware for Pico 2 (default)
+```bash
 ./build.sh
 
 # Or build manually
@@ -88,7 +93,7 @@ The build produces `build/pico_multi.uf2` ready for flashing.
 
 ---
 
-## 3. Flash Pico Devices
+## 5. Flash Pico Devices
 
 ### Single Device (Manual)
 1. Hold BOOTSEL button while connecting Pico via USB
