@@ -45,6 +45,7 @@ int main(void) {
     int index = 0;
     bool led_state=1;
     absolute_time_t next_sample = make_timeout_time_ms(STATUS_CADENCE_MS);
+    absolute_time_t last_op_time = get_absolute_time();
 
     // 1) Initialize DIP switches before USB init
     init_dip_switches();
@@ -96,8 +97,15 @@ int main(void) {
                 if (index < BUFFER_SIZE - 1) {
                     line[index++] = (char)c;
                 }
-                // prioritize reading a command before operations
-                continue;
+                // Prioritize draining the serial FIFO before running op(),
+                // but ensure op() is not indefinitely starved by prolonged
+                // or unterminated serial input. last_op_time records when
+                // op() last completed, so the interval between op() starts
+                // may exceed MAX_READ_ONLY_US by up to the op() runtime.
+                if (absolute_time_diff_us(last_op_time, get_absolute_time())
+                        < MAX_READ_ONLY_US) {
+                    continue;
+                }
             }
         }
 
@@ -113,6 +121,7 @@ int main(void) {
             default:
                 break;
         }
+        last_op_time = get_absolute_time();
 
         // Perform scheduled status reporting
         if (absolute_time_diff_us(get_absolute_time(), next_sample) <= 0) {
