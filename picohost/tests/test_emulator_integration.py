@@ -46,12 +46,8 @@ TEMPMON_FIELDS = {
 
 IMU_FIELDS = {
     "sensor_name", "status", "app_id",
-    "quat_i", "quat_j", "quat_k", "quat_real",
+    "yaw", "pitch", "roll",
     "accel_x", "accel_y", "accel_z",
-    "lin_accel_x", "lin_accel_y", "lin_accel_z",
-    "gyro_x", "gyro_y", "gyro_z",
-    "mag_x", "mag_y", "mag_z",
-    "calibrated", "accel_cal", "mag_cal",
 }
 
 LIDAR_FIELDS = {"sensor_name", "status", "app_id", "distance_m"}
@@ -135,15 +131,13 @@ class TestMotorIntegration:
 class TestRFSwitchIntegration:
 
     def test_status_populated(self, rfswitch):
-        """RFSwitch+IMU emulator sends status via reader thread."""
+        """RFSwitch emulator sends status via reader thread."""
         cadence = rfswitch.EMULATOR_CADENCE_MS
         wait_for_condition(
             lambda: rfswitch.last_status.get("sensor_name") is not None,
             cadence_ms=cadence,
         )
-        # Composite emulator alternates rfswitch and imu status;
-        # last_status holds whichever arrived last
-        assert rfswitch.last_status["sensor_name"] in ("rfswitch", "imu_antenna")
+        assert rfswitch.last_status["sensor_name"] == "rfswitch"
 
     def test_command_round_trip(self, rfswitch):
         """Switch command round-trips through serial."""
@@ -192,54 +186,18 @@ class TestIMUIntegration:
         assert set(imu.last_status.keys()) == IMU_FIELDS
         assert imu.last_status["sensor_name"] == "imu_panda"
 
-    def test_calibrate_round_trip(self, imu):
-        """PicoIMU.calibrate() round-trips through serial and is processed.
-
-        When both accel_status and mag_status are already 3 (fully
-        calibrated), the emulator saves calibration and clears the flag
-        in the same op() cycle — so by the time we read status, calibrated
-        is back to False.  This matches real firmware behavior: calibration
-        completes instantly when the sensor is already calibrated.
-
-        To observe the transient True state, we lower accel_status so the
-        calibration stays pending until we restore it.
-        """
-        cadence = imu.EMULATOR_CADENCE_MS
-        imu._emulator.accel_status = 2  # prevent auto-clear
-        imu.calibrate()
-        wait_for_condition(
-            lambda: imu.last_status.get("calibrated") is True,
-            cadence_ms=cadence, max_cycles=10,
-        )
-        # Now let calibration complete
-        imu._emulator.accel_status = 3
-        wait_for_condition(
-            lambda: imu.last_status.get("calibrated") is False,
-            cadence_ms=cadence, max_cycles=10,
-        )
-
     def test_status_types(self, imu):
-        """Verify value types match the JSON protocol, not just field names.
-
-        Field type mismatches (e.g. string vs bool) silently break host
-        code that compares with 'is True' vs '== \"True\"'.
-        """
+        """Verify value types match the JSON protocol, not just field names."""
         cadence = imu.EMULATOR_CADENCE_MS
         wait_for_condition(
             lambda: len(imu.last_status) > 0, cadence_ms=cadence,
         )
         s = imu.last_status
-        # Booleans
-        assert isinstance(s["calibrated"], bool)
         # Integers
         assert isinstance(s["app_id"], int)
-        assert isinstance(s["accel_cal"], int)
-        assert isinstance(s["mag_cal"], int)
         # Floats
-        for key in ("quat_i", "quat_j", "quat_k", "quat_real",
-                     "accel_x", "accel_y", "accel_z",
-                     "gyro_x", "gyro_y", "gyro_z",
-                     "mag_x", "mag_y", "mag_z"):
+        for key in ("yaw", "pitch", "roll",
+                     "accel_x", "accel_y", "accel_z"):
             assert isinstance(s[key], float), f"{key} should be float, got {type(s[key])}"
         # Strings
         assert isinstance(s["sensor_name"], str)
@@ -344,11 +302,7 @@ class TestLidarIntegration:
 class TestRFSwitchIntegrationTypes:
 
     def test_status_types(self, rfswitch):
-        """Verify rfswitch status value types through serial pipeline.
-
-        The composite emulator alternates rfswitch and imu status, so
-        we wait until we see the rfswitch message specifically.
-        """
+        """Verify rfswitch status value types through serial pipeline."""
         cadence = rfswitch.EMULATOR_CADENCE_MS
         wait_for_condition(
             lambda: rfswitch.last_status.get("sensor_name") == "rfswitch",

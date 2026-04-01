@@ -14,7 +14,6 @@ from picohost.emulators import (
     ImuEmulator,
     LidarEmulator,
     RFSwitchEmulator,
-    RFSwitchWithImuEmulator,
 )
 
 
@@ -263,34 +262,31 @@ class TestImuEmulator:
         assert emu.name == "imu_panda"
         status = emu.get_status()
         assert status["sensor_name"] == "imu_panda"
-        assert status["calibrated"] is False
 
     def test_antenna_name(self):
         emu = ImuEmulator(app_id=5)
         assert emu.name == "imu_antenna"
 
-    def test_quaternion_normalization(self):
-        emu = ImuEmulator()
-        for _ in range(100):
-            emu.op()
-        assert abs(np.linalg.norm(emu.q) - 1.0) < 0.01
-
-    def test_gravity_consistency(self):
+    def test_accel_magnitude(self):
         """Accelerometer should read ~9.81 m/s^2 magnitude (stationary)."""
         emu = ImuEmulator()
         for _ in range(10):
             emu.op()
-        assert abs(np.linalg.norm(emu.a) - 9.81) < 0.1
+        mag = np.sqrt(emu.accel_x**2 + emu.accel_y**2 + emu.accel_z**2)
+        assert abs(mag - 9.81) < 0.1
 
-    def test_orientation_from_angles(self):
-        """Setting az/el angles produces consistent quaternion."""
+    def test_euler_from_angles(self):
+        """Setting az/el angles produces matching yaw/pitch.
+
+        NOTE: assumes yaw=az, pitch=el — needs hardware verification.
+        See TODO in emulators/imu.py.
+        """
         emu = ImuEmulator()
         emu.az_angle = np.pi / 4  # 45 degrees azimuth
-        emu.el_angle = 0.0
+        emu.el_angle = np.pi / 6  # 30 degrees elevation
         emu.op()
-        # Quaternion should represent ~45 deg rotation around z
-        assert abs(emu.q[3] - np.cos(np.pi / 8)) < 0.02  # real part
-        assert abs(emu.q[2] - np.sin(np.pi / 8)) < 0.02  # k component (z-axis)
+        assert abs(emu.yaw - 45.0) < 1.0
+        assert abs(emu.pitch - 30.0) < 1.0
 
     def test_sensor_failure_triggers_reinit(self):
         """IMU reports error after event timeout, then recovers."""
@@ -328,12 +324,8 @@ class TestImuEmulator:
         status = emu.get_status()
         expected_keys = {
             "sensor_name", "status", "app_id",
-            "quat_i", "quat_j", "quat_k", "quat_real",
+            "yaw", "pitch", "roll",
             "accel_x", "accel_y", "accel_z",
-            "lin_accel_x", "lin_accel_y", "lin_accel_z",
-            "gyro_x", "gyro_y", "gyro_z",
-            "mag_x", "mag_y", "mag_z",
-            "calibrated", "accel_cal", "mag_cal",
         }
         assert set(status.keys()) == expected_keys
 
@@ -434,16 +426,9 @@ class TestImuStatusTypes:
         assert isinstance(status["sensor_name"], str)
         assert isinstance(status["status"], str)
         assert isinstance(status["app_id"], int)
-        for key in ("quat_i", "quat_j", "quat_k", "quat_real",
-                     "accel_x", "accel_y", "accel_z",
-                     "lin_accel_x", "lin_accel_y", "lin_accel_z",
-                     "gyro_x", "gyro_y", "gyro_z",
-                     "mag_x", "mag_y", "mag_z"):
+        for key in ("yaw", "pitch", "roll",
+                     "accel_x", "accel_y", "accel_z"):
             assert isinstance(status[key], float), f"{key} should be float"
-        # calibrated is a BOOL in C firmware (KV_BOOL)
-        assert isinstance(status["calibrated"], bool)
-        assert isinstance(status["accel_cal"], int)
-        assert isinstance(status["mag_cal"], int)
 
 
 class TestLidarStatusTypes:
@@ -563,16 +548,10 @@ class TestTempMonErrorState:
 
 class TestImuErrorState:
 
-    def test_init_failure_calibration_noop(self):
-        """When not initialized, calibrate command should have no effect.
-
-        In C firmware, calibrate_imu() returns early if !is_initialized.
-        """
+    def test_init_failure_reports_error(self):
+        """When not initialized, status reports error."""
         emu = ImuEmulator()
         emu.inject_init_failure()
-        emu.server({"calibrate": True})
-        # The server still sets the flag (firmware does too), but the
-        # status should report error
         assert emu.get_status()["status"] == "error"
 
 
@@ -614,7 +593,6 @@ ALL_EMULATORS = [
     ImuEmulator,
     LidarEmulator,
     RFSwitchEmulator,
-    RFSwitchWithImuEmulator,
 ]
 
 
