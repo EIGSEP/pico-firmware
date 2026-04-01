@@ -19,7 +19,7 @@ add_executable(pico_multi
     src/tempctrl.c
     src/potmon.c
     src/temp_simple.c
-    src/imu.cpp
+    src/imu.c
     src/lidar.c
 )
 
@@ -47,13 +47,9 @@ target_link_libraries(onewire PUBLIC
 # Generate PIO header for the onewire library
 pico_generate_pio_header(onewire ${CMAKE_CURRENT_LIST_DIR}/lib/onewire/onewire_library.pio)
 
-# Add BNO08x library
-add_subdirectory(lib/BNO08x_Pico_Library)
-
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/include
-    ${CMAKE_CURRENT_LIST_DIR}/lib/BNO08x_Pico_Library/include
 )
 
 # link against Pico stdlib and required hardware libraries
@@ -68,7 +64,7 @@ target_link_libraries(pico_multi
     eigsep_command
     onewire
     hardware_i2c
-    BNO08x_Pico_Library
+    hardware_uart
 )
 
 # enable USB CDC for stdio

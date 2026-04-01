@@ -14,7 +14,7 @@ from .emulators import (
     ImuEmulator,
     LidarEmulator,
     PotMonEmulator,
-    RFSwitchWithImuEmulator,
+    RFSwitchEmulator,
 )
 
 
@@ -57,7 +57,7 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
 
 
 class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
-    EMULATOR_CLASS = RFSwitchWithImuEmulator
+    EMULATOR_CLASS = RFSwitchEmulator
     EMULATOR_CADENCE_MS = 50.0
 
 

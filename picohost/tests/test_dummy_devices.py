@@ -160,11 +160,7 @@ class TestDummyPicoMotor:
 # ---------------------------------------------------------------------------
 
 class TestDummyPicoRFSwitch:
-    """Test DummyPicoRFSwitch with the RFSwitchWithImuEmulator.
-
-    The composite emulator sends both rfswitch and imu status per cadence,
-    matching the firmware behavior of APP_RFSWITCH in main.c.
-    """
+    """Test DummyPicoRFSwitch with the RFSwitchEmulator."""
 
     def test_rbin_converts_lsb_first(self):
         """rbin() interprets the first character as the LSB."""

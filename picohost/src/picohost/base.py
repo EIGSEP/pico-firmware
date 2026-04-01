@@ -179,7 +179,14 @@ class PicoDevice:
             if line:
                 return line.decode("utf-8", errors="ignore").strip()
         except Exception:
-            pass
+            # Serial error (likely device unplugged) — close the dead handle
+            # so is_connected becomes False and reconnection can be attempted.
+            self.logger.warning(f"Serial read error on {self.port}, closing connection")
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
         return None
 
     def parse_response(self, line: str) -> Optional[Dict[str, Any]]:
@@ -197,9 +204,20 @@ class PicoDevice:
         except json.JSONDecodeError:
             return None
 
+    _RECONNECT_INTERVAL = 2.0  # seconds between reconnection attempts
+
     def _reader_thread_func(self):
         """Background thread function for reading serial data."""
         while self._running:
+            if not self.is_connected:
+                # Try to reconnect
+                self.logger.info(f"Attempting to reconnect to {self.port}...")
+                if self.connect():
+                    self.logger.info(f"Reconnected to {self.port}")
+                else:
+                    time.sleep(self._RECONNECT_INTERVAL)
+                continue
+
             line = self.read_line()
             if line:
                 # Try to parse as JSON
@@ -212,9 +230,6 @@ class PicoDevice:
                     # Call response handler if set
                     if self._response_handler:
                         self._response_handler(data)
-                    # else:
-                        # Default: print the response
-                    #    print(json.dumps(data))
                 # Call raw handler on non-json if set
                 elif self._raw_handler:
                     self._raw_handler(line)
@@ -506,16 +521,9 @@ class PicoPeltier(PicoDevice):
 
 
 class PicoIMU(PicoDevice):
-    """Specialized class for IMU calibration control."""
+    """Specialized class for IMU devices (BNO08x UART RVC mode)."""
 
-    def calibrate(self) -> bool:
-        """
-        Send request to calibrate IMU.
-
-        Returns:
-            True if command sent successfully
-        """
-        return self.send_command({"calibrate": True})
+    pass
 
 class PicoPotentiometer(PicoDevice):
     """Potentiometer monitoring device with voltage-to-angle calibration."""

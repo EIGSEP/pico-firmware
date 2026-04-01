@@ -19,7 +19,6 @@ from picohost.emulators import (
     ImuEmulator,
     LidarEmulator,
     RFSwitchEmulator,
-    RFSwitchWithImuEmulator,
 )
 from picohost.emulators.base import PicoEmulator
 
@@ -275,7 +274,7 @@ class TestTempMonProtocol:
 
 
 # ---------------------------------------------------------------------------
-# IMU protocol (src/imu.cpp)
+# IMU protocol (src/imu.c — UART RVC mode)
 # ---------------------------------------------------------------------------
 
 
@@ -283,65 +282,37 @@ class TestImuProtocol:
     """Protocol conformance tests for APP_IMU (app_id=3)."""
 
     def test_name_for_app_imu(self):
-        """imu.cpp line 41: app_id==APP_IMU → "imu_panda"."""
+        """imu.c: app_id==APP_IMU → "imu_panda"."""
         emu = ImuEmulator(app_id=3)
         assert emu.get_status()["sensor_name"] == "imu_panda"
 
-    def test_name_for_app_rfswitch(self):
-        """imu.cpp line 43: app_id!=APP_IMU → "imu_antenna"."""
+    def test_name_for_other_app(self):
+        """imu.c: app_id!=APP_IMU → "imu_antenna"."""
         emu = ImuEmulator(app_id=5)
         assert emu.get_status()["sensor_name"] == "imu_antenna"
 
-    def test_calibrate_requires_literal_true(self):
-        """imu.cpp line 98: cJSON_IsTrue only accepts JSON true."""
+    def test_server_is_noop(self):
+        """RVC mode: no commands supported."""
         emu = ImuEmulator()
-        emu.server({"calibrate": True})
-        assert emu.do_calibration is True
-        emu.do_calibration = False
-        # These should NOT trigger calibration
-        for val in (1, "true", "yes", [True]):
-            emu.server({"calibrate": val})
-            assert emu.do_calibration is False, f"val={val!r} triggered calibration"
-
-    def test_calibration_clears_when_both_statuses_3(self):
-        """imu.cpp line 87: only saves when accel==3 AND mag==3."""
-        emu = ImuEmulator()
-        emu.accel_status = 3
-        emu.mag_status = 3
-        emu.server({"calibrate": True})
-        emu.op()
-        assert emu.do_calibration is False
-
-    def test_calibration_blocked_by_partial_status(self):
-        emu = ImuEmulator()
-        emu.accel_status = 2
-        emu.mag_status = 3
-        emu.server({"calibrate": True})
-        emu.op()
-        assert emu.do_calibration is True  # not cleared
-
-    def test_calibrated_field_is_bool(self):
-        """imu.cpp: KV_BOOL, so calibrated is a JSON boolean."""
-        emu = ImuEmulator()
-        assert emu.get_status()["calibrated"] is False
-        emu.server({"calibrate": True})
-        assert emu.get_status()["calibrated"] is True
+        before = emu.get_status()
+        emu.server({"anything": True})
+        after = emu.get_status()
+        assert before == after
 
     def test_error_status_when_not_initialized(self):
-        """imu.cpp line 159-163: status="error" if !is_initialized."""
+        """imu.c: status="error" if !is_initialized."""
         emu = ImuEmulator()
         emu.inject_init_failure()
         assert emu.get_status()["status"] == "error"
 
-    def test_quaternion_convention(self):
-        """BNO08x convention: [i, j, k, real]."""
+    def test_euler_angles_are_degrees(self):
+        """RVC output is in degrees."""
         emu = ImuEmulator()
+        emu.az_angle = 0.5  # ~28.6 degrees
         emu.op()
         status = emu.get_status()
-        # At rest (near-zero angles), quaternion ≈ [0, 0, 0, 1]
-        assert abs(status["quat_real"] - 1.0) < 0.05
-        for key in ("quat_i", "quat_j", "quat_k"):
-            assert abs(status[key]) < 0.05
+        # yaw should be close to degrees(0.5) ≈ 28.6
+        assert abs(status["yaw"] - 28.6) < 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -395,36 +366,3 @@ class TestRFSwitchProtocol:
             assert emu.get_status()["sw_state"] == val
 
 
-# ---------------------------------------------------------------------------
-# Composite RFSwitch+IMU (main.c dispatch for APP_RFSWITCH)
-# ---------------------------------------------------------------------------
-
-
-class TestRFSwitchWithImuProtocol:
-    """Protocol conformance for APP_RFSWITCH composite behaviour.
-
-    main.c dispatches to both imu_* and rfswitch_* for app_id=5.
-    """
-
-    def test_dual_status_messages(self):
-        """Two status dicts per cadence: imu_antenna + rfswitch."""
-        emu = RFSwitchWithImuEmulator()
-        statuses = emu.get_status()
-        assert isinstance(statuses, list)
-        assert len(statuses) == 2
-        names = {s["sensor_name"] for s in statuses}
-        assert names == {"imu_antenna", "rfswitch"}
-
-    def test_command_dispatches_to_both(self):
-        """Single JSON routed to both sub-emulators."""
-        emu = RFSwitchWithImuEmulator()
-        emu.server({"sw_state": 7, "calibrate": True})
-        assert emu._rfswitch.sw_state == 7
-        assert emu._imu.do_calibration is True
-
-    def test_imu_uses_antenna_name(self):
-        """app_id=5 → imu name is "imu_antenna"."""
-        emu = RFSwitchWithImuEmulator()
-        imu_status = [s for s in emu.get_status()
-                      if s["sensor_name"] == "imu_antenna"]
-        assert len(imu_status) == 1

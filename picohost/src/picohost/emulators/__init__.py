@@ -5,7 +5,7 @@ from .tempmon import TempMonEmulator
 from .imu import ImuEmulator
 from .lidar import LidarEmulator
 from .potmon import PotMonEmulator
-from .rfswitch import RFSwitchEmulator, RFSwitchWithImuEmulator
+from .rfswitch import RFSwitchEmulator
 
 __all__ = [
     "PicoEmulator",
@@ -16,5 +16,4 @@ __all__ = [
     "LidarEmulator",
     "PotMonEmulator",
     "RFSwitchEmulator",
-    "RFSwitchWithImuEmulator",
 ]
