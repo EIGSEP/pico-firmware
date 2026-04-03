@@ -64,6 +64,7 @@ int main(void) {
         case APP_TEMPCTRL: tempctrl_init(app_id); break;
         case APP_POTMON: potmon_init(app_id); break;
         case APP_IMU: imu_init(app_id); break;
+        case APP_IMU2: imu_init(app_id); break;
         case APP_LIDAR: lidar_init(app_id); break;
         default: break;
     }
@@ -83,6 +84,7 @@ int main(void) {
                     case APP_TEMPCTRL: tempctrl_server(app_id, line); break;
                     case APP_POTMON: potmon_server(app_id, line); break;
                     case APP_IMU: imu_server(app_id, line); break;
+                    case APP_IMU2: imu_server(app_id, line); break;
                     case APP_LIDAR: lidar_server(app_id, line); break;
                     default:
                         send_json(2,
@@ -114,6 +116,7 @@ int main(void) {
             case APP_TEMPCTRL: tempctrl_op(app_id); break;
             case APP_POTMON: potmon_op(app_id); break;
             case APP_IMU: imu_op(app_id); break;
+            case APP_IMU2: imu_op(app_id); break;
             case APP_LIDAR: lidar_op(app_id); break;
             default:
                 break;
@@ -130,6 +133,7 @@ int main(void) {
                 case APP_TEMPCTRL: tempctrl_status(app_id); break;
                 case APP_POTMON: potmon_status(app_id); break;
                 case APP_IMU: imu_status(app_id); break;
+                case APP_IMU2: imu_status(app_id); break;
                 case APP_LIDAR: lidar_status(app_id); break;
                 default:
                     send_json(2,

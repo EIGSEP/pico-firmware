@@ -264,7 +264,7 @@ class TestImuEmulator:
         assert status["sensor_name"] == "imu_panda"
 
     def test_antenna_name(self):
-        emu = ImuEmulator(app_id=5)
+        emu = ImuEmulator(app_id=6)
         assert emu.name == "imu_antenna"
 
     def test_accel_magnitude(self):

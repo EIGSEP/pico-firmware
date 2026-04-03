@@ -18,6 +18,7 @@
 #define APP_IMU         3
 #define APP_LIDAR       4
 #define APP_RFSWITCH    5
+#define APP_IMU2        6
 
 // status reporting cadence
 #define STATUS_CADENCE_MS 200

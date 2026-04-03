@@ -286,9 +286,9 @@ class TestImuProtocol:
         emu = ImuEmulator(app_id=3)
         assert emu.get_status()["sensor_name"] == "imu_panda"
 
-    def test_name_for_other_app(self):
-        """imu.c: app_id!=APP_IMU → "imu_antenna"."""
-        emu = ImuEmulator(app_id=5)
+    def test_name_for_app_imu2(self):
+        """imu.cpp line 43: app_id==APP_IMU2 → "imu_antenna"."""
+        emu = ImuEmulator(app_id=6)
         assert emu.get_status()["sensor_name"] == "imu_antenna"
 
     def test_server_is_noop(self):
@@ -364,5 +364,3 @@ class TestRFSwitchProtocol:
         for val in (0, 1, 128, 255):
             emu.server({"sw_state": val})
             assert emu.get_status()["sw_state"] == val
-
-
