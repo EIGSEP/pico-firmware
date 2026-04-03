@@ -30,8 +30,15 @@ class ImuEmulator(PicoEmulator):
         self.accel_z = 9.81
         self.is_initialized = True
         self._last_event_time = time.monotonic()
-        self._sensor_failed = False
-        self.name = "imu_panda" if app_id == 3 else "imu_antenna"
+        self._sensor_failed = False  # set via simulate_sensor_failure()
+        # Name depends on app_id: mirrors imu.cpp init_eigsep_imu()
+        APP_IMU, APP_IMU2 = 3, 6
+        if app_id == APP_IMU:
+            self.name = "imu_panda"
+        elif app_id == APP_IMU2:
+            self.name = "imu_antenna"
+        else:
+            raise ValueError(f"ImuEmulator: unexpected app_id={app_id}, expected {APP_IMU} or {APP_IMU2}")
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
