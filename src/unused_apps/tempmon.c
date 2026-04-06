@@ -48,12 +48,12 @@ void tempmon_status(uint8_t app_id) {
     send_json(8,
         KV_STR, "sensor_name", "temp_mon",
         KV_INT, "app_id", app_id,
-        KV_STR, "A_status", status1,
-        KV_FLOAT, "A_temp", temp1,
-        KV_FLOAT, "A_timestamp", (double)time1,
-        KV_STR, "B_status", status2,
-        KV_FLOAT, "B_temp", temp2,
-        KV_FLOAT, "B_timestamp", (double)time2
+        KV_STR, "LNA_status", status1,
+        KV_FLOAT, "LNA_temp", temp1,
+        KV_FLOAT, "LNA_timestamp", (double)time1,
+        KV_STR, "LOAD_status", status2,
+        KV_FLOAT, "LOAD_temp", temp2,
+        KV_FLOAT, "LOAD_timestamp", (double)time2
     );
 }
 

@@ -30,18 +30,18 @@ MOTOR_FIELDS = {
 TEMPCTRL_FIELDS = {
     "sensor_name", "app_id",
     "watchdog_tripped", "watchdog_timeout_ms",
-    "A_status", "A_T_now", "A_timestamp", "A_T_target",
-    "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
-    "A_hysteresis", "A_clamp",
-    "B_status", "B_T_now", "B_timestamp", "B_T_target",
-    "B_drive_level", "B_enabled", "B_active", "B_int_disabled",
-    "B_hysteresis", "B_clamp",
+    "LNA_status", "LNA_T_now", "LNA_timestamp", "LNA_T_target",
+    "LNA_drive_level", "LNA_enabled", "LNA_active", "LNA_int_disabled",
+    "LNA_hysteresis", "LNA_clamp",
+    "LOAD_status", "LOAD_T_now", "LOAD_timestamp", "LOAD_T_target",
+    "LOAD_drive_level", "LOAD_enabled", "LOAD_active", "LOAD_int_disabled",
+    "LOAD_hysteresis", "LOAD_clamp",
 }
 
 TEMPMON_FIELDS = {
     "sensor_name", "app_id",
-    "A_status", "A_temp", "A_timestamp",
-    "B_status", "B_temp", "B_timestamp",
+    "LNA_status", "LNA_temp", "LNA_timestamp",
+    "LOAD_status", "LOAD_temp", "LOAD_timestamp",
 }
 
 IMU_FIELDS = {
@@ -162,12 +162,12 @@ class TestPeltierIntegration:
     def test_command_round_trip(self, peltier):
         """Temperature control converges to target through serial pipeline."""
         cadence = peltier.EMULATOR_CADENCE_MS
-        peltier.set_temperature(T_A=35.0)
-        peltier.set_enable(A=True)
+        peltier.set_temperature(T_LNA=35.0)
+        peltier.set_enable(LNA=True)
         # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
         # ~333 ops to converge + margin for hysteresis settling
         settled = wait_for_settle(
-            lambda: round(peltier.status.get("A_T_now", 0), 1),
+            lambda: round(peltier.status.get("LNA_T_now", 0), 1),
             cadence_ms=cadence, max_cycles=500, stable_count=5,
         )
         assert abs(settled - 35.0) <= 0.5
@@ -230,14 +230,14 @@ class TestPeltierIntegrationTypes:
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
         # Booleans
-        for key in ("A_enabled", "A_active", "A_int_disabled",
-                     "B_enabled", "B_active", "B_int_disabled"):
+        for key in ("LNA_enabled", "LNA_active", "LNA_int_disabled",
+                     "LOAD_enabled", "LOAD_active", "LOAD_int_disabled"):
             assert isinstance(s[key], bool), f"{key} should be bool, got {type(s[key])}"
         # Floats
-        for key in ("A_T_now", "A_T_target", "A_drive_level",
-                     "A_hysteresis", "A_clamp", "A_timestamp",
-                     "B_T_now", "B_T_target", "B_drive_level",
-                     "B_hysteresis", "B_clamp", "B_timestamp"):
+        for key in ("LNA_T_now", "LNA_T_target", "LNA_drive_level",
+                     "LNA_hysteresis", "LNA_clamp", "LNA_timestamp",
+                     "LOAD_T_now", "LOAD_T_target", "LOAD_drive_level",
+                     "LOAD_hysteresis", "LOAD_clamp", "LOAD_timestamp"):
             assert isinstance(s[key], (int, float)), f"{key} should be numeric, got {type(s[key])}"
 
 
@@ -263,7 +263,7 @@ class TestTempMonIntegration:
         s = tempmon.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
-        for ch in ("A", "B"):
+        for ch in ("LNA", "LOAD"):
             assert isinstance(s[f"{ch}_status"], str)
             assert isinstance(s[f"{ch}_temp"], (int, float)), \
                 f"{ch}_temp should be numeric"
@@ -452,10 +452,10 @@ class TestConvergenceTiming:
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
         try:
             cadence = p.EMULATOR_CADENCE_MS
-            p.set_temperature(T_A=35.0)
-            p.set_enable(A=True)
+            p.set_temperature(T_LNA=35.0)
+            p.set_enable(LNA=True)
             settled = wait_for_settle(
-                lambda: round(p.status.get("A_T_now", 0), 1),
+                lambda: round(p.status.get("LNA_T_now", 0), 1),
                 cadence_ms=cadence, max_cycles=500, stable_count=5,
             )
             assert abs(settled - 35.0) <= 0.5

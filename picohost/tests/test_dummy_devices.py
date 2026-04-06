@@ -212,75 +212,75 @@ class TestDummyPicoPeltier:
     emulator, which are then reflected in the periodic status updates.
     """
 
-    def test_set_temperature_channel_a(self):
-        """Setting channel A target and hysteresis updates emulator status."""
+    def test_set_temperature_channel_lna(self):
+        """Setting LNA channel target and hysteresis updates emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("A_T_target")
-        assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
+        before = peltier.status.get("LNA_T_target")
+        assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("A_T_target"),
+            lambda: peltier.status.get("LNA_T_target"),
             initial=before, cadence_ms=cadence, max_cycles=10,
         ) == pytest.approx(25.5)
-        assert peltier.status["A_hysteresis"] == pytest.approx(0.5)
+        assert peltier.status["LNA_hysteresis"] == pytest.approx(0.5)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("B_T_target")
-        assert peltier.set_temperature(T_A=30.0, A_hyst=1.0, T_B=25.0, B_hyst=0.5) is True
+        before = peltier.status.get("LOAD_T_target")
+        assert peltier.set_temperature(T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("B_T_target"),
+            lambda: peltier.status.get("LOAD_T_target"),
             initial=before, cadence_ms=cadence, max_cycles=10,
         ) == pytest.approx(25.0)
-        assert peltier.status["A_T_target"] == pytest.approx(30.0)
+        assert peltier.status["LNA_T_target"] == pytest.approx(30.0)
         peltier.disconnect()
 
     def test_set_enable_mixed(self):
-        """Enabling A and disabling B is reflected in emulator status."""
+        """Enabling LNA and disabling LOAD is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(A=True, B=False) is True
+        assert peltier.set_enable(LNA=True, LOAD=False) is True
         wait_for_condition(
-            lambda: peltier.status.get("A_enabled") is True,
+            lambda: peltier.status.get("LNA_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.status["B_enabled"] is False
+        assert peltier.status["LOAD_enabled"] is False
         peltier.disconnect()
 
     def test_enable_both_channels(self):
         """Enabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(A=True, B=True) is True
+        assert peltier.set_enable(LNA=True, LOAD=True) is True
         wait_for_condition(
-            lambda: peltier.status.get("A_enabled") is True,
+            lambda: peltier.status.get("LNA_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.status["B_enabled"] is True
+        assert peltier.status["LOAD_enabled"] is True
         peltier.disconnect()
 
     def test_disable_both_channels(self):
         """Disabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(A=False, B=False) is True
+        assert peltier.set_enable(LNA=False, LOAD=False) is True
         wait_for_condition(
-            lambda: peltier.status.get("A_enabled") is False,
+            lambda: peltier.status.get("LNA_enabled") is False,
             cadence_ms=cadence,
         )
-        assert peltier.status["B_enabled"] is False
+        assert peltier.status["LOAD_enabled"] is False
         peltier.disconnect()
 
     def test_status_populated_on_init(self):
         """wait_for_updates() in PicoStatus.__init__ populates status immediately."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         assert peltier.status["sensor_name"] == "tempctrl"
-        assert "A_T_now" in peltier.status
-        assert "B_T_now" in peltier.status
-        assert "A_drive_level" in peltier.status
+        assert "LNA_T_now" in peltier.status
+        assert "LOAD_T_now" in peltier.status
+        assert "LNA_drive_level" in peltier.status
         peltier.disconnect()
 
 

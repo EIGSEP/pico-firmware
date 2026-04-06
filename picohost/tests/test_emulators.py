@@ -115,52 +115,52 @@ class TestTempCtrlEmulator:
         emu = TempCtrlEmulator()
         status = emu.get_status()
         assert status["sensor_name"] == "tempctrl"
-        assert status["A_enabled"] is False
-        assert status["B_enabled"] is False
-        assert status["A_T_target"] == 30.0
+        assert status["LNA_enabled"] is False
+        assert status["LOAD_enabled"] is False
+        assert status["LNA_T_target"] == 30.0
 
     def test_enable_and_converge(self):
-        """Enable channel A, verify convergence to within hysteresis of target."""
+        """Enable LNA channel, verify convergence to within hysteresis of target."""
         emu = TempCtrlEmulator()
-        emu.A.T_now = 25.0
-        emu.server({"A_temp_target": 30.0, "A_enable": True, "A_hysteresis": 0.5})
+        emu.lna.T_now = 25.0
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
         for _ in range(500):
             emu.op()
-        assert abs(emu.A.T_now - 30.0) < 0.5
+        assert abs(emu.lna.T_now - 30.0) < 0.5
 
     def test_converge_to_non_default_target(self):
         """Converge to a target different from the 30.0 default."""
         emu = TempCtrlEmulator()
-        emu.A.T_now = 25.0
-        emu.server({"A_temp_target": 40.0, "A_enable": True, "A_hysteresis": 0.5})
+        emu.lna.T_now = 25.0
+        emu.server({"LNA_temp_target": 40.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
         for _ in range(1000):
             emu.op()
-        assert abs(emu.A.T_now - 40.0) < 0.5
+        assert abs(emu.lna.T_now - 40.0) < 0.5
 
     def test_cool_back_down(self):
         """Heat to target, then set a lower target and verify cooling."""
         emu = TempCtrlEmulator()
-        emu.A.T_now = 25.0
-        emu.server({"A_temp_target": 35.0, "A_enable": True, "A_hysteresis": 0.5})
+        emu.lna.T_now = 25.0
+        emu.server({"LNA_temp_target": 35.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
         for _ in range(1000):
             emu.op()
-        assert abs(emu.A.T_now - 35.0) < 0.5
+        assert abs(emu.lna.T_now - 35.0) < 0.5
         # Now cool back to 25
-        emu.server({"A_temp_target": 25.0})
+        emu.server({"LNA_temp_target": 25.0})
         for _ in range(1000):
             emu.op()
-        assert abs(emu.A.T_now - 25.0) < 0.5
+        assert abs(emu.lna.T_now - 25.0) < 0.5
 
-    def test_channel_b(self):
-        """Channel B works independently of channel A."""
+    def test_channel_load(self):
+        """LOAD channel works independently of LNA channel."""
         emu = TempCtrlEmulator()
-        emu.B.T_now = 20.0
-        emu.server({"B_temp_target": 28.0, "B_enable": True, "B_hysteresis": 0.5})
+        emu.load.T_now = 20.0
+        emu.server({"LOAD_temp_target": 28.0, "LOAD_enable": True, "LOAD_hysteresis": 0.5})
         for _ in range(1000):
             emu.op()
-        assert abs(emu.B.T_now - 28.0) < 0.5
-        # Channel A should not have moved (not enabled)
-        assert emu.A.drive == 0.0
+        assert abs(emu.load.T_now - 28.0) < 0.5
+        # LNA channel should not have moved (not enabled)
+        assert emu.lna.drive == 0.0
 
     def test_status_fields(self):
         emu = TempCtrlEmulator()
@@ -168,12 +168,12 @@ class TestTempCtrlEmulator:
         expected_keys = {
             "sensor_name", "app_id",
             "watchdog_tripped", "watchdog_timeout_ms",
-            "A_status", "A_T_now", "A_timestamp", "A_T_target",
-            "A_drive_level", "A_enabled", "A_active", "A_int_disabled",
-            "A_hysteresis", "A_clamp",
-            "B_status", "B_T_now", "B_timestamp", "B_T_target",
-            "B_drive_level", "B_enabled", "B_active", "B_int_disabled",
-            "B_hysteresis", "B_clamp",
+            "LNA_status", "LNA_T_now", "LNA_timestamp", "LNA_T_target",
+            "LNA_drive_level", "LNA_enabled", "LNA_active", "LNA_int_disabled",
+            "LNA_hysteresis", "LNA_clamp",
+            "LOAD_status", "LOAD_T_now", "LOAD_timestamp", "LOAD_T_target",
+            "LOAD_drive_level", "LOAD_enabled", "LOAD_active", "LOAD_int_disabled",
+            "LOAD_hysteresis", "LOAD_clamp",
         }
         assert set(status.keys()) == expected_keys
 
@@ -183,15 +183,15 @@ class TestTempCtrlWatchdog:
     def test_watchdog_trips_after_timeout(self):
         """Watchdog disables peltiers when no command arrives within timeout."""
         emu = TempCtrlEmulator()
-        emu.server({"A_enable": True, "B_enable": True})
-        assert emu.A.enabled is True
-        assert emu.B.enabled is True
+        emu.server({"LNA_enable": True, "LOAD_enable": True})
+        assert emu.lna.enabled is True
+        assert emu.load.enabled is True
         # Simulate time passing beyond the watchdog timeout
         emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
         emu.op()
         assert emu.watchdog_tripped is True
-        assert emu.A.enabled is False
-        assert emu.B.enabled is False
+        assert emu.lna.enabled is False
+        assert emu.load.enabled is False
 
     def test_server_resets_watchdog(self):
         """Any command resets the watchdog timer and clears the trip flag."""
@@ -201,16 +201,16 @@ class TestTempCtrlWatchdog:
         emu.op()
         assert emu.watchdog_tripped is True
         # Any command clears the trip
-        emu.server({"A_enable": True})
+        emu.server({"LNA_enable": True})
         assert emu.watchdog_tripped is False
 
     def test_watchdog_does_not_trip_before_timeout(self):
         """Watchdog stays clear while commands arrive within timeout."""
         emu = TempCtrlEmulator()
-        emu.server({"A_enable": True})
+        emu.server({"LNA_enable": True})
         emu.op()
         assert emu.watchdog_tripped is False
-        assert emu.A.enabled is True
+        assert emu.lna.enabled is True
 
     def test_watchdog_timeout_configurable(self):
         """Watchdog timeout can be changed via server command."""
@@ -221,11 +221,11 @@ class TestTempCtrlWatchdog:
     def test_watchdog_disabled_with_zero_timeout(self):
         """Setting watchdog_timeout_ms to 0 disables the watchdog."""
         emu = TempCtrlEmulator()
-        emu.server({"A_enable": True, "watchdog_timeout_ms": 0})
+        emu.server({"LNA_enable": True, "watchdog_timeout_ms": 0})
         emu._last_cmd_time = time.time() - 999
         emu.op()
         assert emu.watchdog_tripped is False
-        assert emu.A.enabled is True
+        assert emu.lna.enabled is True
 
 
 class TestTempMonEmulator:
@@ -241,16 +241,16 @@ class TestTempMonEmulator:
         for _ in range(1000):
             emu.op()
         # Mean-reverting noise stays tightly around base temperature
-        assert abs(emu.temp_a - 25.0) < 1.0
-        assert abs(emu.temp_b - 25.0) < 1.0
+        assert abs(emu.temp_lna - 25.0) < 1.0
+        assert abs(emu.temp_load - 25.0) < 1.0
 
     def test_status_fields(self):
         emu = TempMonEmulator()
         status = emu.get_status()
         expected_keys = {
             "sensor_name", "app_id",
-            "A_status", "A_temp", "A_timestamp",
-            "B_status", "B_temp", "B_timestamp",
+            "LNA_status", "LNA_temp", "LNA_timestamp",
+            "LOAD_status", "LOAD_temp", "LOAD_timestamp",
         }
         assert set(status.keys()) == expected_keys
 
@@ -392,7 +392,7 @@ class TestTempCtrlStatusTypes:
         emu = TempCtrlEmulator()
         emu.op()  # populate timestamps
         status = emu.get_status()
-        for prefix in ("A", "B"):
+        for prefix in ("LNA", "LOAD"):
             assert isinstance(status[f"{prefix}_status"], str)
             assert isinstance(status[f"{prefix}_T_now"], float)
             assert isinstance(status[f"{prefix}_timestamp"], float)
@@ -411,7 +411,7 @@ class TestTempMonStatusTypes:
         emu = TempMonEmulator()
         emu.op()
         status = emu.get_status()
-        for prefix in ("A", "B"):
+        for prefix in ("LNA", "LOAD"):
             assert isinstance(status[f"{prefix}_status"], str)
             assert isinstance(status[f"{prefix}_temp"], float)
             assert isinstance(status[f"{prefix}_timestamp"], float)
@@ -499,13 +499,13 @@ class TestMalformedInput:
 
     def test_tempctrl_invalid_type(self):
         emu = TempCtrlEmulator()
-        emu.server({"A_temp_target": "hot"})
-        assert emu.A.T_target == 30.0  # unchanged (default)
+        emu.server({"LNA_temp_target": "hot"})
+        assert emu.lna.T_target == 30.0  # unchanged (default)
 
     def test_tempctrl_null_value(self):
         emu = TempCtrlEmulator()
-        emu.server({"A_clamp": None})
-        assert emu.A.clamp == 0.6  # unchanged
+        emu.server({"LNA_clamp": None})
+        assert emu.lna.clamp == 0.6  # unchanged
 
 
 # ---------------------------------------------------------------------------
@@ -516,34 +516,34 @@ class TestTempCtrlErrorState:
 
     def test_sensor_error_clear(self):
         emu = TempCtrlEmulator()
-        emu.inject_sensor_error("B")
-        assert emu.get_status()["B_status"] == "error"
-        emu.inject_sensor_error("B", error=False)
-        assert emu.get_status()["B_status"] == "update"
+        emu.inject_sensor_error("LOAD")
+        assert emu.get_status()["LOAD_status"] == "error"
+        emu.inject_sensor_error("LOAD", error=False)
+        assert emu.get_status()["LOAD_status"] == "update"
 
     def test_independent_channel_errors(self):
         emu = TempCtrlEmulator()
-        emu.inject_sensor_error("A")
-        emu.inject_sensor_error("B")
+        emu.inject_sensor_error("LNA")
+        emu.inject_sensor_error("LOAD")
         status = emu.get_status()
-        assert status["A_status"] == "error"
-        assert status["B_status"] == "error"
+        assert status["LNA_status"] == "error"
+        assert status["LOAD_status"] == "error"
 
 
 class TestTempMonErrorState:
 
-    def test_sensor_error_channel_b(self):
+    def test_sensor_error_channel_load(self):
         emu = TempMonEmulator()
-        emu.inject_sensor_error("B")
+        emu.inject_sensor_error("LOAD")
         status = emu.get_status()
-        assert status["A_status"] == "update"
-        assert status["B_status"] == "error"
+        assert status["LNA_status"] == "update"
+        assert status["LOAD_status"] == "error"
 
     def test_sensor_error_clear(self):
         emu = TempMonEmulator()
-        emu.inject_sensor_error("A")
-        emu.inject_sensor_error("A", error=False)
-        assert emu.get_status()["A_status"] == "update"
+        emu.inject_sensor_error("LNA")
+        emu.inject_sensor_error("LNA", error=False)
+        assert emu.get_status()["LNA_status"] == "update"
 
 
 class TestImuErrorState:
@@ -563,27 +563,27 @@ class TestTempCtrlEdgeCases:
 
     def test_both_channels_converge_independently(self):
         emu = TempCtrlEmulator()
-        emu.A.T_now = 20.0
-        emu.B.T_now = 40.0
+        emu.lna.T_now = 20.0
+        emu.load.T_now = 40.0
         emu.server({
-            "A_temp_target": 30.0, "A_enable": True,
-            "B_temp_target": 30.0, "B_enable": True,
+            "LNA_temp_target": 30.0, "LNA_enable": True,
+            "LOAD_temp_target": 30.0, "LOAD_enable": True,
         })
         for _ in range(1000):
             emu.op()
-        assert abs(emu.A.T_now - 30.0) < 0.5
-        assert abs(emu.B.T_now - 30.0) < 0.5
+        assert abs(emu.lna.T_now - 30.0) < 0.5
+        assert abs(emu.load.T_now - 30.0) < 0.5
 
     def test_disable_mid_convergence(self):
         emu = TempCtrlEmulator()
-        emu.A.T_now = 20.0
-        emu.server({"A_temp_target": 40.0, "A_enable": True})
+        emu.lna.T_now = 20.0
+        emu.server({"LNA_temp_target": 40.0, "LNA_enable": True})
         for _ in range(100):
             emu.op()
-        assert emu.A.drive != 0.0
-        emu.server({"A_enable": False})
+        assert emu.lna.drive != 0.0
+        emu.server({"LNA_enable": False})
         emu.op()
-        assert emu.A.drive == 0.0
+        assert emu.lna.drive == 0.0
 
 
 ALL_EMULATORS = [

@@ -118,16 +118,51 @@ The script will:
 - Read device info after flashing
 - Update `devices_info.json` with configurations
 
-## 4. Configure DIP Switches
+## Hardware Reference
 
-Set GPIO pins 20, 21, 22 to select the application:
-- **000** (0): Motor control
-- **001** (1): Temperature controller
-- **010** (2): Temperature monitor
-- **011** (3): IMU sensor
-- **100** (4): Lidar sensor
-- **101** (5): RF switch
-- **110-111** (6-7): Reserved
+### App Dispatch (DIP Switches)
+
+GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
+
+| DIP Code | Binary | App ID | Application | Description |
+|----------|--------|--------|-------------|-------------|
+| 0 | 000 | `APP_MOTOR` | Motor control | Stepper motors for AZ/EL axes |
+| 1 | 001 | `APP_TEMPCTRL` | Temperature controller | Peltier control for LNA & LOAD |
+| 2 | 010 | `APP_POTMON` | Potentiometer monitor | AZ/EL position feedback |
+| 3 | 011 | `APP_IMU_EL` | IMU (elevation) | BNO08x on elevation axis |
+| 4 | 100 | `APP_LIDAR` | Lidar | Distance measurement |
+| 5 | 101 | `APP_RFSWITCH` | RF switch | Signal path switching |
+| 6 | 110 | `APP_IMU_AZ` | IMU (azimuth) | BNO08x on azimuth axis |
+| 7 | 111 | — | Reserved | — |
+
+### Temperature Controller Wiring (APP_TEMPCTRL)
+
+Two independent Peltier control channels, each with a DS18B20 temperature sensor and an H-bridge motor driver:
+
+| Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
+|---------|-----------------|----------|---------------|---------------|-----|
+| **LNA** | 27 | 8 | 10 | 12 | PIO0 |
+| **LOAD** | 26 | 9 | 11 | 13 | PIO1 |
+
+JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`).
+
+### Potentiometer Wiring (APP_POTMON)
+
+Two potentiometers for position feedback, read via the RP2350 ADC:
+
+| Channel | GPIO | ADC Channel | JSON Key |
+|---------|------|-------------|----------|
+| **EL** (elevation) | 26 | 0 | `pot_el_voltage` |
+| **AZ** (azimuth) | 27 | 1 | `pot_az_voltage` |
+
+### IMU Wiring (APP_IMU_EL / APP_IMU_AZ)
+
+Two BNO08x IMUs in UART RVC mode, one per axis. Each runs on a separate Pico with the appropriate DIP switch setting:
+
+| DIP Code | Sensor Name | Axis |
+|----------|-------------|------|
+| 3 | `imu_el` | Elevation |
+| 6 | `imu_az` | Azimuth |
 
 ## 5. Install Python Host Library (Optional)
 
