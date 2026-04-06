@@ -9,9 +9,7 @@ See CLAUDE.md § Command Protocol for the general framing.
 """
 
 import json
-import time
 
-import pytest
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
@@ -20,7 +18,6 @@ from picohost.emulators import (
     LidarEmulator,
     RFSwitchEmulator,
 )
-from picohost.emulators.base import PicoEmulator
 
 # ---------------------------------------------------------------------------
 # Base protocol tests (apply to all apps)
@@ -140,7 +137,6 @@ class TestMotorProtocol:
         emu.server({"az_set_target_pos": 1000})
         for _ in range(3):
             emu.op()
-        pos = emu.azimuth.position
         # halt with value 0, False, None — all should still halt
         for val in (0, False, None, ""):
             emu.server({"az_set_target_pos": 1000})

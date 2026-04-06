@@ -1,5 +1,4 @@
 import time
-import sys
 import json
 from serial import Serial
 import threading
@@ -65,11 +64,11 @@ def main():
             for val in (-1000,):
                 for cnt in range(22):
                     print(f"Sending {val} pulses")
-                    payload[f"el_add_pulses"] = val
+                    payload["el_add_pulses"] = val
                     ms.command(payload)
-                    while ms.status.get(f'el_remaining_steps', 0) == 0:
+                    while ms.status.get('el_remaining_steps', 0) == 0:
                         time.sleep(0.1)
-                    while ms.status.get(f'el_remaining_steps', 0) != 0:
+                    while ms.status.get('el_remaining_steps', 0) != 0:
                         time.sleep(0.1)
               #for cnt in (500,):
               #  print(f"Sending {val} pulses")

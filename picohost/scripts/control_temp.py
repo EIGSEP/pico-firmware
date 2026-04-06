@@ -1,10 +1,6 @@
 from argparse import ArgumentParser
-import json
-import sys
-from threading import Thread
 import time
-import queue
-from picohost import PicoDevice, PicoPeltier
+from picohost import PicoPeltier
 
 parser = ArgumentParser(description="Record temperature from Pico device")
 parser.add_argument(

@@ -7,7 +7,6 @@ lifecycle, command dispatch, status propagation, and MockSerial integration.
 """
 
 import json
-import time
 import pytest
 import mockserial
 

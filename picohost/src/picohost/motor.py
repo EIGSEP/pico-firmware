@@ -4,12 +4,9 @@ Provides common functionality for serial communication with Pico devices.
 """
 
 import json
-import logging
 import time
-import queue
 import numpy as np
-from typing import Dict, Any, Optional, Callable
-from .base import PicoDevice, logger, redis_handler
+from .base import PicoDevice
 
 
 class PicoMotor(PicoDevice):
@@ -68,7 +65,7 @@ class PicoMotor(PicoDevice):
         # check commands
         cmd = {}
         for k, v in kwargs.items():
-            if not k in self.commands:
+            if k not in self.commands:
                 raise ValueError(f"command {k} not in {self.commands}")
             cmd[k] = self.commands[k](v)
         self.send_command(cmd)

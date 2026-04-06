@@ -7,7 +7,6 @@ import json
 import logging
 import threading
 import time
-import numpy as np
 from typing import Dict, Any, Optional, Callable
 from serial import Serial
 from serial.tools import list_ports

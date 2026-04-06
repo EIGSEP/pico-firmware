@@ -4,8 +4,6 @@ Allows manual control of azimuth and elevation motors with degree inputs
 and an infinite scanning mode.
 """
 
-import time
-import queue
 import json
 import numpy as np
 from eigsep_observing import EigsepRedis
@@ -13,7 +11,6 @@ from eigsep_observing import EigsepRedis
 from picohost import PicoMotor
 
 def main():
-    import sys
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -90,7 +87,7 @@ def main():
             el_first=args.el_first,
             repeat_count=args.count,
             pause_s=args.pause_s,
-            sleep_between=sleep_s,
+            sleep_between=args.sleep_s,
         )
     except(KeyboardInterrupt):
         c.stop()
