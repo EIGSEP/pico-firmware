@@ -495,28 +495,28 @@ class PicoPeltier(PicoDevice):
         """
         return self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
 
-    def set_temperature(self, T_A=None, A_hyst=0.5, T_B=None, B_hyst=0.5):
+    def set_temperature(self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5):
         """Set target temperature."""
         cmd = {}
-        if T_A is not None:
-            cmd['A_temp_target'] = T_A
-            cmd['A_hysteresis'] = A_hyst
-        if T_B is not None:
-            cmd['B_temp_target'] = T_B
-            cmd['B_hysteresis'] = B_hyst
+        if T_LNA is not None:
+            cmd['LNA_temp_target'] = T_LNA
+            cmd['LNA_hysteresis'] = LNA_hyst
+        if T_LOAD is not None:
+            cmd['LOAD_temp_target'] = T_LOAD
+            cmd['LOAD_hysteresis'] = LOAD_hyst
         return self.send_command(cmd)
 
-    def set_enable(self, A=True, B=True):
+    def set_enable(self, LNA=True, LOAD=True):
         """Enable temperature control."""
-        return self.send_command({'A_enable': A, 'B_enable': B})
-        
-    def set_clamp(self, A=None, B=None):
+        return self.send_command({'LNA_enable': LNA, 'LOAD_enable': LOAD})
+
+    def set_clamp(self, LNA=None, LOAD=None):
         """Set maximum drive level [0.0, 1.0], 0.6 default."""
         cmd = {}
-        if A is not None:
-            cmd["A_clamp"] = A
-        if B is not None:
-            cmd["B_clamp"] = B
+        if LNA is not None:
+            cmd["LNA_clamp"] = LNA
+        if LOAD is not None:
+            cmd["LOAD_clamp"] = LOAD
         return self.send_command(cmd)
 
 

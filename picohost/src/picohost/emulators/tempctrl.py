@@ -42,16 +42,16 @@ class TempCtrlEmulator(PicoEmulator):
     """Emulates src/tempctrl.c firmware."""
 
     def __init__(self, app_id=1, **kwargs):
-        self.A = TempControlState()
-        self.B = TempControlState()
+        self.lna = TempControlState()
+        self.load = TempControlState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.A = TempControlState()
-        self.B = TempControlState()
+        self.lna = TempControlState()
+        self.load = TempControlState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
@@ -62,7 +62,7 @@ class TempCtrlEmulator(PicoEmulator):
         self._last_cmd_time = time.time()
         self.watchdog_tripped = False
 
-        for prefix, tc in [("A", self.A), ("B", self.B)]:
+        for prefix, tc in [("LNA", self.lna), ("LOAD", self.load)]:
             key = f"{prefix}_temp_target"
             if key in cmd:
                 tc.T_target = _safe_float(cmd[key], tc.T_target)
@@ -85,13 +85,13 @@ class TempCtrlEmulator(PicoEmulator):
             )
 
     def inject_sensor_error(self, channel, error=True):
-        """Simulate a OneWire sensor failure on channel "A" or "B".
+        """Simulate a OneWire sensor failure on channel "LNA" or "LOAD".
 
         In the real firmware ``temp_sensor_has_error()`` returns true when the
         DS18B20 read fails, which sets ``internally_disabled`` and causes the
         status field to report ``"error"`` instead of ``"update"``.
         """
-        tc = self.A if channel == "A" else self.B
+        tc = self.lna if channel == "LNA" else self.load
         tc.internally_disabled = error
 
     def _update_channel(self, tc):
@@ -107,39 +107,39 @@ class TempCtrlEmulator(PicoEmulator):
         if self.watchdog_timeout_ms > 0 and not self.watchdog_tripped:
             elapsed_ms = (time.time() - self._last_cmd_time) * 1000
             if elapsed_ms > self.watchdog_timeout_ms:
-                self.A.enabled = False
-                self.B.enabled = False
+                self.lna.enabled = False
+                self.load.enabled = False
                 self.watchdog_tripped = True
 
-        self._update_channel(self.A)
-        self._update_channel(self.B)
+        self._update_channel(self.lna)
+        self._update_channel(self.load)
 
     def get_status(self):
-        a_status = "error" if self.A.internally_disabled else "update"
-        b_status = "error" if self.B.internally_disabled else "update"
+        lna_status = "error" if self.lna.internally_disabled else "update"
+        load_status = "error" if self.load.internally_disabled else "update"
         return {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
             "watchdog_tripped": self.watchdog_tripped,
             "watchdog_timeout_ms": self.watchdog_timeout_ms,
-            "A_status": a_status,
-            "A_T_now": self.A.T_now,
-            "A_timestamp": self.A.timestamp,
-            "A_T_target": self.A.T_target,
-            "A_drive_level": self.A.drive,
-            "A_enabled": self.A.enabled,
-            "A_active": self.A.active,
-            "A_int_disabled": self.A.internally_disabled,
-            "A_hysteresis": self.A.hysteresis,
-            "A_clamp": self.A.clamp,
-            "B_status": b_status,
-            "B_T_now": self.B.T_now,
-            "B_timestamp": self.B.timestamp,
-            "B_T_target": self.B.T_target,
-            "B_drive_level": self.B.drive,
-            "B_enabled": self.B.enabled,
-            "B_active": self.B.active,
-            "B_int_disabled": self.B.internally_disabled,
-            "B_hysteresis": self.B.hysteresis,
-            "B_clamp": self.B.clamp,
+            "LNA_status": lna_status,
+            "LNA_T_now": self.lna.T_now,
+            "LNA_timestamp": self.lna.timestamp,
+            "LNA_T_target": self.lna.T_target,
+            "LNA_drive_level": self.lna.drive,
+            "LNA_enabled": self.lna.enabled,
+            "LNA_active": self.lna.active,
+            "LNA_int_disabled": self.lna.internally_disabled,
+            "LNA_hysteresis": self.lna.hysteresis,
+            "LNA_clamp": self.lna.clamp,
+            "LOAD_status": load_status,
+            "LOAD_T_now": self.load.T_now,
+            "LOAD_timestamp": self.load.timestamp,
+            "LOAD_T_target": self.load.T_target,
+            "LOAD_drive_level": self.load.drive,
+            "LOAD_enabled": self.load.enabled,
+            "LOAD_active": self.load.active,
+            "LOAD_int_disabled": self.load.internally_disabled,
+            "LOAD_hysteresis": self.load.hysteresis,
+            "LOAD_clamp": self.load.clamp,
         }

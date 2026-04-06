@@ -10,8 +10,8 @@
 #include <math.h>
 
 // Static instances
-static TempControl tempctrlA;
-static TempControl tempctrlB;
+static TempControl tempctrl_lna;
+static TempControl tempctrl_load;
 
 // Communication watchdog state (app-level, not per-channel)
 static absolute_time_t last_cmd_time;
@@ -60,10 +60,10 @@ void tempctrl_init(uint8_t app_id) {
     pwm_config config = pwm_get_default_config();
     pwm_config_set_clkdiv(&config, 145.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1)), system_clock = 150 MHz default
     pwm_config_set_wrap(&config, PWM_WRAP);
-    init_single_tempctrl(&tempctrlA, PELTIER1_DIR_PIN1, PELTIER1_DIR_PIN2,
-            PELTIER1_PWM_PIN, &config, TEMP_SENSOR1_PIN, pio0);
-    init_single_tempctrl(&tempctrlB, PELTIER2_DIR_PIN3, PELTIER2_DIR_PIN4,
-            PELTIER2_PWM_PIN, &config, TEMP_SENSOR2_PIN, pio1);
+    init_single_tempctrl(&tempctrl_lna, PELTIER_LNA_DIR_PIN1, PELTIER_LNA_DIR_PIN2,
+            PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN, pio0);
+    init_single_tempctrl(&tempctrl_load, PELTIER_LOAD_DIR_PIN3, PELTIER_LOAD_DIR_PIN4,
+            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN, pio1);
     last_cmd_time = get_absolute_time();
 }
 
@@ -81,22 +81,22 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     watchdog_tripped = false;
 
     // Parse channel selection (default to both)
-    item_json = cJSON_GetObjectItem(root, "A_temp_target");
-    tempctrlA.T_target = item_json ? item_json->valuedouble : tempctrlA.T_target;
-    item_json = cJSON_GetObjectItem(root, "A_enable");
-    if (item_json) tempctrlA.enabled = item_json->valueint ? true : false;
-    item_json = cJSON_GetObjectItem(root, "A_hysteresis");
-    tempctrlA.hysteresis = item_json ? item_json->valuedouble : tempctrlA.hysteresis;
-    item_json = cJSON_GetObjectItem(root, "A_clamp");
-    if (item_json) tempctrlA.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
-    item_json = cJSON_GetObjectItem(root, "B_temp_target");
-    tempctrlB.T_target = item_json ? item_json->valuedouble : tempctrlB.T_target;
-    item_json = cJSON_GetObjectItem(root, "B_enable");
-    if (item_json) tempctrlB.enabled = item_json->valueint ? true : false;
-    item_json = cJSON_GetObjectItem(root, "B_hysteresis");
-    tempctrlB.hysteresis = item_json ? item_json->valuedouble : tempctrlB.hysteresis;
-    item_json = cJSON_GetObjectItem(root, "B_clamp");
-    if (item_json) tempctrlB.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
+    item_json = cJSON_GetObjectItem(root, "LNA_temp_target");
+    tempctrl_lna.T_target = item_json ? item_json->valuedouble : tempctrl_lna.T_target;
+    item_json = cJSON_GetObjectItem(root, "LNA_enable");
+    if (item_json) tempctrl_lna.enabled = item_json->valueint ? true : false;
+    item_json = cJSON_GetObjectItem(root, "LNA_hysteresis");
+    tempctrl_lna.hysteresis = item_json ? item_json->valuedouble : tempctrl_lna.hysteresis;
+    item_json = cJSON_GetObjectItem(root, "LNA_clamp");
+    if (item_json) tempctrl_lna.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
+    item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
+    tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
+    item_json = cJSON_GetObjectItem(root, "LOAD_enable");
+    if (item_json) tempctrl_load.enabled = item_json->valueint ? true : false;
+    item_json = cJSON_GetObjectItem(root, "LOAD_hysteresis");
+    tempctrl_load.hysteresis = item_json ? item_json->valuedouble : tempctrl_load.hysteresis;
+    item_json = cJSON_GetObjectItem(root, "LOAD_clamp");
+    if (item_json) tempctrl_load.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
 
     // Watchdog timeout configuration (0 = disabled)
     item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
@@ -109,37 +109,37 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const uint32_t timeA = temp_sensor_get_conversion_time(&tempctrlA.temp_sensor);
-    const uint32_t timeB = temp_sensor_get_conversion_time(&tempctrlB.temp_sensor);
-    
-    const char *statusA = temp_sensor_has_error(&tempctrlA.temp_sensor) ? "error" : "update";
-    const char *statusB = temp_sensor_has_error(&tempctrlB.temp_sensor) ? "error" : "update";
-    
+    const uint32_t time_lna = temp_sensor_get_conversion_time(&tempctrl_lna.temp_sensor);
+    const uint32_t time_load = temp_sensor_get_conversion_time(&tempctrl_load.temp_sensor);
+
+    const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
+    const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
+
     send_json(24,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
         KV_INT, "watchdog_timeout_ms", (int)watchdog_timeout_ms,
-        KV_STR, "A_status", statusA,
-        KV_FLOAT, "A_T_now", tempctrlA.T_now,
-        KV_FLOAT, "A_timestamp", (double)timeA,
-        KV_FLOAT, "A_T_target", tempctrlA.T_target,
-        KV_FLOAT, "A_drive_level", tempctrlA.drive,
-        KV_BOOL, "A_enabled", tempctrlA.enabled,
-        KV_BOOL, "A_active", tempctrlA.active,
-        KV_BOOL, "A_int_disabled", tempctrlA.internally_disabled,
-        KV_FLOAT, "A_hysteresis", tempctrlA.hysteresis,
-        KV_FLOAT, "A_clamp", tempctrlA.clamp,
-        KV_STR, "B_status", statusB,
-        KV_FLOAT, "B_T_now", tempctrlB.T_now,
-        KV_FLOAT, "B_timestamp", (double)timeB,
-        KV_FLOAT, "B_T_target", tempctrlB.T_target,
-        KV_FLOAT, "B_drive_level", tempctrlB.drive,
-        KV_BOOL, "B_enabled", tempctrlB.enabled,
-        KV_BOOL, "B_active", tempctrlB.active,
-        KV_BOOL, "B_int_disabled", tempctrlB.internally_disabled,
-        KV_FLOAT, "B_hysteresis", tempctrlB.hysteresis,
-        KV_FLOAT, "B_clamp", tempctrlB.clamp
+        KV_STR, "LNA_status", status_lna,
+        KV_FLOAT, "LNA_T_now", tempctrl_lna.T_now,
+        KV_FLOAT, "LNA_timestamp", (double)time_lna,
+        KV_FLOAT, "LNA_T_target", tempctrl_lna.T_target,
+        KV_FLOAT, "LNA_drive_level", tempctrl_lna.drive,
+        KV_BOOL, "LNA_enabled", tempctrl_lna.enabled,
+        KV_BOOL, "LNA_active", tempctrl_lna.active,
+        KV_BOOL, "LNA_int_disabled", tempctrl_lna.internally_disabled,
+        KV_FLOAT, "LNA_hysteresis", tempctrl_lna.hysteresis,
+        KV_FLOAT, "LNA_clamp", tempctrl_lna.clamp,
+        KV_STR, "LOAD_status", status_load,
+        KV_FLOAT, "LOAD_T_now", tempctrl_load.T_now,
+        KV_FLOAT, "LOAD_timestamp", (double)time_load,
+        KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
+        KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
+        KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
+        KV_BOOL, "LOAD_active", tempctrl_load.active,
+        KV_BOOL, "LOAD_int_disabled", tempctrl_load.internally_disabled,
+        KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
+        KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp
     );
 }
 
@@ -171,14 +171,14 @@ void tempctrl_op(uint8_t app_id) {
     if (watchdog_timeout_ms > 0 && !watchdog_tripped) {
         int64_t elapsed_us = absolute_time_diff_us(last_cmd_time, get_absolute_time());
         if (elapsed_us > (int64_t)watchdog_timeout_ms * 1000) {
-            tempctrlA.enabled = false;
-            tempctrlB.enabled = false;
+            tempctrl_lna.enabled = false;
+            tempctrl_load.enabled = false;
             watchdog_tripped = true;
         }
     }
 
-    tempctrl_update_sensor_drive(&tempctrlA);
-    tempctrl_update_sensor_drive(&tempctrlB);
+    tempctrl_update_sensor_drive(&tempctrl_lna);
+    tempctrl_update_sensor_drive(&tempctrl_load);
 }
 
 // Helper functions

@@ -172,73 +172,73 @@ class TestPicoRFSwitch:
 class TestPicoPeltier:
     """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
 
-    def test_set_temperature_channel_a(self):
-        """Setting channel A target updates emulator status."""
+    def test_set_temperature_channel_lna(self):
+        """Setting LNA channel target updates emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("A_T_target")
-        assert peltier.set_temperature(T_A=25.5, A_hyst=0.5) is True
+        before = peltier.status.get("LNA_T_target")
+        assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("A_T_target"),
+            lambda: peltier.status.get("LNA_T_target"),
             initial=before, cadence_ms=cadence, max_cycles=10,
         ) == pytest.approx(25.5)
-        assert peltier.status.get("A_hysteresis") == pytest.approx(0.5)
+        assert peltier.status.get("LNA_hysteresis") == pytest.approx(0.5)
         peltier.disconnect()
 
-    def test_set_temperature_channel_b(self):
-        """Setting channel B target updates emulator status."""
+    def test_set_temperature_channel_load(self):
+        """Setting LOAD channel target updates emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("B_hysteresis")
-        assert peltier.set_temperature(T_B=30.0, B_hyst=1.0) is True
+        before = peltier.status.get("LOAD_hysteresis")
+        assert peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("B_hysteresis"),
+            lambda: peltier.status.get("LOAD_hysteresis"),
             initial=before, cadence_ms=cadence, max_cycles=10,
         ) == pytest.approx(1.0)
-        assert peltier.status.get("B_T_target") == pytest.approx(30.0)
+        assert peltier.status.get("LOAD_T_target") == pytest.approx(30.0)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("A_T_target")
-        assert peltier.set_temperature(T_A=28.0, A_hyst=0.3, T_B=32.0, B_hyst=0.8) is True
+        before = peltier.status.get("LNA_T_target")
+        assert peltier.set_temperature(T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("A_T_target"),
+            lambda: peltier.status.get("LNA_T_target"),
             initial=before, cadence_ms=cadence, max_cycles=10,
         ) == pytest.approx(28.0)
-        assert peltier.status.get("B_T_target") == pytest.approx(32.0)
+        assert peltier.status.get("LOAD_T_target") == pytest.approx(32.0)
         peltier.disconnect()
 
     def test_enable_channels(self):
         """set_enable() updates the enabled flags in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(A=True, B=True) is True
+        assert peltier.set_enable(LNA=True, LOAD=True) is True
         wait_for_condition(
-            lambda: peltier.status.get("A_enabled") is True,
+            lambda: peltier.status.get("LNA_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.status.get("B_enabled") is True
+        assert peltier.status.get("LOAD_enabled") is True
         peltier.disconnect()
 
     def test_disable_channels(self):
         """Disabling channels is reflected in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(A=False, B=False) is True
+        assert peltier.set_enable(LNA=False, LOAD=False) is True
         wait_for_condition(
-            lambda: peltier.status.get("A_enabled") is False,
+            lambda: peltier.status.get("LNA_enabled") is False,
             cadence_ms=cadence,
         )
-        assert peltier.status.get("B_enabled") is False
+        assert peltier.status.get("LOAD_enabled") is False
         peltier.disconnect()
 
     def test_status_has_tempctrl_fields(self):
         """Peltier status should contain all tempctrl fields from the emulator."""
         peltier = DummyPicoPeltier("/dev/dummy")
         assert peltier.status.get("sensor_name") == "tempctrl"
-        for key in ("A_T_now", "B_T_now", "A_drive_level", "B_drive_level"):
+        for key in ("LNA_T_now", "LOAD_T_now", "LNA_drive_level", "LOAD_drive_level"):
             assert key in peltier.status, f"Missing key: {key}"
         peltier.disconnect()

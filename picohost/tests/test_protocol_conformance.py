@@ -186,65 +186,65 @@ class TestTempCtrlProtocol:
     def test_defaults_match_firmware(self):
         """init_single_tempctrl() sets these defaults."""
         emu = TempCtrlEmulator()
-        assert emu.A.T_target == 30.0
-        assert emu.A.gain == 0.2
-        assert emu.A.baseline == 0.4
-        assert emu.A.clamp == 0.6
-        assert emu.A.hysteresis == 0.5
-        assert emu.A.enabled is False
+        assert emu.lna.T_target == 30.0
+        assert emu.lna.gain == 0.2
+        assert emu.lna.baseline == 0.4
+        assert emu.lna.clamp == 0.6
+        assert emu.lna.hysteresis == 0.5
+        assert emu.lna.enabled is False
 
     def test_clamp_validation(self):
         """tempctrl.c line 77: fminf(1.0, fmaxf(0.0, val))."""
         emu = TempCtrlEmulator()
-        emu.server({"A_clamp": 2.0})
-        assert emu.A.clamp == 1.0
-        emu.server({"A_clamp": -1.0})
-        assert emu.A.clamp == 0.0
-        emu.server({"A_clamp": 0.5})
-        assert emu.A.clamp == 0.5
+        emu.server({"LNA_clamp": 2.0})
+        assert emu.lna.clamp == 1.0
+        emu.server({"LNA_clamp": -1.0})
+        assert emu.lna.clamp == 0.0
+        emu.server({"LNA_clamp": 0.5})
+        assert emu.lna.clamp == 0.5
 
     def test_enable_via_int(self):
         """tempctrl.c line 73: valueint ? true : false."""
         emu = TempCtrlEmulator()
-        emu.server({"A_enable": 1})
-        assert emu.A.enabled is True
-        emu.server({"A_enable": 0})
-        assert emu.A.enabled is False
+        emu.server({"LNA_enable": 1})
+        assert emu.lna.enabled is True
+        emu.server({"LNA_enable": 0})
+        assert emu.lna.enabled is False
 
     def test_hysteresis_band_drive_zero(self):
         """Within hysteresis band, drive = 0 and active = false."""
         emu = TempCtrlEmulator()
-        emu.A.T_now = 29.8
-        emu.server({"A_temp_target": 30.0, "A_enable": True, "A_hysteresis": 0.5})
+        emu.lna.T_now = 29.8
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
         emu.op()
-        assert emu.A.drive == 0.0
-        assert emu.A.active is False
+        assert emu.lna.drive == 0.0
+        assert emu.lna.active is False
 
     def test_drive_clamped_to_max(self):
         """Drive magnitude limited by clamp."""
         emu = TempCtrlEmulator()
-        emu.A.T_now = 0.0  # large delta from default target 30.0
-        emu.server({"A_enable": True, "A_clamp": 0.3})
+        emu.lna.T_now = 0.0  # large delta from default target 30.0
+        emu.server({"LNA_enable": True, "LNA_clamp": 0.3})
         emu.op()
-        assert abs(emu.A.drive) <= 0.3 + 1e-9
+        assert abs(emu.lna.drive) <= 0.3 + 1e-9
 
     def test_sensor_error_disables_drive(self):
         """tempctrl.c line 137-142: if internally_disabled, drive = 0."""
         emu = TempCtrlEmulator()
-        emu.server({"A_enable": True, "A_temp_target": 50.0})
+        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
         emu.op()
-        assert emu.A.drive != 0.0
-        emu.inject_sensor_error("A")
+        assert emu.lna.drive != 0.0
+        emu.inject_sensor_error("LNA")
         emu.op()
-        assert emu.A.drive == 0.0
+        assert emu.lna.drive == 0.0
 
     def test_sensor_error_status_field(self):
         """tempctrl.c line 93-94: error status on sensor failure."""
         emu = TempCtrlEmulator()
-        emu.inject_sensor_error("A")
+        emu.inject_sensor_error("LNA")
         status = emu.get_status()
-        assert status["A_status"] == "error"
-        assert status["B_status"] == "update"
+        assert status["LNA_status"] == "error"
+        assert status["LOAD_status"] == "update"
 
 
 # ---------------------------------------------------------------------------
@@ -261,16 +261,16 @@ class TestTempMonProtocol:
     def test_no_commands_accepted(self):
         """tempmon_server() is an empty function."""
         emu = TempMonEmulator()
-        emu.server({"A_temp_target": 99.0, "sw_state": 5})
+        emu.server({"LNA_temp_target": 99.0, "sw_state": 5})
         # no crash, no state change
-        assert emu._base_temp_a == 25.0
+        assert emu._base_temp_lna == 25.0
 
     def test_sensor_error_status(self):
         emu = TempMonEmulator()
-        emu.inject_sensor_error("A")
+        emu.inject_sensor_error("LNA")
         status = emu.get_status()
-        assert status["A_status"] == "error"
-        assert status["B_status"] == "update"
+        assert status["LNA_status"] == "error"
+        assert status["LOAD_status"] == "update"
 
 
 # ---------------------------------------------------------------------------

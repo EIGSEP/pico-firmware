@@ -11,54 +11,54 @@ class TempMonEmulator(PicoEmulator):
     """Emulates src/tempmon.c firmware."""
 
     def __init__(self, app_id=2, **kwargs):
-        self._base_temp_a = 25.0
-        self._base_temp_b = 25.0
-        self.temp_a = self._base_temp_a
-        self.temp_b = self._base_temp_b
-        self.timestamp_a = 0.0
-        self.timestamp_b = 0.0
-        self._sensor_error_a = False
-        self._sensor_error_b = False
+        self._base_temp_lna = 25.0
+        self._base_temp_load = 25.0
+        self.temp_lna = self._base_temp_lna
+        self.temp_load = self._base_temp_load
+        self.timestamp_lna = 0.0
+        self.timestamp_load = 0.0
+        self._sensor_error_lna = False
+        self._sensor_error_load = False
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.temp_a = self._base_temp_a
-        self.temp_b = self._base_temp_b
-        self.timestamp_a = 0.0
-        self.timestamp_b = 0.0
-        self._sensor_error_a = False
-        self._sensor_error_b = False
+        self.temp_lna = self._base_temp_lna
+        self.temp_load = self._base_temp_load
+        self.timestamp_lna = 0.0
+        self.timestamp_load = 0.0
+        self._sensor_error_lna = False
+        self._sensor_error_load = False
 
     def inject_sensor_error(self, channel, error=True):
-        """Simulate a OneWire sensor failure on channel "A" or "B".
+        """Simulate a OneWire sensor failure on channel "LNA" or "LOAD".
 
         In the real firmware ``temp_sensor_has_error()`` returns true when the
         DS18B20 read fails, causing the status field to report ``"error"``.
         """
-        if channel == "A":
-            self._sensor_error_a = error
+        if channel == "LNA":
+            self._sensor_error_lna = error
         else:
-            self._sensor_error_b = error
+            self._sensor_error_load = error
 
     def server(self, cmd):
         pass  # tempmon does not handle commands
 
     def op(self):
-        self.temp_a = self._base_temp_a + np.random.normal(0, NOISE_STDDEV)
-        self.temp_b = self._base_temp_b + np.random.normal(0, NOISE_STDDEV)
-        self.timestamp_a = time.time()
-        self.timestamp_b = time.time()
+        self.temp_lna = self._base_temp_lna + np.random.normal(0, NOISE_STDDEV)
+        self.temp_load = self._base_temp_load + np.random.normal(0, NOISE_STDDEV)
+        self.timestamp_lna = time.time()
+        self.timestamp_load = time.time()
 
     def get_status(self):
-        a_status = "error" if self._sensor_error_a else "update"
-        b_status = "error" if self._sensor_error_b else "update"
+        lna_status = "error" if self._sensor_error_lna else "update"
+        load_status = "error" if self._sensor_error_load else "update"
         return {
             "sensor_name": "temp_mon",
             "app_id": self.app_id,
-            "A_status": a_status,
-            "A_temp": self.temp_a,
-            "A_timestamp": self.timestamp_a,
-            "B_status": b_status,
-            "B_temp": self.temp_b,
-            "B_timestamp": self.timestamp_b,
+            "LNA_status": lna_status,
+            "LNA_temp": self.temp_lna,
+            "LNA_timestamp": self.timestamp_lna,
+            "LOAD_status": load_status,
+            "LOAD_temp": self.temp_load,
+            "LOAD_timestamp": self.timestamp_load,
         }
