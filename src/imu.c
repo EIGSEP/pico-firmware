@@ -99,10 +99,10 @@ static bool rvc_feed_byte(ImuState *st, uint8_t byte) {
 void imu_init(uint8_t app_id) {
     if (imu.is_initialized) return;
 
-    if (app_id == APP_IMU) {
-        strncpy(imu.name, "imu_panda", IMU_NAME_LEN - 1);
+    if (app_id == APP_IMU_EL) {
+        strncpy(imu.name, "imu_el", IMU_NAME_LEN - 1);
     } else {
-        strncpy(imu.name, "imu_antenna", IMU_NAME_LEN - 1);
+        strncpy(imu.name, "imu_az", IMU_NAME_LEN - 1);
     }
     imu.name[IMU_NAME_LEN - 1] = '\0';
     imu.rx_pos = 0;

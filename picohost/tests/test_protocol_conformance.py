@@ -279,17 +279,17 @@ class TestTempMonProtocol:
 
 
 class TestImuProtocol:
-    """Protocol conformance tests for APP_IMU (app_id=3)."""
+    """Protocol conformance tests for APP_IMU_EL / APP_IMU_AZ."""
 
-    def test_name_for_app_imu(self):
-        """imu.c: app_id==APP_IMU → "imu_panda"."""
+    def test_name_for_app_imu_el(self):
+        """imu.c: app_id==APP_IMU_EL → "imu_el"."""
         emu = ImuEmulator(app_id=3)
-        assert emu.get_status()["sensor_name"] == "imu_panda"
+        assert emu.get_status()["sensor_name"] == "imu_el"
 
-    def test_name_for_app_imu2(self):
-        """imu.cpp line 43: app_id==APP_IMU2 → "imu_antenna"."""
+    def test_name_for_app_imu_az(self):
+        """imu.c: app_id==APP_IMU_AZ → "imu_az"."""
         emu = ImuEmulator(app_id=6)
-        assert emu.get_status()["sensor_name"] == "imu_antenna"
+        assert emu.get_status()["sensor_name"] == "imu_az"
 
     def test_server_is_noop(self):
         """RVC mode: no commands supported."""

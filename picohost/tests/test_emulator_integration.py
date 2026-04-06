@@ -184,7 +184,7 @@ class TestIMUIntegration:
             lambda: len(imu.last_status) > 0, cadence_ms=cadence,
         )
         assert set(imu.last_status.keys()) == IMU_FIELDS
-        assert imu.last_status["sensor_name"] == "imu_panda"
+        assert imu.last_status["sensor_name"] == "imu_el"
 
     def test_status_types(self, imu):
         """Verify value types match the JSON protocol, not just field names."""

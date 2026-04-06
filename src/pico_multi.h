@@ -15,10 +15,10 @@
 #define APP_MOTOR       0
 #define APP_TEMPCTRL    1
 #define APP_POTMON      2
-#define APP_IMU         3
+#define APP_IMU_EL      3  // emulator: imu
 #define APP_LIDAR       4
 #define APP_RFSWITCH    5
-#define APP_IMU2        6
+#define APP_IMU_AZ      6  // emulator: imu
 
 // status reporting cadence
 #define STATUS_CADENCE_MS 200
