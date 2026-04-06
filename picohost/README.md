@@ -115,7 +115,7 @@ The base class provides core functionality:
 
 **Firmware-only applications (no Python class yet):**
 - **Temperature Monitor** (APP_TEMPMON = 2) - Temperature sensing only
-- **IMU Sensor** (APP_IMU = 3) - BNO08x sensor interface
+- **IMU Sensor** (APP_IMU_EL = 3, APP_IMU_AZ = 6) - BNO08x sensor interface
 - **Lidar Sensor** (APP_LIDAR = 4) - Lidar sensor interface
 
 ## Command Protocol
@@ -202,9 +202,10 @@ The firmware implements a multi-app dispatch system where DIP switches (GPIO 2,3
 - **APP_MOTOR (0)** - Stepper motor control
 - **APP_TEMPCTRL (1)** - Temperature control with Peltier elements
 - **APP_TEMPMON (2)** - Temperature monitoring only
-- **APP_IMU (3)** - IMU sensor interface
+- **APP_IMU_EL (3)** - IMU sensor (elevation / board)
 - **APP_LIDAR (4)** - Lidar sensor interface  
 - **APP_RFSWITCH (5)** - RF switch control
+- **APP_IMU_AZ (6)** - IMU sensor (azimuth / antenna)
 
 Each app implements:
 - `app_init()` - Initialize hardware
@@ -221,10 +222,10 @@ Set GPIO pins 2, 3, 4 to select the application before powering on:
 | 000 | 0 | APP_MOTOR | Motor control | PicoMotor |
 | 001 | 1 | APP_TEMPCTRL | Temperature controller | PicoPeltier |
 | 010 | 2 | APP_TEMPMON | Temperature monitor | *None* |
-| 011 | 3 | APP_IMU | IMU sensor | *None* |
+| 011 | 3 | APP_IMU_EL | IMU sensor (elevation) | *None* |
 | 100 | 4 | APP_LIDAR | Lidar sensor | *None* |
 | 101 | 5 | APP_RFSWITCH | RF switch | PicoRFSwitch |
-| 110 | 6 | Reserved | - | - |
+| 110 | 6 | APP_IMU_AZ | IMU sensor (azimuth) | *None* |
 | 111 | 7 | Reserved | - | - |
 
 ## Hardware Support
@@ -255,7 +256,7 @@ python -m picohost.flash_picos --list
 5. Submit a pull request
 
 **Priority areas for contribution:**
-- Python classes for APP_TEMPMON, APP_IMU, and APP_LIDAR
+- Python classes for APP_TEMPMON, APP_IMU_EL, APP_IMU_AZ, and APP_LIDAR
 - Additional test scripts
 - Enhanced device discovery and management
 

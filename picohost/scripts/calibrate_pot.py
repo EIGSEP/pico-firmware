@@ -29,8 +29,8 @@ def collect_samples(pot, n, interval=0.25):
     samples_0, samples_1 = [], []
     for _ in range(n):
         v = pot.read_voltage()
-        samples_0.append(v["pot0_voltage"])
-        samples_1.append(v["pot1_voltage"])
+        samples_0.append(v["pot_el_voltage"])
+        samples_1.append(v["pot_az_voltage"])
         time.sleep(interval)
     return np.mean(samples_0), np.mean(samples_1)
 
@@ -58,16 +58,16 @@ def collect_minmax(pot, n_samples, total_degrees):
         "then press Enter."
     )
     v_min_0, v_min_1 = collect_samples(pot, n_samples)
-    print(f"  pot0 min voltage: {v_min_0:.4f} V")
-    print(f"  pot1 min voltage: {v_min_1:.4f} V")
+    print(f"  pot_el min voltage: {v_min_0:.4f} V")
+    print(f"  pot_az min voltage: {v_min_1:.4f} V")
 
     input(
         "\nSet both potentiometers to MAXIMUM position, "
         "then press Enter."
     )
     v_max_0, v_max_1 = collect_samples(pot, n_samples)
-    print(f"  pot0 max voltage: {v_max_0:.4f} V")
-    print(f"  pot1 max voltage: {v_max_1:.4f} V")
+    print(f"  pot_el max voltage: {v_max_0:.4f} V")
+    print(f"  pot_az max voltage: {v_max_1:.4f} V")
 
     voltages_0 = [v_min_0, v_max_0]
     voltages_1 = [v_min_1, v_max_1]
@@ -82,7 +82,7 @@ def collect_per_turn(pot, n_samples, turns):
         "then press Enter."
     )
     v0, v1 = collect_samples(pot, n_samples)
-    print(f"  turn  0: pot0={v0:.4f} V, pot1={v1:.4f} V")
+    print(f"  turn  0: pot_el={v0:.4f} V, pot_az={v1:.4f} V")
     voltages_0 = [v0]
     voltages_1 = [v1]
     angles = [0.0]
@@ -91,7 +91,7 @@ def collect_per_turn(pot, n_samples, turns):
         input(f"\nAdvance both pots 1 full turn (to turn {turn}), "
               "then press Enter.")
         v0, v1 = collect_samples(pot, n_samples)
-        print(f"  turn {turn:2d}: pot0={v0:.4f} V, pot1={v1:.4f} V")
+        print(f"  turn {turn:2d}: pot_el={v0:.4f} V, pot_az={v1:.4f} V")
         voltages_0.append(v0)
         voltages_1.append(v1)
         angles.append(turn * 360.0)
@@ -151,8 +151,8 @@ def main():
         raise SystemExit(1)
 
     cal_data = {
-        "pot0": list(cal0),
-        "pot1": list(cal1),
+        "pot_el": list(cal0),
+        "pot_az": list(cal1),
         "metadata": {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "port": args.port,
@@ -160,8 +160,8 @@ def main():
             "total_degrees": total_degrees,
             "mode": args.mode,
             "n_points": len(angles),
-            "pot0_voltages": [float(v) for v in voltages_0],
-            "pot1_voltages": [float(v) for v in voltages_1],
+            "pot_el_voltages": [float(v) for v in voltages_0],
+            "pot_az_voltages": [float(v) for v in voltages_1],
             "angles": [float(a) for a in angles],
             "n_samples": args.n_samples,
         },
@@ -170,8 +170,8 @@ def main():
     with open(args.output, "w") as f:
         json.dump(cal_data, f, indent=2)
     print(f"\nCalibration saved to {args.output}")
-    print(f"  pot0: angle = {cal0[0]:.4f} * V + {cal0[1]:.4f}")
-    print(f"  pot1: angle = {cal1[0]:.4f} * V + {cal1[1]:.4f}")
+    print(f"  pot_el: angle = {cal0[0]:.4f} * V + {cal0[1]:.4f}")
+    print(f"  pot_az: angle = {cal1[0]:.4f} * V + {cal1[1]:.4f}")
     if args.mode == "turns":
         print(f"  ({len(angles)} points used for least-squares fit)")
 

@@ -57,8 +57,11 @@ jobs:
           # Extract app names from pico_multi.h APP_ defines
           apps=$(grep -oP '(?<=#define APP_)\w+' src/pico_multi.h | tr '[:upper:]' '[:lower:]')
           for app in $apps; do
-            if [ ! -f "picohost/src/picohost/emulators/${app}.py" ]; then
-              echo "::error::App '${app}' (from pico_multi.h) has no emulator at picohost/src/picohost/emulators/${app}.py"
+            # Allow shared emulators via "// emulator: <name>" annotation
+            alias=$(grep -iP "#define APP_${app}\b" src/pico_multi.h | grep -oP '//\s*emulator:\s*\K\w+' || true)
+            target=${alias:-$app}
+            if [ ! -f "picohost/src/picohost/emulators/${target}.py" ]; then
+              echo "::error::App '${app}' has no emulator at picohost/src/picohost/emulators/${target}.py"
               missing=1
             fi
           done

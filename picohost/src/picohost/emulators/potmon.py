@@ -10,26 +10,26 @@ class PotMonEmulator(PicoEmulator):
     """Emulates src/potmon.c firmware."""
 
     def __init__(self, app_id=2, **kwargs):
-        self._base_voltage_0 = 1.5  # midrange default
-        self._base_voltage_1 = 1.5
-        self.voltage_0 = self._base_voltage_0
-        self.voltage_1 = self._base_voltage_1
+        self._base_voltage_el = 1.5  # midrange default
+        self._base_voltage_az = 1.5
+        self.voltage_el = self._base_voltage_el
+        self.voltage_az = self._base_voltage_az
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.voltage_0 = self._base_voltage_0
-        self.voltage_1 = self._base_voltage_1
+        self.voltage_el = self._base_voltage_el
+        self.voltage_az = self._base_voltage_az
 
     def server(self, cmd):
         pass  # potmon does not handle commands
 
     def op(self):
-        self.voltage_0 = float(np.clip(
-            self._base_voltage_0 + np.random.normal(0, NOISE_STDDEV),
+        self.voltage_el = float(np.clip(
+            self._base_voltage_el + np.random.normal(0, NOISE_STDDEV),
             0.0, VREF,
         ))
-        self.voltage_1 = float(np.clip(
-            self._base_voltage_1 + np.random.normal(0, NOISE_STDDEV),
+        self.voltage_az = float(np.clip(
+            self._base_voltage_az + np.random.normal(0, NOISE_STDDEV),
             0.0, VREF,
         ))
 
@@ -38,6 +38,6 @@ class PotMonEmulator(PicoEmulator):
             "sensor_name": "potmon",
             "app_id": self.app_id,
             "status": "update",
-            "pot0_voltage": round(self.voltage_0, 4),
-            "pot1_voltage": round(self.voltage_1, 4),
+            "pot_el_voltage": round(self.voltage_el, 4),
+            "pot_az_voltage": round(self.voltage_az, 4),
         }

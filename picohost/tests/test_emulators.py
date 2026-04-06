@@ -259,13 +259,13 @@ class TestImuEmulator:
 
     def test_initial_state(self):
         emu = ImuEmulator(app_id=3)
-        assert emu.name == "imu_panda"
+        assert emu.name == "imu_el"
         status = emu.get_status()
-        assert status["sensor_name"] == "imu_panda"
+        assert status["sensor_name"] == "imu_el"
 
     def test_antenna_name(self):
         emu = ImuEmulator(app_id=6)
-        assert emu.name == "imu_antenna"
+        assert emu.name == "imu_az"
 
     def test_accel_magnitude(self):
         """Accelerometer should read ~9.81 m/s^2 magnitude (stationary)."""

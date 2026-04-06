@@ -60,9 +60,10 @@ if [ -f "pico_multi.uf2" ]; then
     echo "  000 - Motor app (APP_MOTOR)"
     echo "  001 - Temperature controller (APP_TEMPCTRL)"
     echo "  010 - Temperature monitor (APP_TEMPMON)" 
-    echo "  011 - IMU sensor (APP_IMU)"
+    echo "  011 - IMU sensor, elevation (APP_IMU_EL)"
     echo "  100 - Lidar sensor (APP_LIDAR)"
     echo "  101 - RF switch control (APP_RFSWITCH)"
+    echo "  110 - IMU sensor, azimuth (APP_IMU_AZ)"
     echo "==================================="
     
     # Show file size

@@ -138,7 +138,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
   - `src/motor.c` - Stepper motor control (APP_MOTOR = 0)
   - `src/tempctrl.c` - Temperature controller (APP_TEMPCTRL = 1)
   - `src/tempmon.c` - Temperature monitoring (APP_TEMPMON = 2)
-  - `src/imu.c` - IMU sensor interface (APP_IMU = 3)
+  - `src/imu.c` - IMU sensor interface (APP_IMU_EL = 3, APP_IMU_AZ = 6)
   - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
   - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)
 - **Shared Utilities**:
@@ -146,7 +146,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 - **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
   - **`send_json(count, ...)`**: The first argument is the number of KV entries — it must exactly match the actual entries or fields will be silently dropped. Always verify the count when adding or removing fields.
 - **Python Host Library**: `picohost/src/picohost/` - src-layout package with device-specific classes
-- **Firmware Emulators**: `picohost/src/picohost/emulators/` - one emulator per app, used for automated testing without hardware
+- **Firmware Emulators**: `picohost/src/picohost/emulators/` - one emulator per app (apps sharing firmware can share an emulator via `// emulator: <name>` annotation in `pico_multi.h`)
 - **Tests**: `picohost/tests/` - pytest suite covering emulators, protocol conformance, and integration
 
 ### Hardware Configuration
@@ -218,7 +218,7 @@ The project includes several libraries:
 - USB serial devices enumerate as PICO_000, PICO_001, etc. based on unique board ID
 - Automated tests use firmware emulators (no hardware needed); hardware testing uses scripts in `picohost/scripts/`
 - Apps use a command/response architecture with JSON protocol
-- Currently 6 apps are integrated (0-5), with slots 6-7 reserved for future use
+- Currently 7 apps are integrated (0-6), with slot 7 reserved for future use
 - All firmware apps are in `src/` directory and fully integrated
 - Status reporting occurs every 200ms (`STATUS_CADENCE_MS`)
 - LED blinks as a heartbeat indicator during operation
