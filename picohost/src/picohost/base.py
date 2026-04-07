@@ -33,6 +33,25 @@ def redis_handler(redis):
     handler : callable
         Function that takes a data dictionary and uploads it to Redis.
 
+    Notes
+    -----
+    **Scalar-only contract.** The data dict published to Redis must
+    contain only scalar values: ``str``, ``int``, ``float``, ``bool``,
+    or ``None``. Compound values — vectors, tuples, calibration
+    parameters, etc. — must be flattened into per-component scalar
+    fields with descriptive suffixes (e.g. ``quat_i/j/k/real`` for a
+    quaternion, ``accel_x/y/z`` for an acceleration vector,
+    ``pot_el_cal_slope`` / ``pot_el_cal_intercept`` for a linear
+    calibration). This invariant lets downstream consumers validate
+    every field with a per-key schema, lands the data cleanly in HDF5
+    attribute storage, and gives every field a meaningful per-type
+    reduction policy when readings are averaged within an integration.
+    Compound values cannot be validated per-field, do not have a
+    well-defined averaging semantic, and require special-case readers
+    downstream — so they are forbidden at the producer boundary.
+
+    Subclasses that wrap this handler (e.g. ``PicoPotentiometer``)
+    must preserve the scalar-only contract for any fields they add.
     """
     def handler(data):
         try:
@@ -561,16 +580,30 @@ class PicoPotentiometer(PicoDevice):
             self.redis_handler = self._pot_redis_handler
 
     def _pot_redis_handler(self, data):
-        """Add angle fields (or None if uncalibrated) before uploading to Redis."""
+        """Add per-component cal scalars and angle before uploading to Redis.
+
+        Augments the raw voltage payload with the calibration slope and
+        intercept (flattened into scalar fields per the
+        :func:`redis_handler` scalar-only contract) and the derived
+        angle. All added fields are ``None`` when the corresponding pot
+        is uncalibrated, so the published shape is stable regardless of
+        calibration state.
+        """
         data = data.copy()
         for key in ("pot_el", "pot_az"):
             cal = self._cal[key]
             v = data.get(f"{key}_voltage")
-            data[f"{key}_cal"] = list(cal) if cal is not None else None
-            if cal is not None and v is not None:
+            if cal is not None:
                 m, b = cal
-                data[f"{key}_angle"] = m * v + b
+                data[f"{key}_cal_slope"] = float(m)
+                data[f"{key}_cal_intercept"] = float(b)
+                if v is not None:
+                    data[f"{key}_angle"] = float(m * v + b)
+                else:
+                    data[f"{key}_angle"] = None
             else:
+                data[f"{key}_cal_slope"] = None
+                data[f"{key}_cal_intercept"] = None
                 data[f"{key}_angle"] = None
         self._base_redis_handler(data)
 
