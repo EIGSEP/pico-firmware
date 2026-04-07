@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/EIGSEP/pico-firmware/compare/v0.1.0...v1.0.0) (2026-04-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* consumers of the `potmon` Redis stream that read `pot_el_cal` / `pot_az_cal` (as a 2-element list) must switch to `pot_el_cal_slope` + `pot_el_cal_intercept` and the `pot_az_*` counterparts. The eigsep_observing `SENSOR_SCHEMAS` entry for `potmon` must be updated in lockstep when this lands.
+
+### Code Refactoring
+
+* flatten potentiometer cal field to scalar slope/intercept ([8866db6](https://github.com/EIGSEP/pico-firmware/commit/8866db6f4ca06bc405d222f2840297c3ce574fbc))
+
 ## [0.1.0](https://github.com/EIGSEP/pico-firmware/compare/v0.0.3...v0.1.0) (2026-04-06)
 
 
