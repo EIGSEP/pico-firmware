@@ -53,18 +53,12 @@ def compute_linear_fit(voltages, angles):
 
 def collect_minmax(pot, n_samples, total_degrees):
     """Collect at min and max only (2-point calibration)."""
-    input(
-        "\nSet both potentiometers to MINIMUM position, "
-        "then press Enter."
-    )
+    input("\nSet both potentiometers to MINIMUM position, then press Enter.")
     v_min_0, v_min_1 = collect_samples(pot, n_samples)
     print(f"  pot_el min voltage: {v_min_0:.4f} V")
     print(f"  pot_az min voltage: {v_min_1:.4f} V")
 
-    input(
-        "\nSet both potentiometers to MAXIMUM position, "
-        "then press Enter."
-    )
+    input("\nSet both potentiometers to MAXIMUM position, then press Enter.")
     v_max_0, v_max_1 = collect_samples(pot, n_samples)
     print(f"  pot_el max voltage: {v_max_0:.4f} V")
     print(f"  pot_az max voltage: {v_max_1:.4f} V")
@@ -88,8 +82,10 @@ def collect_per_turn(pot, n_samples, turns):
     angles = [0.0]
 
     for turn in range(1, turns + 1):
-        input(f"\nAdvance both pots 1 full turn (to turn {turn}), "
-              "then press Enter.")
+        input(
+            f"\nAdvance both pots 1 full turn (to turn {turn}), "
+            "then press Enter."
+        )
         v0, v1 = collect_samples(pot, n_samples)
         print(f"  turn {turn:2d}: pot_el={v0:.4f} V, pot_az={v1:.4f} V")
         voltages_0.append(v0)
@@ -104,43 +100,64 @@ def main():
         description="Calibrate potentiometer voltage-to-angle mapping."
     )
     parser.add_argument(
-        "-p", "--port", type=str, required=True,
+        "-p",
+        "--port",
+        type=str,
+        required=True,
         help="Serial port for the potentiometer Pico",
     )
     parser.add_argument(
-        "-o", "--output", type=str, default="pot_calibration.json",
+        "-o",
+        "--output",
+        type=str,
+        default="pot_calibration.json",
         help="Output calibration file (default: pot_calibration.json)",
     )
     parser.add_argument(
-        "-t", "--turns", type=int, default=10,
+        "-t",
+        "--turns",
+        type=int,
+        default=10,
         help="Number of full turns from min to max (default: 10)",
     )
     parser.add_argument(
-        "-n", "--n-samples", type=int, default=10,
+        "-n",
+        "--n-samples",
+        type=int,
+        default=10,
         help="Number of voltage samples to average at each position (default: 10)",
     )
     parser.add_argument(
-        "-m", "--mode", type=str, choices=["minmax", "turns"],
+        "-m",
+        "--mode",
+        type=str,
+        choices=["minmax", "turns"],
         default="minmax",
         help="Calibration mode: 'minmax' for 2-point, 'turns' for per-turn "
-             "least-squares (default: minmax)",
+        "least-squares (default: minmax)",
     )
     args = parser.parse_args()
 
     total_degrees = 360.0 * args.turns
 
     print(f"Connecting to {args.port}...")
-    print(f"Mode: {args.mode} ({args.turns} turns, {args.n_samples} "
-          f"samples/position)")
+    print(
+        f"Mode: {args.mode} ({args.turns} turns, {args.n_samples} "
+        f"samples/position)"
+    )
 
     with PicoPotentiometer(args.port) as pot:
         if args.mode == "minmax":
             voltages_0, voltages_1, angles = collect_minmax(
-                pot, args.n_samples, total_degrees,
+                pot,
+                args.n_samples,
+                total_degrees,
             )
         else:
             voltages_0, voltages_1, angles = collect_per_turn(
-                pot, args.n_samples, args.turns,
+                pot,
+                args.n_samples,
+                args.turns,
             )
 
     cal0 = compute_linear_fit(voltages_0, angles)

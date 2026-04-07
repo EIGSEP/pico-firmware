@@ -8,9 +8,10 @@ import json
 
 from picohost import PicoMotor
 
+
 def main(screen):
-    curses.noecho()           # optional: wrapper sets cbreak but not noecho
-    screen.nodelay(False)     # blocking getch
+    curses.noecho()  # optional: wrapper sets cbreak but not noecho
+    screen.nodelay(False)  # blocking getch
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -34,21 +35,31 @@ def main(screen):
                 break
     assert port is not None  # didn't find app_id 0 in pico_config.json
 
-
-
     c = PicoMotor(port, verbose=True)
-    c.set_delay(az_up_delay_us=2400, az_dn_delay_us=300, el_up_delay_us=2400, el_dn_delay_us=600)
+    c.set_delay(
+        az_up_delay_us=2400,
+        az_dn_delay_us=300,
+        el_up_delay_us=2400,
+        el_dn_delay_us=600,
+    )
 
-    def move_up(deg): c.el_move_deg(deg, wait_for_stop=True)
-    def move_dn(deg): c.el_move_deg(-deg, wait_for_stop=True)
-    def move_lf(deg): c.az_move_deg(deg, wait_for_stop=True)
-    def move_rt(deg): c.az_move_deg(-deg, wait_for_stop=True)
+    def move_up(deg):
+        c.el_move_deg(deg, wait_for_stop=True)
+
+    def move_dn(deg):
+        c.el_move_deg(-deg, wait_for_stop=True)
+
+    def move_lf(deg):
+        c.az_move_deg(deg, wait_for_stop=True)
+
+    def move_rt(deg):
+        c.az_move_deg(-deg, wait_for_stop=True)
 
     DISPATCH = {
-        'u': move_up,
-        'd': move_dn,
-        'l': move_lf,
-        'r': move_rt,
+        "u": move_up,
+        "d": move_dn,
+        "l": move_lf,
+        "r": move_rt,
     }
     try:
         deg = 1
@@ -60,10 +71,10 @@ def main(screen):
                 key = chr(ch).lower()
                 if key in DISPATCH:
                     DISPATCH[key](deg)
-        #c.el_move_deg(-10, wait_for_stop=True)
+        # c.el_move_deg(-10, wait_for_stop=True)
     #    c.az_target_deg(180, wait_for_stop=True)
     #    c.az_target_deg(-180, wait_for_stop=True)
-    except(KeyboardInterrupt):
+    except KeyboardInterrupt:
         c.stop()
     finally:
         c.stop()
@@ -71,4 +82,5 @@ def main(screen):
 
 if __name__ == "__main__":
     import curses
+
     curses.wrapper(main)

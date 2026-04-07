@@ -18,7 +18,6 @@ from picohost.emulators import (
 
 
 class TestMotorEmulator:
-
     def test_initial_state(self):
         emu = MotorEmulator()
         status = emu.get_status()
@@ -103,14 +102,18 @@ class TestMotorEmulator:
         emu = MotorEmulator()
         status = emu.get_status()
         expected_keys = {
-            "sensor_name", "status", "app_id",
-            "az_pos", "az_target_pos", "el_pos", "el_target_pos",
+            "sensor_name",
+            "status",
+            "app_id",
+            "az_pos",
+            "az_target_pos",
+            "el_pos",
+            "el_target_pos",
         }
         assert set(status.keys()) == expected_keys
 
 
 class TestTempCtrlEmulator:
-
     def test_initial_state(self):
         emu = TempCtrlEmulator()
         status = emu.get_status()
@@ -123,7 +126,13 @@ class TestTempCtrlEmulator:
         """Enable LNA channel, verify convergence to within hysteresis of target."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
-        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
+        )
         for _ in range(500):
             emu.op()
         assert abs(emu.lna.T_now - 30.0) < 0.5
@@ -132,7 +141,13 @@ class TestTempCtrlEmulator:
         """Converge to a target different from the 30.0 default."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
-        emu.server({"LNA_temp_target": 40.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
+        emu.server(
+            {
+                "LNA_temp_target": 40.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
+        )
         for _ in range(1000):
             emu.op()
         assert abs(emu.lna.T_now - 40.0) < 0.5
@@ -141,7 +156,13 @@ class TestTempCtrlEmulator:
         """Heat to target, then set a lower target and verify cooling."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
-        emu.server({"LNA_temp_target": 35.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
+        emu.server(
+            {
+                "LNA_temp_target": 35.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
+        )
         for _ in range(1000):
             emu.op()
         assert abs(emu.lna.T_now - 35.0) < 0.5
@@ -155,7 +176,13 @@ class TestTempCtrlEmulator:
         """LOAD channel works independently of LNA channel."""
         emu = TempCtrlEmulator()
         emu.load.T_now = 20.0
-        emu.server({"LOAD_temp_target": 28.0, "LOAD_enable": True, "LOAD_hysteresis": 0.5})
+        emu.server(
+            {
+                "LOAD_temp_target": 28.0,
+                "LOAD_enable": True,
+                "LOAD_hysteresis": 0.5,
+            }
+        )
         for _ in range(1000):
             emu.op()
         assert abs(emu.load.T_now - 28.0) < 0.5
@@ -166,20 +193,35 @@ class TestTempCtrlEmulator:
         emu = TempCtrlEmulator()
         status = emu.get_status()
         expected_keys = {
-            "sensor_name", "app_id",
-            "watchdog_tripped", "watchdog_timeout_ms",
-            "LNA_status", "LNA_T_now", "LNA_timestamp", "LNA_T_target",
-            "LNA_drive_level", "LNA_enabled", "LNA_active", "LNA_int_disabled",
-            "LNA_hysteresis", "LNA_clamp",
-            "LOAD_status", "LOAD_T_now", "LOAD_timestamp", "LOAD_T_target",
-            "LOAD_drive_level", "LOAD_enabled", "LOAD_active", "LOAD_int_disabled",
-            "LOAD_hysteresis", "LOAD_clamp",
+            "sensor_name",
+            "app_id",
+            "watchdog_tripped",
+            "watchdog_timeout_ms",
+            "LNA_status",
+            "LNA_T_now",
+            "LNA_timestamp",
+            "LNA_T_target",
+            "LNA_drive_level",
+            "LNA_enabled",
+            "LNA_active",
+            "LNA_int_disabled",
+            "LNA_hysteresis",
+            "LNA_clamp",
+            "LOAD_status",
+            "LOAD_T_now",
+            "LOAD_timestamp",
+            "LOAD_T_target",
+            "LOAD_drive_level",
+            "LOAD_enabled",
+            "LOAD_active",
+            "LOAD_int_disabled",
+            "LOAD_hysteresis",
+            "LOAD_clamp",
         }
         assert set(status.keys()) == expected_keys
 
 
 class TestTempCtrlWatchdog:
-
     def test_watchdog_trips_after_timeout(self):
         """Watchdog disables peltiers when no command arrives within timeout."""
         emu = TempCtrlEmulator()
@@ -229,7 +271,6 @@ class TestTempCtrlWatchdog:
 
 
 class TestTempMonEmulator:
-
     def test_initial_state(self):
         emu = TempMonEmulator()
         status = emu.get_status()
@@ -248,15 +289,19 @@ class TestTempMonEmulator:
         emu = TempMonEmulator()
         status = emu.get_status()
         expected_keys = {
-            "sensor_name", "app_id",
-            "LNA_status", "LNA_temp", "LNA_timestamp",
-            "LOAD_status", "LOAD_temp", "LOAD_timestamp",
+            "sensor_name",
+            "app_id",
+            "LNA_status",
+            "LNA_temp",
+            "LNA_timestamp",
+            "LOAD_status",
+            "LOAD_temp",
+            "LOAD_timestamp",
         }
         assert set(status.keys()) == expected_keys
 
 
 class TestImuEmulator:
-
     def test_initial_state(self):
         emu = ImuEmulator(app_id=3)
         assert emu.name == "imu_el"
@@ -323,15 +368,20 @@ class TestImuEmulator:
         emu = ImuEmulator()
         status = emu.get_status()
         expected_keys = {
-            "sensor_name", "status", "app_id",
-            "yaw", "pitch", "roll",
-            "accel_x", "accel_y", "accel_z",
+            "sensor_name",
+            "status",
+            "app_id",
+            "yaw",
+            "pitch",
+            "roll",
+            "accel_x",
+            "accel_y",
+            "accel_z",
         }
         assert set(status.keys()) == expected_keys
 
 
 class TestLidarEmulator:
-
     def test_initial_state(self):
         emu = LidarEmulator()
         status = emu.get_status()
@@ -353,7 +403,6 @@ class TestLidarEmulator:
 
 
 class TestRFSwitchEmulator:
-
     def test_initial_state(self):
         emu = RFSwitchEmulator()
         status = emu.get_status()
@@ -371,6 +420,7 @@ class TestRFSwitchEmulator:
 # Status field TYPE verification
 # ---------------------------------------------------------------------------
 
+
 class TestMotorStatusTypes:
     """Verify status field types match C firmware KV_* type tags."""
 
@@ -387,7 +437,6 @@ class TestMotorStatusTypes:
 
 
 class TestTempCtrlStatusTypes:
-
     def test_status_field_types(self):
         emu = TempCtrlEmulator()
         emu.op()  # populate timestamps
@@ -406,7 +455,6 @@ class TestTempCtrlStatusTypes:
 
 
 class TestTempMonStatusTypes:
-
     def test_status_field_types(self):
         emu = TempMonEmulator()
         emu.op()
@@ -418,7 +466,6 @@ class TestTempMonStatusTypes:
 
 
 class TestImuStatusTypes:
-
     def test_status_field_types(self):
         emu = ImuEmulator()
         emu.op()
@@ -426,13 +473,11 @@ class TestImuStatusTypes:
         assert isinstance(status["sensor_name"], str)
         assert isinstance(status["status"], str)
         assert isinstance(status["app_id"], int)
-        for key in ("yaw", "pitch", "roll",
-                     "accel_x", "accel_y", "accel_z"):
+        for key in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
             assert isinstance(status[key], float), f"{key} should be float"
 
 
 class TestLidarStatusTypes:
-
     def test_status_field_types(self):
         emu = LidarEmulator()
         emu.op()
@@ -444,7 +489,6 @@ class TestLidarStatusTypes:
 
 
 class TestRFSwitchStatusTypes:
-
     def test_status_field_types(self):
         emu = RFSwitchEmulator()
         status = emu.get_status()
@@ -457,6 +501,7 @@ class TestRFSwitchStatusTypes:
 # ---------------------------------------------------------------------------
 # Malformed input handling
 # ---------------------------------------------------------------------------
+
 
 class TestMalformedInput:
     """Verify emulators survive bad input without crashing.
@@ -512,8 +557,8 @@ class TestMalformedInput:
 # Error state injection
 # ---------------------------------------------------------------------------
 
-class TestTempCtrlErrorState:
 
+class TestTempCtrlErrorState:
     def test_sensor_error_clear(self):
         emu = TempCtrlEmulator()
         emu.inject_sensor_error("LOAD")
@@ -531,7 +576,6 @@ class TestTempCtrlErrorState:
 
 
 class TestTempMonErrorState:
-
     def test_sensor_error_channel_load(self):
         emu = TempMonEmulator()
         emu.inject_sensor_error("LOAD")
@@ -547,7 +591,6 @@ class TestTempMonErrorState:
 
 
 class TestImuErrorState:
-
     def test_init_failure_reports_error(self):
         """When not initialized, status reports error."""
         emu = ImuEmulator()
@@ -559,16 +602,20 @@ class TestImuErrorState:
 # Edge case behavioral tests
 # ---------------------------------------------------------------------------
 
-class TestTempCtrlEdgeCases:
 
+class TestTempCtrlEdgeCases:
     def test_both_channels_converge_independently(self):
         emu = TempCtrlEmulator()
         emu.lna.T_now = 20.0
         emu.load.T_now = 40.0
-        emu.server({
-            "LNA_temp_target": 30.0, "LNA_enable": True,
-            "LOAD_temp_target": 30.0, "LOAD_enable": True,
-        })
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LOAD_temp_target": 30.0,
+                "LOAD_enable": True,
+            }
+        )
         for _ in range(1000):
             emu.op()
         assert abs(emu.lna.T_now - 30.0) < 0.5
@@ -599,7 +646,9 @@ ALL_EMULATORS = [
 class TestSensorName:
     """Ensure every emulator status contains 'sensor_name' for redis_handler."""
 
-    @pytest.mark.parametrize("emu_cls", ALL_EMULATORS, ids=lambda c: c.__name__)
+    @pytest.mark.parametrize(
+        "emu_cls", ALL_EMULATORS, ids=lambda c: c.__name__
+    )
     def test_get_status_has_sensor_name(self, emu_cls):
         emu = emu_cls()
         result = emu.get_status()
@@ -608,5 +657,3 @@ class TestSensorName:
         statuses = result if isinstance(result, list) else [result]
         for status in statuses:
             assert "sensor_name" in status
-
-

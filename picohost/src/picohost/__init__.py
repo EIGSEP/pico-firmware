@@ -6,7 +6,13 @@ from importlib.metadata import version
 
 __version__ = version("picohost")
 
-from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoIMU, PicoPotentiometer
+from .base import (
+    PicoDevice,
+    PicoRFSwitch,
+    PicoPeltier,
+    PicoIMU,
+    PicoPotentiometer,
+)
 from .motor import PicoMotor
 from . import testing
 from . import emulators

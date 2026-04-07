@@ -8,7 +8,12 @@ DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 import json
 import pytest
 from conftest import wait_for_condition, wait_for_settle
-from picohost.testing import DummyPicoDevice, DummyPicoMotor, DummyPicoRFSwitch, DummyPicoPeltier
+from picohost.testing import (
+    DummyPicoDevice,
+    DummyPicoMotor,
+    DummyPicoRFSwitch,
+    DummyPicoPeltier,
+)
 
 
 class TestPicoDevice:
@@ -16,7 +21,7 @@ class TestPicoDevice:
 
     def test_find_pico_ports_exists(self):
         """find_pico_ports is a static method on PicoDevice."""
-        assert hasattr(DummyPicoDevice, 'find_pico_ports')
+        assert hasattr(DummyPicoDevice, "find_pico_ports")
         assert callable(DummyPicoDevice.find_pico_ports)
 
     def test_connect_success(self):
@@ -109,10 +114,15 @@ class TestPicoMotor:
         expected_steps = motor.deg_to_steps(az_deg)
         before = motor.status.get("az_target_pos")
         motor.az_target_deg(az_deg, wait_for_start=False, wait_for_stop=False)
-        assert wait_for_settle(
-            lambda: motor.status.get("az_target_pos"),
-            initial=before, cadence_ms=cadence, max_cycles=20,
-        ) == expected_steps
+        assert (
+            wait_for_settle(
+                lambda: motor.status.get("az_target_pos"),
+                initial=before,
+                cadence_ms=cadence,
+                max_cycles=20,
+            )
+            == expected_steps
+        )
         motor.disconnect()
 
     def test_status_has_motor_fields(self):
@@ -135,7 +145,8 @@ class TestPicoRFSwitch:
         assert switch.switch("VNAO") is True
         wait_for_condition(
             lambda: switch.last_status.get("sw_state") == expected_state,
-            cadence_ms=cadence, max_cycles=10,
+            cadence_ms=cadence,
+            max_cycles=10,
         )
         switch.disconnect()
 
@@ -163,9 +174,9 @@ class TestPicoRFSwitch:
         """paths property converts path_str to integer values correctly."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         paths = switch.paths
-        assert paths["VNAO"] == 1    # "10000000" LSB-first = 1
-        assert paths["RFANT"] == 0   # "00000000" = 0
-        assert paths["VNAS"] == 3    # "11000000" LSB-first = 3
+        assert paths["VNAO"] == 1  # "10000000" LSB-first = 1
+        assert paths["RFANT"] == 0  # "00000000" = 0
+        assert paths["VNAS"] == 3  # "11000000" LSB-first = 3
         switch.disconnect()
 
 
@@ -180,7 +191,9 @@ class TestPicoPeltier:
         assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
         assert wait_for_settle(
             lambda: peltier.status.get("LNA_T_target"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
         ) == pytest.approx(25.5)
         assert peltier.status.get("LNA_hysteresis") == pytest.approx(0.5)
         peltier.disconnect()
@@ -193,7 +206,9 @@ class TestPicoPeltier:
         assert peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0) is True
         assert wait_for_settle(
             lambda: peltier.status.get("LOAD_hysteresis"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
         ) == pytest.approx(1.0)
         assert peltier.status.get("LOAD_T_target") == pytest.approx(30.0)
         peltier.disconnect()
@@ -203,10 +218,17 @@ class TestPicoPeltier:
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.status.get("LNA_T_target")
-        assert peltier.set_temperature(T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8) is True
+        assert (
+            peltier.set_temperature(
+                T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8
+            )
+            is True
+        )
         assert wait_for_settle(
             lambda: peltier.status.get("LNA_T_target"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
         ) == pytest.approx(28.0)
         assert peltier.status.get("LOAD_T_target") == pytest.approx(32.0)
         peltier.disconnect()
@@ -239,6 +261,11 @@ class TestPicoPeltier:
         """Peltier status should contain all tempctrl fields from the emulator."""
         peltier = DummyPicoPeltier("/dev/dummy")
         assert peltier.status.get("sensor_name") == "tempctrl"
-        for key in ("LNA_T_now", "LOAD_T_now", "LNA_drive_level", "LOAD_drive_level"):
+        for key in (
+            "LNA_T_now",
+            "LOAD_T_now",
+            "LNA_drive_level",
+            "LOAD_drive_level",
+        ):
             assert key in peltier.status, f"Missing key: {key}"
         peltier.disconnect()

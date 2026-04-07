@@ -5,7 +5,6 @@ import threading
 
 
 class MotorSerial(Serial):
-
     def __init__(self, port, baud=115200, timeout=1.0):
         Serial.__init__(self, port, baud, timeout=timeout)
         self._running = True
@@ -43,8 +42,8 @@ def main():
     """
     Open the serial port, read until a valid JSON line appears or timeout.
     """
-#    ms = MotorSerial(sys.argv[-1])
-    ms = MotorSerial('/dev/ttyACM1')
+    #    ms = MotorSerial(sys.argv[-1])
+    ms = MotorSerial("/dev/ttyACM1")
     input("GO?")
     ms.start()
     payload = {
@@ -55,29 +54,29 @@ def main():
     }
     try:
         while True:
-            #for val in (1620, 0, -1620):
+            # for val in (1620, 0, -1620):
             #    print(f"Sending {val} pulses")
             #    payload["pulses_el"] = val
             #    ms.command(payload)
             #    time.sleep(3)
-            #for val in (-1000, 2000, -1000):
+            # for val in (-1000, 2000, -1000):
             for val in (-1000,):
                 for cnt in range(22):
                     print(f"Sending {val} pulses")
                     payload["el_add_pulses"] = val
                     ms.command(payload)
-                    while ms.status.get('el_remaining_steps', 0) == 0:
+                    while ms.status.get("el_remaining_steps", 0) == 0:
                         time.sleep(0.1)
-                    while ms.status.get('el_remaining_steps', 0) != 0:
+                    while ms.status.get("el_remaining_steps", 0) != 0:
                         time.sleep(0.1)
-              #for cnt in (500,):
-              #  print(f"Sending {val} pulses")
-              #  payload[f"pulses_{dir}"] = val
-              #  ms.command(payload)
-              #  while ms.status.get(f'{dir}_remaining_steps', 0) == 0:
-              #      time.sleep(0.1)
-              #  while ms.status.get(f'{dir}_remaining_steps', 0) != 0:
-              #      time.sleep(0.1)
+            # for cnt in (500,):
+            #  print(f"Sending {val} pulses")
+            #  payload[f"pulses_{dir}"] = val
+            #  ms.command(payload)
+            #  while ms.status.get(f'{dir}_remaining_steps', 0) == 0:
+            #      time.sleep(0.1)
+            #  while ms.status.get(f'{dir}_remaining_steps', 0) != 0:
+            #      time.sleep(0.1)
 
     finally:
         ms.stop()
@@ -85,4 +84,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

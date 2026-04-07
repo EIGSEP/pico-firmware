@@ -24,14 +24,20 @@ class PotMonEmulator(PicoEmulator):
         pass  # potmon does not handle commands
 
     def op(self):
-        self.voltage_el = float(np.clip(
-            self._base_voltage_el + np.random.normal(0, NOISE_STDDEV),
-            0.0, VREF,
-        ))
-        self.voltage_az = float(np.clip(
-            self._base_voltage_az + np.random.normal(0, NOISE_STDDEV),
-            0.0, VREF,
-        ))
+        self.voltage_el = float(
+            np.clip(
+                self._base_voltage_el + np.random.normal(0, NOISE_STDDEV),
+                0.0,
+                VREF,
+            )
+        )
+        self.voltage_az = float(
+            np.clip(
+                self._base_voltage_az + np.random.normal(0, NOISE_STDDEV),
+                0.0,
+                VREF,
+            )
+        )
 
     def get_status(self):
         return {

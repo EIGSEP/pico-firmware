@@ -12,23 +12,30 @@ from .base import PicoDevice
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
-    #XXX this ignores several args from base class
-    def __init__(self, port, step_angle_deg=1.8, gear_teeth=113, microstep=1, verbose=False):
+    # XXX this ignores several args from base class
+    def __init__(
+        self,
+        port,
+        step_angle_deg=1.8,
+        gear_teeth=113,
+        microstep=1,
+        verbose=False,
+    ):
         super().__init__(port)
         self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
         self.microstep = microstep
         self.commands = {
-            'az_set_pos': int,
-            'el_set_pos': int,
-            'az_set_target_pos': int,
-            'el_set_target_pos': int,
-            'halt': int,
-            'az_up_delay_us': int,
-            'az_dn_delay_us': int,
-            'el_up_delay_us': int,
-            'el_dn_delay_us': int,
+            "az_set_pos": int,
+            "el_set_pos": int,
+            "az_set_target_pos": int,
+            "el_set_target_pos": int,
+            "halt": int,
+            "az_up_delay_us": int,
+            "az_dn_delay_us": int,
+            "el_up_delay_us": int,
+            "el_dn_delay_us": int,
         }
         self.status = {}
         self.set_response_handler(self.update_status)
@@ -69,14 +76,14 @@ class PicoMotor(PicoDevice):
                 raise ValueError(f"command {k} not in {self.commands}")
             cmd[k] = self.commands[k](v)
         self.send_command(cmd)
-        
+
     def reset_step_position(self, az_step=None, el_step=None):
         """Set az and el position to specified count."""
         cmd = {}
         if az_step is not None:
-            cmd['az_set_pos'] = az_step
+            cmd["az_set_pos"] = az_step
         if el_step is not None:
-            cmd['el_set_pos'] = el_step
+            cmd["el_set_pos"] = el_step
         self.motor_command(**cmd)
 
     def reset_deg_position(self, az_deg=None, el_deg=None):
@@ -85,14 +92,23 @@ class PicoMotor(PicoDevice):
         el_pos = None if el_deg is None else self.deg_to_steps(el_deg)
         self.reset_step_position(az_pos=az_pos, el_pos=el_pos)
 
-    def set_delay(self, az_up_delay_us=2300, az_dn_delay_us=2300,
-                        el_up_delay_us=2300, el_dn_delay_us=2300):
-        self.motor_command(az_up_delay_us=az_up_delay_us, az_dn_delay_us=az_dn_delay_us,
-                           el_up_delay_us=el_up_delay_us, el_dn_delay_us=el_dn_delay_us)
+    def set_delay(
+        self,
+        az_up_delay_us=2300,
+        az_dn_delay_us=2300,
+        el_up_delay_us=2300,
+        el_dn_delay_us=2300,
+    ):
+        self.motor_command(
+            az_up_delay_us=az_up_delay_us,
+            az_dn_delay_us=az_dn_delay_us,
+            el_up_delay_us=el_up_delay_us,
+            el_dn_delay_us=el_dn_delay_us,
+        )
 
     def stop(self, az=True, el=True):
         """Hard stop on motors. Default: both."""
-        cmd = {'halt': 0}
+        cmd = {"halt": 0}
         self.motor_command(**cmd)
 
     def _do_wait(self, wait_for_start, wait_for_stop):
@@ -101,63 +117,95 @@ class PicoMotor(PicoDevice):
         if wait_for_stop:
             self.wait_for_stop()
 
-    def az_target_steps(self, target_steps, wait_for_start=True, wait_for_stop=False):
+    def az_target_steps(
+        self, target_steps, wait_for_start=True, wait_for_stop=False
+    ):
         """Move az to target step position."""
         self.motor_command(az_set_target_pos=target_steps)
         self._do_wait(wait_for_start, wait_for_stop)
 
-    def az_target_deg(self, target_deg, wait_for_start=True, wait_for_stop=False):
+    def az_target_deg(
+        self, target_deg, wait_for_start=True, wait_for_stop=False
+    ):
         """Move az to target deg position."""
-        self.az_target_steps(self.deg_to_steps(target_deg),
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        self.az_target_steps(
+            self.deg_to_steps(target_deg),
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
-    def az_move_steps(self, delta_steps, wait_for_start=True, wait_for_stop=False):
+    def az_move_steps(
+        self, delta_steps, wait_for_start=True, wait_for_stop=False
+    ):
         """Move az in specified number of steps from current target."""
-        new_target = self.status['az_target_pos'] + delta_steps
-        self.az_target_steps(new_target,
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        new_target = self.status["az_target_pos"] + delta_steps
+        self.az_target_steps(
+            new_target,
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
     def az_move_deg(self, delta_deg, wait_for_start=True, wait_for_stop=False):
         """Move az in specified number of degs from current target."""
-        self.az_move_steps(self.deg_to_steps(delta_deg),
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        self.az_move_steps(
+            self.deg_to_steps(delta_deg),
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
-    def el_target_steps(self, target_steps, wait_for_start=True, wait_for_stop=False):
+    def el_target_steps(
+        self, target_steps, wait_for_start=True, wait_for_stop=False
+    ):
         """Move el to target step position."""
         self.motor_command(el_set_target_pos=target_steps)
         self._do_wait(wait_for_start, wait_for_stop)
 
-    def el_target_deg(self, target_deg, wait_for_start=True, wait_for_stop=False):
+    def el_target_deg(
+        self, target_deg, wait_for_start=True, wait_for_stop=False
+    ):
         """Move el to target deg position."""
-        self.el_target_steps(self.deg_to_steps(target_deg),
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        self.el_target_steps(
+            self.deg_to_steps(target_deg),
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
-    def el_move_steps(self, delta_steps, wait_for_start=True, wait_for_stop=False):
+    def el_move_steps(
+        self, delta_steps, wait_for_start=True, wait_for_stop=False
+    ):
         """Move el in specified number of steps from current target."""
-        new_target = self.status['el_target_pos'] + delta_steps
-        self.el_target_steps(new_target,
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        new_target = self.status["el_target_pos"] + delta_steps
+        self.el_target_steps(
+            new_target,
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
     def el_move_deg(self, delta_deg, wait_for_start=True, wait_for_stop=False):
         """Move el in specified number of degs from current target."""
-        self.el_move_steps(self.deg_to_steps(delta_deg),
-                wait_for_start=wait_for_start, wait_for_stop=wait_for_stop)
+        self.el_move_steps(
+            self.deg_to_steps(delta_deg),
+            wait_for_start=wait_for_start,
+            wait_for_stop=wait_for_stop,
+        )
 
     def is_moving(self):
-        return self.status['az_target_pos'] != self.status['az_pos'] or \
-               self.status['el_target_pos'] != self.status['el_pos']
+        return (
+            self.status["az_target_pos"] != self.status["az_pos"]
+            or self.status["el_target_pos"] != self.status["el_pos"]
+        )
 
     def wait_for_start(self, timeout=0.3):
         t = time.time()
         while not self.is_moving() and time.time() < t + timeout:
-            time.sleep(.1)
+            time.sleep(0.1)
 
     def wait_for_stop(self):
         if self.verbose:
-            print('Waiting for stop.')
+            print("Waiting for stop.")
         while self.is_moving():
-            time.sleep(.1)
-        
+            time.sleep(0.1)
+
     def scan(
         self,
         az_range_deg=np.arange(-180.0, 180.0, 5),
@@ -204,7 +252,12 @@ class PicoMotor(PicoDevice):
                     mv_axis1(val1, wait_for_stop=True)
                     if pause_s is None:
                         if self.verbose:
-                            print("MOVE AXIS 2 FROM", axis2_rng[0], "TO", axis2_rng[-1])
+                            print(
+                                "MOVE AXIS 2 FROM",
+                                axis2_rng[0],
+                                "TO",
+                                axis2_rng[-1],
+                            )
                         # continuous motion
                         mv_axis2(axis2_rng[0], wait_for_stop=True)
                         mv_axis2(axis2_rng[-1], wait_for_stop=True)
@@ -222,5 +275,3 @@ class PicoMotor(PicoDevice):
                     time.sleep(sleep_between)
         finally:
             self.stop()
-            
-

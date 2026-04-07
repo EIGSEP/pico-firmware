@@ -38,7 +38,9 @@ class ImuEmulator(PicoEmulator):
         elif app_id == APP_IMU_AZ:
             self.name = "imu_az"
         else:
-            raise ValueError(f"ImuEmulator: unexpected app_id={app_id}, expected {APP_IMU_EL} or {APP_IMU_AZ}")
+            raise ValueError(
+                f"ImuEmulator: unexpected app_id={app_id}, expected {APP_IMU_EL} or {APP_IMU_AZ}"
+            )
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
@@ -70,7 +72,9 @@ class ImuEmulator(PicoEmulator):
 
         # When sensor has failed, no events arrive -- check for timeout
         if self._sensor_failed:
-            if (time.monotonic() - self._last_event_time) > IMU_EVENT_TIMEOUT_S:
+            if (
+                time.monotonic() - self._last_event_time
+            ) > IMU_EVENT_TIMEOUT_S:
                 self.is_initialized = False
             return
 
@@ -96,8 +100,12 @@ class ImuEmulator(PicoEmulator):
         cr = np.cos(np.radians(self.roll))
         sr = np.sin(np.radians(self.roll))
         self.accel_x = float(9.81 * sp + np.random.normal(0, NOISE_STDDEV))
-        self.accel_y = float(-9.81 * cp * sr + np.random.normal(0, NOISE_STDDEV))
-        self.accel_z = float(9.81 * cp * cr + np.random.normal(0, NOISE_STDDEV))
+        self.accel_y = float(
+            -9.81 * cp * sr + np.random.normal(0, NOISE_STDDEV)
+        )
+        self.accel_z = float(
+            9.81 * cp * cr + np.random.normal(0, NOISE_STDDEV)
+        )
 
     def get_status(self):
         status = "update" if self.is_initialized else "error"

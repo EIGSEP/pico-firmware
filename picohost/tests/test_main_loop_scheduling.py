@@ -87,6 +87,7 @@ class MainLoopModel:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestNormalCommandProcessing:
     """Newline-terminated commands always let op() run promptly."""
 

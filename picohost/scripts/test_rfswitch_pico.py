@@ -4,16 +4,17 @@ import picohost
 import time
 
 STATES = [
-    'VNAO',
-    'RFANT',
-    'VNAS',
-    'VNAL',
-    'VNAANT',
-    'VNANON',
-    'VNANOFF',
-    'RFNON',
-    'RFNOFF',
+    "VNAO",
+    "RFANT",
+    "VNAS",
+    "VNAL",
+    "VNAANT",
+    "VNANON",
+    "VNANOFF",
+    "RFNON",
+    "RFNOFF",
 ]
+
 
 def main():
     """

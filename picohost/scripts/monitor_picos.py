@@ -12,14 +12,14 @@ def watch_json_from_serial(dev, baud):
         while True:
             try:
                 line = ser.readline().decode("utf-8", errors="ignore").strip()
-            except(SerialException):
+            except SerialException:
                 continue
             if not line:
                 continue
             try:
                 data = json.loads(line)
-                sensor_name = data['sensor_name']
-                print(sensor_name, '=' * (40 - len(sensor_name)))
+                sensor_name = data["sensor_name"]
+                print(sensor_name, "=" * (40 - len(sensor_name)))
                 print(json.dumps(data, indent=2, sort_keys=False))
             except (KeyError, json.JSONDecodeError):
                 print(line)

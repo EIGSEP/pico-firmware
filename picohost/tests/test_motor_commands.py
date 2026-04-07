@@ -6,7 +6,6 @@ from picohost.testing import DummyPicoMotor
 
 
 class TestDummyPicoMotor:
-
     def test_motor_move_command(self):
         """Test motor move command generation."""
         motor = DummyPicoMotor("/dev/ttyACM0")

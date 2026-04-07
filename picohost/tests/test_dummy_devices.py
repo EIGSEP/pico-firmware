@@ -23,6 +23,7 @@ from picohost.testing import (
 # DummyPicoDevice (base class, no emulator)
 # ---------------------------------------------------------------------------
 
+
 class TestDummyPicoDevice:
     """Test DummyPicoDevice connection and serial operations.
 
@@ -98,6 +99,7 @@ class TestDummyPicoDevice:
 # DummyPicoMotor (emulator-backed)
 # ---------------------------------------------------------------------------
 
+
 class TestDummyPicoMotor:
     """Test DummyPicoMotor with the MotorEmulator.
 
@@ -110,7 +112,7 @@ class TestDummyPicoMotor:
         """Verify degree-to-step conversion for known values."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
         assert motor.deg_to_steps(0) == 0
-        assert motor.deg_to_steps(1.8) == 113   # one full step * 113 teeth
+        assert motor.deg_to_steps(1.8) == 113  # one full step * 113 teeth
         assert motor.deg_to_steps(360) == 22600  # full revolution
         motor.disconnect()
 
@@ -120,10 +122,15 @@ class TestDummyPicoMotor:
         cadence = motor.EMULATOR_CADENCE_MS
         before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=1000, el_set_target_pos=500)
-        assert wait_for_settle(
-            lambda: motor.status.get("az_target_pos"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
-        ) == 1000
+        assert (
+            wait_for_settle(
+                lambda: motor.status.get("az_target_pos"),
+                initial=before,
+                cadence_ms=cadence,
+                max_cycles=10,
+            )
+            == 1000
+        )
         assert motor.status["el_target_pos"] == 500
         motor.disconnect()
 
@@ -138,7 +145,9 @@ class TestDummyPicoMotor:
         )
         motor.stop()
         wait_for_condition(
-            lambda: motor.status.get("az_target_pos") == motor.status.get("az_pos"),
+            lambda: (
+                motor.status.get("az_target_pos") == motor.status.get("az_pos")
+            ),
             cadence_ms=cadence,
         )
         motor.disconnect()
@@ -158,6 +167,7 @@ class TestDummyPicoMotor:
 # DummyPicoRFSwitch (emulator-backed)
 # ---------------------------------------------------------------------------
 
+
 class TestDummyPicoRFSwitch:
     """Test DummyPicoRFSwitch with the RFSwitchEmulator."""
 
@@ -173,7 +183,7 @@ class TestDummyPicoRFSwitch:
         switch = DummyPicoRFSwitch(port="/dev/ttyUSB0")
         paths = switch.paths
         assert isinstance(paths, dict)
-        assert paths["VNAO"] == 1   # "10000000" reversed = 1
+        assert paths["VNAO"] == 1  # "10000000" reversed = 1
         assert paths["RFANT"] == 0  # "00000000" = 0
         switch.disconnect()
 
@@ -182,13 +192,18 @@ class TestDummyPicoRFSwitch:
         switch = DummyPicoRFSwitch(port="/dev/ttyUSB0")
         cadence = switch.EMULATOR_CADENCE_MS
         for state in switch.paths:
-            assert switch.switch(state) is True, f"switch('{state}') returned False"
+            assert switch.switch(state) is True, (
+                f"switch('{state}') returned False"
+            )
 
         # Verify the last state is reflected
         last_state = list(switch.paths.keys())[-1]
         wait_for_condition(
-            lambda: switch.last_status.get("sw_state") == switch.paths[last_state],
-            cadence_ms=cadence, max_cycles=10,
+            lambda: (
+                switch.last_status.get("sw_state") == switch.paths[last_state]
+            ),
+            cadence_ms=cadence,
+            max_cycles=10,
         )
         switch.disconnect()
 
@@ -203,6 +218,7 @@ class TestDummyPicoRFSwitch:
 # ---------------------------------------------------------------------------
 # DummyPicoPeltier (emulator-backed)
 # ---------------------------------------------------------------------------
+
 
 class TestDummyPicoPeltier:
     """Test DummyPicoPeltier with the TempCtrlEmulator.
@@ -219,7 +235,9 @@ class TestDummyPicoPeltier:
         assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
         assert wait_for_settle(
             lambda: peltier.status.get("LNA_T_target"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
         ) == pytest.approx(25.5)
         assert peltier.status["LNA_hysteresis"] == pytest.approx(0.5)
         peltier.disconnect()
@@ -229,10 +247,17 @@ class TestDummyPicoPeltier:
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.status.get("LOAD_T_target")
-        assert peltier.set_temperature(T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5) is True
+        assert (
+            peltier.set_temperature(
+                T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5
+            )
+            is True
+        )
         assert wait_for_settle(
             lambda: peltier.status.get("LOAD_T_target"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
         ) == pytest.approx(25.0)
         assert peltier.status["LNA_T_target"] == pytest.approx(30.0)
         peltier.disconnect()
@@ -286,6 +311,7 @@ class TestDummyPicoPeltier:
 # ---------------------------------------------------------------------------
 # MockSerial integration
 # ---------------------------------------------------------------------------
+
 
 class TestMockSerialIntegration:
     """Test low-level MockSerial operations through DummyPicoDevice.

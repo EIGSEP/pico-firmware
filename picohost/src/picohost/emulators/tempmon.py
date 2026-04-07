@@ -45,7 +45,9 @@ class TempMonEmulator(PicoEmulator):
 
     def op(self):
         self.temp_lna = self._base_temp_lna + np.random.normal(0, NOISE_STDDEV)
-        self.temp_load = self._base_temp_load + np.random.normal(0, NOISE_STDDEV)
+        self.temp_load = self._base_temp_load + np.random.normal(
+            0, NOISE_STDDEV
+        )
         self.timestamp_lna = time.time()
         self.timestamp_load = time.time()
 

@@ -38,6 +38,7 @@ class TestBaseProtocol:
         class _NullPeer:
             """Peer with nothing to read — lets _read_commands() reach the
             buffer-processing loop without providing new data."""
+
             @property
             def in_waiting(self):
                 return 0
@@ -64,8 +65,14 @@ class TestBaseProtocol:
         """
         # Emulators only produce output via get_status(); server() returns
         # None for all emulators.
-        for Cls in (MotorEmulator, TempCtrlEmulator, TempMonEmulator,
-                    ImuEmulator, LidarEmulator, RFSwitchEmulator):
+        for Cls in (
+            MotorEmulator,
+            TempCtrlEmulator,
+            TempMonEmulator,
+            ImuEmulator,
+            LidarEmulator,
+            RFSwitchEmulator,
+        ):
             emu = Cls()
             result = emu.server({})
             assert result is None
@@ -80,8 +87,12 @@ class TestBaseProtocol:
     def test_empty_json_is_noop(self):
         """All apps handle {} without side effects."""
         emulators = [
-            MotorEmulator(), TempCtrlEmulator(), TempMonEmulator(),
-            ImuEmulator(), LidarEmulator(), RFSwitchEmulator(),
+            MotorEmulator(),
+            TempCtrlEmulator(),
+            TempMonEmulator(),
+            ImuEmulator(),
+            LidarEmulator(),
+            RFSwitchEmulator(),
         ]
         for emu in emulators:
             before = emu.get_status()
@@ -211,7 +222,13 @@ class TestTempCtrlProtocol:
         """Within hysteresis band, drive = 0 and active = false."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 29.8
-        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5})
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
+        )
         emu.op()
         assert emu.lna.drive == 0.0
         assert emu.lna.active is False

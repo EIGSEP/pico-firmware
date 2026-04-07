@@ -5,8 +5,16 @@ import time
 _SENTINEL = object()
 
 
-def wait_for_settle(getter, *, initial=_SENTINEL, timeout=None, poll_interval=None,
-                    stable_count=3, cadence_ms=None, max_cycles=100):
+def wait_for_settle(
+    getter,
+    *,
+    initial=_SENTINEL,
+    timeout=None,
+    poll_interval=None,
+    stable_count=3,
+    cadence_ms=None,
+    max_cycles=100,
+):
     """Poll getter() until the returned value stops changing.
 
     Returns the settled value so callers can assert on it directly::
@@ -74,8 +82,14 @@ def wait_for_settle(getter, *, initial=_SENTINEL, timeout=None, poll_interval=No
     )
 
 
-def wait_for_condition(predicate, *, timeout=None, poll_interval=None,
-                       cadence_ms=None, max_cycles=100):
+def wait_for_condition(
+    predicate,
+    *,
+    timeout=None,
+    poll_interval=None,
+    cadence_ms=None,
+    max_cycles=100,
+):
     """Poll until predicate() returns True.
 
     When *cadence_ms* is provided, *timeout* and *poll_interval* are derived

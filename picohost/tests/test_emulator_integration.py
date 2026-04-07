@@ -23,31 +23,63 @@ from picohost.testing import (
 
 # Expected field sets from C firmware send_json calls
 MOTOR_FIELDS = {
-    "sensor_name", "status", "app_id",
-    "az_pos", "az_target_pos", "el_pos", "el_target_pos",
+    "sensor_name",
+    "status",
+    "app_id",
+    "az_pos",
+    "az_target_pos",
+    "el_pos",
+    "el_target_pos",
 }
 
 TEMPCTRL_FIELDS = {
-    "sensor_name", "app_id",
-    "watchdog_tripped", "watchdog_timeout_ms",
-    "LNA_status", "LNA_T_now", "LNA_timestamp", "LNA_T_target",
-    "LNA_drive_level", "LNA_enabled", "LNA_active", "LNA_int_disabled",
-    "LNA_hysteresis", "LNA_clamp",
-    "LOAD_status", "LOAD_T_now", "LOAD_timestamp", "LOAD_T_target",
-    "LOAD_drive_level", "LOAD_enabled", "LOAD_active", "LOAD_int_disabled",
-    "LOAD_hysteresis", "LOAD_clamp",
+    "sensor_name",
+    "app_id",
+    "watchdog_tripped",
+    "watchdog_timeout_ms",
+    "LNA_status",
+    "LNA_T_now",
+    "LNA_timestamp",
+    "LNA_T_target",
+    "LNA_drive_level",
+    "LNA_enabled",
+    "LNA_active",
+    "LNA_int_disabled",
+    "LNA_hysteresis",
+    "LNA_clamp",
+    "LOAD_status",
+    "LOAD_T_now",
+    "LOAD_timestamp",
+    "LOAD_T_target",
+    "LOAD_drive_level",
+    "LOAD_enabled",
+    "LOAD_active",
+    "LOAD_int_disabled",
+    "LOAD_hysteresis",
+    "LOAD_clamp",
 }
 
 TEMPMON_FIELDS = {
-    "sensor_name", "app_id",
-    "LNA_status", "LNA_temp", "LNA_timestamp",
-    "LOAD_status", "LOAD_temp", "LOAD_timestamp",
+    "sensor_name",
+    "app_id",
+    "LNA_status",
+    "LNA_temp",
+    "LNA_timestamp",
+    "LOAD_status",
+    "LOAD_temp",
+    "LOAD_timestamp",
 }
 
 IMU_FIELDS = {
-    "sensor_name", "status", "app_id",
-    "yaw", "pitch", "roll",
-    "accel_x", "accel_y", "accel_z",
+    "sensor_name",
+    "status",
+    "app_id",
+    "yaw",
+    "pitch",
+    "roll",
+    "accel_x",
+    "accel_y",
+    "accel_z",
 }
 
 LIDAR_FIELDS = {"sensor_name", "status", "app_id", "distance_m"}
@@ -56,6 +88,7 @@ RFSWITCH_FIELDS = {"sensor_name", "status", "app_id", "sw_state"}
 
 
 # --- Fixtures ---
+
 
 @pytest.fixture
 def motor():
@@ -101,8 +134,8 @@ def lidar():
 
 # --- Motor ---
 
-class TestMotorIntegration:
 
+class TestMotorIntegration:
     def test_status_fields(self, motor):
         """Motor emulator populates all status fields via reader thread."""
         assert set(motor.status.keys()) == MOTOR_FIELDS
@@ -113,23 +146,33 @@ class TestMotorIntegration:
         cadence = motor.EMULATOR_CADENCE_MS
         before = motor.status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=500)
-        assert wait_for_settle(
-            lambda: motor.status.get("az_target_pos"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
-        ) == 500
+        assert (
+            wait_for_settle(
+                lambda: motor.status.get("az_target_pos"),
+                initial=before,
+                cadence_ms=cadence,
+                max_cycles=10,
+            )
+            == 500
+        )
         # Motor moves 60 steps/op -> ceil(500/60)=9 ops + margin
         steps_per_op = motor._emulator.azimuth.max_pulses
         expected_ops = math.ceil(500 / steps_per_op)
-        assert wait_for_settle(
-            lambda: motor.status.get("az_pos"),
-            initial=0, cadence_ms=cadence, max_cycles=expected_ops + 10,
-        ) == 500
+        assert (
+            wait_for_settle(
+                lambda: motor.status.get("az_pos"),
+                initial=0,
+                cadence_ms=cadence,
+                max_cycles=expected_ops + 10,
+            )
+            == 500
+        )
 
 
 # --- RFSwitch ---
 
-class TestRFSwitchIntegration:
 
+class TestRFSwitchIntegration:
     def test_status_populated(self, rfswitch):
         """RFSwitch emulator sends status via reader thread."""
         cadence = rfswitch.EMULATOR_CADENCE_MS
@@ -144,16 +187,21 @@ class TestRFSwitchIntegration:
         cadence = rfswitch.EMULATOR_CADENCE_MS
         before = rfswitch.last_status.get("sw_state")
         rfswitch.switch("VNAO")
-        assert wait_for_settle(
-            lambda: rfswitch.last_status.get("sw_state"),
-            initial=before, cadence_ms=cadence, max_cycles=10,
-        ) == rfswitch.paths["VNAO"]
+        assert (
+            wait_for_settle(
+                lambda: rfswitch.last_status.get("sw_state"),
+                initial=before,
+                cadence_ms=cadence,
+                max_cycles=10,
+            )
+            == rfswitch.paths["VNAO"]
+        )
 
 
 # --- Peltier ---
 
-class TestPeltierIntegration:
 
+class TestPeltierIntegration:
     def test_status_fields(self, peltier):
         """Peltier emulator populates all status fields via reader thread."""
         assert set(peltier.status.keys()) == TEMPCTRL_FIELDS
@@ -168,20 +216,23 @@ class TestPeltierIntegration:
         # ~333 ops to converge + margin for hysteresis settling
         settled = wait_for_settle(
             lambda: round(peltier.status.get("LNA_T_now", 0), 1),
-            cadence_ms=cadence, max_cycles=500, stable_count=5,
+            cadence_ms=cadence,
+            max_cycles=500,
+            stable_count=5,
         )
         assert abs(settled - 35.0) <= 0.5
 
 
 # --- IMU ---
 
-class TestIMUIntegration:
 
+class TestIMUIntegration:
     def test_status_fields(self, imu):
         """IMU emulator populates all status fields via reader thread."""
         cadence = imu.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(imu.last_status) > 0, cadence_ms=cadence,
+            lambda: len(imu.last_status) > 0,
+            cadence_ms=cadence,
         )
         assert set(imu.last_status.keys()) == IMU_FIELDS
         assert imu.last_status["sensor_name"] == "imu_el"
@@ -190,15 +241,17 @@ class TestIMUIntegration:
         """Verify value types match the JSON protocol, not just field names."""
         cadence = imu.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(imu.last_status) > 0, cadence_ms=cadence,
+            lambda: len(imu.last_status) > 0,
+            cadence_ms=cadence,
         )
         s = imu.last_status
         # Integers
         assert isinstance(s["app_id"], int)
         # Floats
-        for key in ("yaw", "pitch", "roll",
-                     "accel_x", "accel_y", "accel_z"):
-            assert isinstance(s[key], float), f"{key} should be float, got {type(s[key])}"
+        for key in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
+            assert isinstance(s[key], float), (
+                f"{key} should be float, got {type(s[key])}"
+            )
         # Strings
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["status"], str)
@@ -206,8 +259,8 @@ class TestIMUIntegration:
 
 # --- Motor ---
 
-class TestMotorIntegrationTypes:
 
+class TestMotorIntegrationTypes:
     def test_status_types(self, motor):
         """Verify motor status value types through serial pipeline."""
         s = motor.status
@@ -222,34 +275,55 @@ class TestMotorIntegrationTypes:
 
 # --- Peltier ---
 
-class TestPeltierIntegrationTypes:
 
+class TestPeltierIntegrationTypes:
     def test_status_types(self, peltier):
         """Verify peltier status value types through serial pipeline."""
         s = peltier.status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
         # Booleans
-        for key in ("LNA_enabled", "LNA_active", "LNA_int_disabled",
-                     "LOAD_enabled", "LOAD_active", "LOAD_int_disabled"):
-            assert isinstance(s[key], bool), f"{key} should be bool, got {type(s[key])}"
+        for key in (
+            "LNA_enabled",
+            "LNA_active",
+            "LNA_int_disabled",
+            "LOAD_enabled",
+            "LOAD_active",
+            "LOAD_int_disabled",
+        ):
+            assert isinstance(s[key], bool), (
+                f"{key} should be bool, got {type(s[key])}"
+            )
         # Floats
-        for key in ("LNA_T_now", "LNA_T_target", "LNA_drive_level",
-                     "LNA_hysteresis", "LNA_clamp", "LNA_timestamp",
-                     "LOAD_T_now", "LOAD_T_target", "LOAD_drive_level",
-                     "LOAD_hysteresis", "LOAD_clamp", "LOAD_timestamp"):
-            assert isinstance(s[key], (int, float)), f"{key} should be numeric, got {type(s[key])}"
+        for key in (
+            "LNA_T_now",
+            "LNA_T_target",
+            "LNA_drive_level",
+            "LNA_hysteresis",
+            "LNA_clamp",
+            "LNA_timestamp",
+            "LOAD_T_now",
+            "LOAD_T_target",
+            "LOAD_drive_level",
+            "LOAD_hysteresis",
+            "LOAD_clamp",
+            "LOAD_timestamp",
+        ):
+            assert isinstance(s[key], (int, float)), (
+                f"{key} should be numeric, got {type(s[key])}"
+            )
 
 
 # --- TempMon ---
 
-class TestTempMonIntegration:
 
+class TestTempMonIntegration:
     def test_status_fields(self, tempmon):
         """TempMon emulator populates all status fields via reader thread."""
         cadence = tempmon.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(tempmon.last_status) > 0, cadence_ms=cadence,
+            lambda: len(tempmon.last_status) > 0,
+            cadence_ms=cadence,
         )
         assert set(tempmon.last_status.keys()) == TEMPMON_FIELDS
         assert tempmon.last_status["sensor_name"] == "temp_mon"
@@ -258,28 +332,32 @@ class TestTempMonIntegration:
         """Verify tempmon status value types through serial pipeline."""
         cadence = tempmon.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(tempmon.last_status) > 0, cadence_ms=cadence,
+            lambda: len(tempmon.last_status) > 0,
+            cadence_ms=cadence,
         )
         s = tempmon.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
         for ch in ("LNA", "LOAD"):
             assert isinstance(s[f"{ch}_status"], str)
-            assert isinstance(s[f"{ch}_temp"], (int, float)), \
+            assert isinstance(s[f"{ch}_temp"], (int, float)), (
                 f"{ch}_temp should be numeric"
-            assert isinstance(s[f"{ch}_timestamp"], (int, float)), \
+            )
+            assert isinstance(s[f"{ch}_timestamp"], (int, float)), (
                 f"{ch}_timestamp should be numeric"
+            )
 
 
 # --- Lidar ---
 
-class TestLidarIntegration:
 
+class TestLidarIntegration:
     def test_status_fields(self, lidar):
         """Lidar emulator populates all status fields via reader thread."""
         cadence = lidar.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(lidar.last_status) > 0, cadence_ms=cadence,
+            lambda: len(lidar.last_status) > 0,
+            cadence_ms=cadence,
         )
         assert set(lidar.last_status.keys()) == LIDAR_FIELDS
         assert lidar.last_status["sensor_name"] == "lidar"
@@ -288,7 +366,8 @@ class TestLidarIntegration:
         """Verify lidar status value types through serial pipeline."""
         cadence = lidar.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(lidar.last_status) > 0, cadence_ms=cadence,
+            lambda: len(lidar.last_status) > 0,
+            cadence_ms=cadence,
         )
         s = lidar.last_status
         assert isinstance(s["sensor_name"], str)
@@ -299,8 +378,8 @@ class TestLidarIntegration:
 
 # --- RFSwitch ---
 
-class TestRFSwitchIntegrationTypes:
 
+class TestRFSwitchIntegrationTypes:
     def test_status_types(self, rfswitch):
         """Verify rfswitch status value types through serial pipeline."""
         cadence = rfswitch.EMULATOR_CADENCE_MS
@@ -317,8 +396,8 @@ class TestRFSwitchIntegrationTypes:
 
 # --- Peltier Watchdog ---
 
-class TestPeltierWatchdog:
 
+class TestPeltierWatchdog:
     def test_keepalive_prevents_watchdog(self):
         """Keepalive commands prevent the watchdog from tripping."""
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
@@ -338,7 +417,8 @@ class TestPeltierWatchdog:
             # 200ms watchdog / 50ms cadence = 4 ops + margin
             wait_for_condition(
                 lambda: p.status.get("watchdog_tripped") is True,
-                cadence_ms=cadence, max_cycles=20,
+                cadence_ms=cadence,
+                max_cycles=20,
             )
         finally:
             p.disconnect()
@@ -346,8 +426,8 @@ class TestPeltierWatchdog:
 
 # --- Redis ---
 
-class TestRedisIntegration:
 
+class TestRedisIntegration:
     def test_redis_handler_called(self):
         """Verify that redis_handler receives status data when configured."""
         received = []
@@ -359,7 +439,8 @@ class TestRedisIntegration:
         mon = DummyPicoTempMon("/dev/dummy", eig_redis=FakeRedis())
         cadence = mon.EMULATOR_CADENCE_MS
         wait_for_condition(
-            lambda: len(received) > 0, cadence_ms=cadence,
+            lambda: len(received) > 0,
+            cadence_ms=cadence,
         )
         mon.disconnect()
         names = [name for name, _ in received]
@@ -367,6 +448,7 @@ class TestRedisIntegration:
 
 
 # --- Convergence Timing ---
+
 
 class TestConvergenceTiming:
     """Verify that state changes complete within the cycle count predicted
@@ -388,7 +470,9 @@ class TestConvergenceTiming:
         motor.motor_command(az_set_target_pos=target)
         settled = wait_for_settle(
             lambda: motor.status.get("az_pos"),
-            initial=0, cadence_ms=cadence, max_cycles=expected_ops + margin,
+            initial=0,
+            cadence_ms=cadence,
+            max_cycles=expected_ops + margin,
         )
         assert settled == target
 
@@ -402,7 +486,9 @@ class TestConvergenceTiming:
         motor.motor_command(az_set_target_pos=target)
         settled = wait_for_settle(
             lambda: motor.status.get("az_pos"),
-            initial=0, cadence_ms=cadence, max_cycles=expected_ops + margin,
+            initial=0,
+            cadence_ms=cadence,
+            max_cycles=expected_ops + margin,
         )
         assert settled == target
 
@@ -417,15 +503,20 @@ class TestConvergenceTiming:
         )
         margin = 10
         motor.motor_command(
-            az_set_target_pos=az_target, el_set_target_pos=el_target,
+            az_set_target_pos=az_target,
+            el_set_target_pos=el_target,
         )
         az = wait_for_settle(
             lambda: motor.status.get("az_pos"),
-            initial=0, cadence_ms=cadence, max_cycles=slowest_ops + margin,
+            initial=0,
+            cadence_ms=cadence,
+            max_cycles=slowest_ops + margin,
         )
         el = wait_for_settle(
             lambda: motor.status.get("el_pos"),
-            initial=0, cadence_ms=cadence, max_cycles=slowest_ops + margin,
+            initial=0,
+            cadence_ms=cadence,
+            max_cycles=slowest_ops + margin,
         )
         assert az == az_target
         assert el == el_target
@@ -438,7 +529,9 @@ class TestConvergenceTiming:
         # Should appear within ~2-3 status cycles (command + next status send)
         settled = wait_for_settle(
             lambda: motor.status.get("az_target_pos"),
-            initial=before, cadence_ms=cadence, max_cycles=6,
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=6,
         )
         assert settled == 999
 
@@ -456,7 +549,9 @@ class TestConvergenceTiming:
             p.set_enable(LNA=True)
             settled = wait_for_settle(
                 lambda: round(p.status.get("LNA_T_now", 0), 1),
-                cadence_ms=cadence, max_cycles=500, stable_count=5,
+                cadence_ms=cadence,
+                max_cycles=500,
+                stable_count=5,
             )
             assert abs(settled - 35.0) <= 0.5
         finally:
@@ -477,7 +572,8 @@ class TestConvergenceTiming:
             # much tighter than the old hardcoded 2s timeout.
             wait_for_condition(
                 lambda: p.status.get("watchdog_tripped") is True,
-                cadence_ms=cadence, max_cycles=watchdog_cycles + 15,
+                cadence_ms=cadence,
+                max_cycles=watchdog_cycles + 15,
             )
         finally:
             p.disconnect()

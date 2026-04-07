@@ -21,7 +21,6 @@ def _make_pot():
 
 
 class TestPicoPotentiometer:
-
     def test_status_has_potmon_fields(self):
         """Potentiometer status should contain voltage fields from emulator."""
         pot = _make_pot()
@@ -168,9 +167,7 @@ class TestPotRedisHandler:
         pot = _make_pot()
         for cal in (None, ((100.0, -50.0), (200.0, -100.0))):
             if cal is not None:
-                pot.set_calibration(
-                    pot_el_params=cal[0], pot_az_params=cal[1]
-                )
+                pot.set_calibration(pot_el_params=cal[0], pot_az_params=cal[1])
             published = self._capture(pot)
             for k, v in published.items():
                 assert isinstance(v, self._SCALAR_TYPES), (
@@ -182,15 +179,17 @@ class TestPotRedisHandler:
         """Field set is identical whether calibrated or not."""
         pot = _make_pot()
         before = set(self._capture(pot))
-        pot.set_calibration(
-            pot_el_params=(1.0, 0.0), pot_az_params=(1.0, 0.0)
-        )
+        pot.set_calibration(pot_el_params=(1.0, 0.0), pot_az_params=(1.0, 0.0))
         after = set(self._capture(pot))
         assert before == after
         # And specifically the new flat field names are present
         expected_added = {
-            "pot_el_cal_slope", "pot_el_cal_intercept", "pot_el_angle",
-            "pot_az_cal_slope", "pot_az_cal_intercept", "pot_az_angle",
+            "pot_el_cal_slope",
+            "pot_el_cal_intercept",
+            "pot_el_angle",
+            "pot_az_cal_slope",
+            "pot_az_cal_intercept",
+            "pot_az_angle",
         }
         assert expected_added.issubset(before)
         pot.disconnect()

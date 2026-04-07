@@ -15,11 +15,11 @@ args = parser.parse_args()
 temp_data = []
 
 
-t = PicoPeltier(args.port, verbose=True) # Control mode for Peltier
+t = PicoPeltier(args.port, verbose=True)  # Control mode for Peltier
 t.set_temperature(T_LNA=25, T_LOAD=25)
 t.set_enable(LNA=True, LOAD=True)
 try:
     while True:
         time.sleep(0.1)
-except(KeyboardInterrupt):
+except KeyboardInterrupt:
     t.set_enable(LNA=False, LOAD=False)

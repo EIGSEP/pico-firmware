@@ -53,6 +53,7 @@ def redis_handler(redis):
     Subclasses that wrap this handler (e.g. ``PicoPotentiometer``)
     must preserve the scalar-only contract for any fields they add.
     """
+
     def handler(data):
         try:
             name = data["sensor_name"]
@@ -199,7 +200,9 @@ class PicoDevice:
         except Exception:
             # Serial error (likely device unplugged) — close the dead handle
             # so is_connected becomes False and reconnection can be attempted.
-            self.logger.warning(f"Serial read error on {self.port}, closing connection")
+            self.logger.warning(
+                f"Serial read error on {self.port}, closing connection"
+            )
             try:
                 self.ser.close()
             except Exception:
@@ -331,7 +334,6 @@ class PicoDevice:
         self.disconnect()
 
 
-
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
@@ -405,6 +407,7 @@ class PicoRFSwitch(PicoDevice):
             self.logger.error(f"Failed to switch to {state}.")
         return c
 
+
 class PicoPeltier(PicoDevice):
     """Specialized class for Peltier temperature control Pico devices.
 
@@ -444,9 +447,7 @@ class PicoPeltier(PicoDevice):
         self._keepalive_interval = keepalive_interval
         self.verbose = verbose
         self.status = {}
-        super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
-        )
+        super().__init__(port, timeout=timeout, name=name, eig_redis=eig_redis)
         self.set_response_handler(self.update_status)
         self.wait_for_updates()
         self._start_keepalive()
@@ -513,20 +514,22 @@ class PicoPeltier(PicoDevice):
         """
         return self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
 
-    def set_temperature(self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5):
+    def set_temperature(
+        self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5
+    ):
         """Set target temperature."""
         cmd = {}
         if T_LNA is not None:
-            cmd['LNA_temp_target'] = T_LNA
-            cmd['LNA_hysteresis'] = LNA_hyst
+            cmd["LNA_temp_target"] = T_LNA
+            cmd["LNA_hysteresis"] = LNA_hyst
         if T_LOAD is not None:
-            cmd['LOAD_temp_target'] = T_LOAD
-            cmd['LOAD_hysteresis'] = LOAD_hyst
+            cmd["LOAD_temp_target"] = T_LOAD
+            cmd["LOAD_hysteresis"] = LOAD_hyst
         return self.send_command(cmd)
 
     def set_enable(self, LNA=True, LOAD=True):
         """Enable temperature control."""
-        return self.send_command({'LNA_enable': LNA, 'LOAD_enable': LOAD})
+        return self.send_command({"LNA_enable": LNA, "LOAD_enable": LOAD})
 
     def set_clamp(self, LNA=None, LOAD=None):
         """Set maximum drive level [0.0, 1.0], 0.6 default."""
@@ -543,6 +546,7 @@ class PicoIMU(PicoDevice):
 
     pass
 
+
 class PicoPotentiometer(PicoDevice):
     """Potentiometer monitoring device with voltage-to-angle calibration."""
 
@@ -550,7 +554,7 @@ class PicoPotentiometer(PicoDevice):
         self,
         port,
         calibration_file=None,
-        timeout=5.,
+        timeout=5.0,
         name=None,
         eig_redis=None,
     ):
@@ -570,7 +574,10 @@ class PicoPotentiometer(PicoDevice):
         """
         self._cal = {"pot_el": None, "pot_az": None}
         super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis,
+            port,
+            timeout=timeout,
+            name=name,
+            eig_redis=eig_redis,
         )
         if calibration_file is not None:
             self.load_calibration(calibration_file)
@@ -636,7 +643,9 @@ class PicoPotentiometer(PicoDevice):
     @property
     def is_calibrated(self):
         """True if both pots have calibration parameters."""
-        return self._cal["pot_el"] is not None and self._cal["pot_az"] is not None
+        return (
+            self._cal["pot_el"] is not None and self._cal["pot_az"] is not None
+        )
 
     def read_voltage(self):
         """Return the latest voltage readings.

@@ -5,7 +5,13 @@ try:
 except ImportError:
     logging.warning("Mockserial not found, dummy devices will not work")
 
-from .base import PicoDevice, PicoRFSwitch, PicoPeltier, PicoIMU, PicoPotentiometer
+from .base import (
+    PicoDevice,
+    PicoRFSwitch,
+    PicoPeltier,
+    PicoIMU,
+    PicoPotentiometer,
+)
 from .motor import PicoMotor
 from .emulators import (
     MotorEmulator,
@@ -39,7 +45,7 @@ class DummyPicoDevice(PicoDevice):
         return True
 
     def disconnect(self):
-        if hasattr(self, '_emulator') and self._emulator:
+        if hasattr(self, "_emulator") and self._emulator:
             self._emulator.stop()
             self._emulator = None
         # Stop the reader thread explicitly via PicoDevice.stop() to avoid
