@@ -99,6 +99,7 @@ class PicoDevice:
         self._response_handler = None
         self._raw_handler = None
         self.last_status = {}
+        self.last_status_time = None
         if name is None:
             self.name = port.split("/")[-1] if "/" in port else port
         else:
@@ -160,6 +161,35 @@ class PicoDevice:
         if self.is_connected:
             self.ser.close()
             self.ser = None
+
+    def reconnect(self) -> bool:
+        """
+        Disconnect and reconnect to the device.
+
+        Calls ``on_reconnect()`` after a successful reconnect so that
+        subclasses can re-send any configuration that the firmware loses
+        across a serial drop (e.g. PicoMotor's delay settings).
+
+        Returns
+        -------
+        bool
+            True if reconnection succeeded, False otherwise.
+        """
+        self.disconnect()
+        if self.connect():
+            self.start()
+            self.on_reconnect()
+            return True
+        return False
+
+    def on_reconnect(self):
+        """
+        Hook invoked after a successful ``reconnect()``.
+
+        Default is a no-op; subclasses override to re-apply firmware
+        state that doesn't persist across a USB serial drop.
+        """
+        pass
 
     def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
         """
@@ -245,6 +275,7 @@ class PicoDevice:
                 data = self.parse_response(line)
                 if data:  # is json
                     self.last_status = data
+                    self.last_status_time = time.time()
                     # upload to redis
                     if self.redis_handler:
                         self.redis_handler(data)
@@ -463,7 +494,10 @@ class PicoPeltier(PicoDevice):
         while True:
             if len(self.status) != 0:
                 break
-            assert time.time() - t < timeout
+            if time.time() - t >= timeout:
+                raise TimeoutError(
+                    f"No status from {self.name} within {timeout}s"
+                )
             time.sleep(0.1)
 
     def _start_keepalive(self):
