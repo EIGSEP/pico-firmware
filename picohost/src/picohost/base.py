@@ -150,6 +150,7 @@ class PicoDevice:
         try:
             self.ser = Serial(self.port, self.baudrate, timeout=self.timeout)
             self.ser.reset_input_buffer()
+            self.last_status_time = time.time()
             return True
         except Exception as e:
             self.logger.error(f"Failed to connect to {self.port}: {e}")
@@ -158,9 +159,7 @@ class PicoDevice:
     def disconnect(self):
         """Disconnect from the device and clean up resources."""
         self.stop()
-        if self.is_connected:
-            self.ser.close()
-            self.ser = None
+        self.ser = None
 
     def reconnect(self) -> bool:
         """
@@ -316,8 +315,12 @@ class PicoDevice:
     def stop(self):
         """Stop the background reader thread."""
         self._running = False
+        # Close the serial port first so that readline() unblocks
+        # immediately, rather than waiting for the serial timeout.
+        if self.ser is not None and self.ser.is_open:
+            self.ser.close()
         if self._reader_thread:
-            self._reader_thread.join(timeout=1.0)
+            self._reader_thread.join(timeout=2.0)
             self._reader_thread = None
 
     def wait_for_response(

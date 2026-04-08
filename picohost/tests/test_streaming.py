@@ -15,8 +15,12 @@ class TestStreamingData:
     def test_read_line_returns_decoded_string(self):
         """read_line() returns a stripped UTF-8 string from the peer."""
         device = DummyPicoDevice("/dev/dummy")
-        # Stop reader thread so it doesn't consume our data
-        device.stop()
+        # Stop reader thread so it doesn't consume our data,
+        # but keep the serial port open for manual read_line().
+        device._running = False
+        if device._reader_thread:
+            device._reader_thread.join(timeout=2.0)
+            device._reader_thread = None
 
         device.ser.peer.write(b'{"test": "data"}\n')
         result = device.read_line()
