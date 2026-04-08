@@ -1,0 +1,18 @@
+[Unit]
+Description=EIGSEP Pico Manager
+After=redis-server.service
+Requires=redis-server.service
+
+[Service]
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/venv/bin/pico-manager --config %h/eigsep/pico-firmware/pico_config.json
+Restart=always
+RestartSec=5
+
+User=eigsep
+Group=eigsep
+WorkingDirectory=%h/eigsep/pico-firmware
+SyslogIdentifier=eigsep-pico
+
+[Install]
+WantedBy=multi-user.target

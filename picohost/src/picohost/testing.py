@@ -52,9 +52,7 @@ class DummyPicoDevice(PicoDevice):
         # PicoMotor.stop() (which sends a halt command instead of stopping
         # the thread).
         PicoDevice.stop(self)
-        if self.is_connected:
-            self.ser.close()
-            self.ser = None
+        self.ser = None
 
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):

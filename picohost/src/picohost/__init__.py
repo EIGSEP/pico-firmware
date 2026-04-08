@@ -14,6 +14,7 @@ from .base import (
     PicoPotentiometer,
 )
 from .motor import PicoMotor
+from .manager import PicoManager
 from . import testing
 from . import emulators
 
@@ -24,6 +25,7 @@ __all__ = [
     "PicoPeltier",
     "PicoIMU",
     "PicoPotentiometer",
+    "PicoManager",
     "testing",
     "emulators",
 ]
