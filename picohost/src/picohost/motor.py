@@ -12,7 +12,6 @@ from .base import PicoDevice
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
-    # XXX this ignores several args from base class
     def __init__(
         self,
         port,
@@ -20,8 +19,10 @@ class PicoMotor(PicoDevice):
         gear_teeth=113,
         microstep=1,
         verbose=False,
+        timeout=5.0,
+        name=None,
+        eig_redis=None,
     ):
-        super().__init__(port)
         self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
@@ -38,9 +39,18 @@ class PicoMotor(PicoDevice):
             "el_dn_delay_us": int,
         }
         self.status = {}
+        self._delay_kwargs = None
+        super().__init__(
+            port, timeout=timeout, name=name, eig_redis=eig_redis
+        )
         self.set_response_handler(self.update_status)
         self.set_delay()
         self.wait_for_updates()
+
+    def on_reconnect(self):
+        """Re-apply delay configuration after a serial reconnect."""
+        if self._delay_kwargs is not None:
+            self.set_delay(**self._delay_kwargs)
 
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
@@ -53,7 +63,10 @@ class PicoMotor(PicoDevice):
         while True:
             if len(self.status) != 0:
                 break
-            assert time.time() - t < timeout
+            if time.time() - t >= timeout:
+                raise TimeoutError(
+                    f"No status from {self.name} within {timeout}s"
+                )
             time.sleep(0.1)
 
     def deg_to_steps(self, degrees: float) -> int:
@@ -99,12 +112,13 @@ class PicoMotor(PicoDevice):
         el_up_delay_us=2300,
         el_dn_delay_us=2300,
     ):
-        self.motor_command(
-            az_up_delay_us=az_up_delay_us,
-            az_dn_delay_us=az_dn_delay_us,
-            el_up_delay_us=el_up_delay_us,
-            el_dn_delay_us=el_dn_delay_us,
-        )
+        self._delay_kwargs = {
+            "az_up_delay_us": az_up_delay_us,
+            "az_dn_delay_us": az_dn_delay_us,
+            "el_up_delay_us": el_up_delay_us,
+            "el_dn_delay_us": el_dn_delay_us,
+        }
+        self.motor_command(**self._delay_kwargs)
 
     def stop(self, az=True, el=True):
         """Hard stop on motors. Default: both."""
