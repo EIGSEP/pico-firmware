@@ -11,6 +11,7 @@ from .base import (
     PicoRFSwitch,
     PicoPeltier,
     PicoIMU,
+    PicoLidar,
     PicoPotentiometer,
 )
 from .motor import PicoMotor
@@ -24,6 +25,7 @@ __all__ = [
     "PicoRFSwitch",
     "PicoPeltier",
     "PicoIMU",
+    "PicoLidar",
     "PicoPotentiometer",
     "PicoManager",
     "testing",

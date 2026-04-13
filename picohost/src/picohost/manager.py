@@ -23,6 +23,7 @@ from pathlib import Path
 from .base import (
     PicoDevice,
     PicoIMU,
+    PicoLidar,
     PicoPeltier,
     PicoPotentiometer,
     PicoRFSwitch,
@@ -47,13 +48,13 @@ APP_NAMES = {
 # Inverse mapping: name -> app_id
 APP_IDS = {v: k for k, v in APP_NAMES.items()}
 
-# Map device name to picohost class. Apps with no specialized class
-# (currently lidar) fall back to bare PicoDevice in :meth:`discover`.
+# Map device name to picohost class.
 PICO_CLASSES = {
     "motor": PicoMotor,
     "tempctrl": PicoPeltier,
     "potmon": PicoPotentiometer,
     "imu_el": PicoIMU,
+    "lidar": PicoLidar,
     "imu_az": PicoIMU,
     "rfswitch": PicoRFSwitch,
 }
@@ -169,10 +170,9 @@ class PicoManager:
                 continue
 
             if name in self.picos:
-                self.logger.warning(
-                    f"Duplicate device name '{name}', skipping"
+                raise ValueError(
+                    f"Duplicate device name '{name}' in config"
                 )
-                continue
 
             cls = PICO_CLASSES.get(name, PicoDevice)
             try:
