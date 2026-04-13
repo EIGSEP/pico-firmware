@@ -709,7 +709,7 @@ class TestTimeoutError:
 
 
 def test_blocked_actions_includes_lifecycle():
-    for action in ("connect", "disconnect", "reconnect", "start", "stop"):
+    for action in ("connect", "disconnect", "reconnect"):
         assert action in _BLOCKED_ACTIONS
 
 

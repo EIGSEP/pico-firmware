@@ -119,8 +119,6 @@ class PicoDevice:
         if response_handler is not None:
             self.set_response_handler(response_handler)
 
-        self.start()
-
     @staticmethod
     def find_pico_ports() -> list[str]:
         """
@@ -145,13 +143,8 @@ class PicoDevice:
         """
         return self.ser is not None and self.ser.is_open
 
-    def connect(self) -> bool:
-        """
-        Connect to the Pico device.
-
-        Returns:
-            True if connection successful, False otherwise
-        """
+    def _open_serial(self) -> bool:
+        """Open the serial port without starting the reader thread."""
         try:
             self.ser = Serial(self.port, self.baudrate, timeout=self.timeout)
             self.ser.reset_input_buffer()
@@ -161,9 +154,26 @@ class PicoDevice:
             self.logger.error(f"Failed to connect to {self.port}: {e}")
             return False
 
+    def _close_serial(self):
+        """Close the serial port if open."""
+        if self.ser is not None and self.ser.is_open:
+            self.ser.close()
+
+    def connect(self) -> bool:
+        """
+        Open the serial connection and start the background reader thread.
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        if not self._open_serial():
+            return False
+        self._start_reader()
+        return True
+
     def disconnect(self):
-        """Disconnect from the device and clean up resources."""
-        self.stop()
+        """Stop the reader thread, close the serial port, and clean up."""
+        self._stop_reader()
         self.ser = None
 
     def reconnect(self) -> bool:
@@ -186,7 +196,6 @@ class PicoDevice:
         if self.usb_serial:
             self._rediscover_port()
         if self.connect():
-            self.start()
             self.on_reconnect()
             return True
         return False
@@ -285,9 +294,10 @@ class PicoDevice:
         """Background thread function for reading serial data."""
         while self._running:
             if not self.is_connected:
-                # Try to reconnect
+                # Try to reopen the serial port (don't call connect() which
+                # would spawn a second reader thread).
                 self.logger.info(f"Attempting to reconnect to {self.port}...")
-                if self.connect():
+                if self._open_serial():
                     self.logger.info(f"Reconnected to {self.port}")
                 else:
                     time.sleep(self._RECONNECT_INTERVAL)
@@ -331,7 +341,7 @@ class PicoDevice:
         """
         self._raw_handler = handler
 
-    def start(self):
+    def _start_reader(self):
         """Start the background reader thread."""
         if not self._running:
             self._running = True
@@ -340,13 +350,12 @@ class PicoDevice:
             )
             self._reader_thread.start()
 
-    def stop(self):
-        """Stop the background reader thread."""
+    def _stop_reader(self):
+        """Stop the background reader thread and close the serial port."""
         self._running = False
         # Close the serial port first so that readline() unblocks
         # immediately, rather than waiting for the serial timeout.
-        if self.ser is not None and self.ser.is_open:
-            self.ser.close()
+        self._close_serial()
         if self._reader_thread:
             self._reader_thread.join(timeout=2.0)
             self._reader_thread = None
@@ -386,10 +395,10 @@ class PicoDevice:
 
     def __enter__(self):
         """Context manager entry."""
-        if self.connect():
-            self.start()
-            return self
-        raise RuntimeError(f"Failed to connect to {self.port}")
+        if not self.is_connected:
+            if not self.connect():
+                raise RuntimeError(f"Failed to connect to {self.port}")
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
@@ -557,13 +566,13 @@ class PicoPeltier(PicoDevice):
                     break
                 time.sleep(0.1)
 
-    def stop(self):
-        """Stop keepalive and reader threads."""
+    def disconnect(self):
+        """Stop keepalive thread, then reader thread and serial port."""
         self._keepalive_running = False
         if self._keepalive_thread:
             self._keepalive_thread.join(timeout=2.0)
             self._keepalive_thread = None
-        super().stop()
+        super().disconnect()
 
     @property
     def watchdog_tripped(self):

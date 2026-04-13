@@ -143,7 +143,7 @@ class TestDummyPicoMotor:
             lambda: motor.status.get("az_target_pos") == 1000,
             cadence_ms=cadence,
         )
-        motor.stop()
+        motor.halt()
         wait_for_condition(
             lambda: (
                 motor.status.get("az_target_pos") == motor.status.get("az_pos")

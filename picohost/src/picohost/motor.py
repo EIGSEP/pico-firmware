@@ -125,7 +125,7 @@ class PicoMotor(PicoDevice):
         }
         self.motor_command(**self._delay_kwargs)
 
-    def stop(self, az=True, el=True):
+    def halt(self, az=True, el=True):
         """Hard stop on motors. Default: both."""
         cmd = {"halt": 0}
         self.motor_command(**cmd)
@@ -293,4 +293,4 @@ class PicoMotor(PicoDevice):
                         print(f"Sleeping for {sleep_between} s)")
                     time.sleep(sleep_between)
         finally:
-            self.stop()
+            self.halt()

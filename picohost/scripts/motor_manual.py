@@ -75,9 +75,9 @@ def main(screen):
     #    c.az_target_deg(180, wait_for_stop=True)
     #    c.az_target_deg(-180, wait_for_stop=True)
     except KeyboardInterrupt:
-        c.stop()
+        c.halt()
     finally:
-        c.stop()
+        c.halt()
 
 
 if __name__ == "__main__":

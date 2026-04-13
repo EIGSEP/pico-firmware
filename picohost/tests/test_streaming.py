@@ -54,7 +54,7 @@ class TestStreamingData:
     def test_read_line_returns_none_on_empty_buffer(self):
         """read_line() returns None when no data is available (timeout)."""
         device = DummyPicoDevice("/dev/dummy")
-        device.stop()
+        device._stop_reader()
         result = device.read_line()
         assert result is None
         device.disconnect()
