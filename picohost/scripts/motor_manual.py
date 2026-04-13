@@ -1,21 +1,31 @@
 """
-Motor control script for PicoMotor
-Allows manual control of azimuth and elevation motors with degree inputs
-and an infinite scanning mode.
+Interactive motor zeroing script.
+
+Use arrow keys (u/d/l/r) to jog the motors into the desired home
+position, then press Enter to zero the step counters.  After zeroing,
+scan() will treat the current physical position as (0, 0).
+
+Controls:
+    u / d  -  jog elevation up / down
+    l / r  -  jog azimuth left / right
+    + / -  -  increase / decrease jog step size
+    Enter  -  zero step counters and exit
+    q      -  quit without zeroing
 """
 
 import json
+import curses
 
 from picohost import PicoMotor
 
 
 def main(screen):
-    curses.noecho()  # optional: wrapper sets cbreak but not noecho
-    screen.nodelay(False)  # blocking getch
+    curses.noecho()
+    screen.nodelay(False)
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Control PicoMotor azimuth and elevation"
+        description="Jog motors to home position and zero step counters"
     )
     parser.add_argument(
         "-c",
@@ -24,18 +34,24 @@ def main(screen):
         default="pico_config.json",
         help="Output of flash_picos (pico_config.json)",
     )
+    parser.add_argument(
+        "--deg",
+        type=float,
+        default=1.0,
+        help="Initial jog step size in degrees (default: 1.0)",
+    )
 
     args = parser.parse_args()
     port = None
     with open(args.pico_config, "r", encoding="utf-8") as f:
         records = json.load(f)
         for config in records:
-            if config["app_id"] == 0:  # must match pico_multi.h
+            if config["app_id"] == 0:
                 port = config["port"]
                 break
-    assert port is not None  # didn't find app_id 0 in pico_config.json
+    assert port is not None, "didn't find app_id 0 in pico_config.json"
 
-    c = PicoMotor(port, verbose=True)
+    c = PicoMotor(port, verbose=False)
     c.set_delay(
         az_up_delay_us=2400,
         az_dn_delay_us=300,
@@ -43,44 +59,57 @@ def main(screen):
         el_dn_delay_us=600,
     )
 
-    def move_up(deg):
-        c.el_move_deg(deg, wait_for_stop=True)
+    deg = args.deg
+    zeroed = False
 
-    def move_dn(deg):
-        c.el_move_deg(-deg, wait_for_stop=True)
+    def refresh_status():
+        screen.clear()
+        screen.addstr(0, 0, "=== Motor Zeroing ===")
+        screen.addstr(2, 0, f"Jog step: {deg:.1f} deg")
+        screen.addstr(3, 0, f"AZ pos: {c.status.get('az_pos', '?')}")
+        screen.addstr(4, 0, f"EL pos: {c.status.get('el_pos', '?')}")
+        screen.addstr(6, 0, "u/d = jog EL | l/r = jog AZ")
+        screen.addstr(7, 0, "+/- = change step size")
+        screen.addstr(8, 0, "Enter = zero and exit | q = quit")
+        screen.refresh()
 
-    def move_lf(deg):
-        c.az_move_deg(deg, wait_for_stop=True)
-
-    def move_rt(deg):
-        c.az_move_deg(-deg, wait_for_stop=True)
-
-    DISPATCH = {
-        "u": move_up,
-        "d": move_dn,
-        "l": move_lf,
-        "r": move_rt,
-    }
     try:
-        deg = 1
         while True:
+            refresh_status()
             ch = screen.getch()
             if ch == -1:
                 continue
+            if ch == ord("\n"):
+                c.halt()
+                c.reset_step_position(az_step=0, el_step=0)
+                zeroed = True
+                break
             if 0 <= ch < 256:
                 key = chr(ch).lower()
-                if key in DISPATCH:
-                    DISPATCH[key](deg)
-        # c.el_move_deg(-10, wait_for_stop=True)
-    #    c.az_target_deg(180, wait_for_stop=True)
-    #    c.az_target_deg(-180, wait_for_stop=True)
+                if key == "q":
+                    break
+                elif key == "u":
+                    c.el_move_deg(deg, wait_for_stop=True)
+                elif key == "d":
+                    c.el_move_deg(-deg, wait_for_stop=True)
+                elif key == "l":
+                    c.az_move_deg(deg, wait_for_stop=True)
+                elif key == "r":
+                    c.az_move_deg(-deg, wait_for_stop=True)
+                elif key == "+":
+                    deg += 1
+                elif key == "-":
+                    deg = max(0.1, deg - 1)
     except KeyboardInterrupt:
-        c.halt()
+        pass
     finally:
         c.halt()
 
+    if zeroed:
+        print("Step counters zeroed. Motors are at home (0, 0).")
+    else:
+        print("Exited without zeroing.")
+
 
 if __name__ == "__main__":
-    import curses
-
     curses.wrapper(main)

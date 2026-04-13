@@ -241,26 +241,29 @@ class PicoMotor(PicoDevice):
         el_first=False,
         repeat_count=None,
         pause_s=None,
-        reset_pos=False,
         sleep_between=None,
     ):
         """
         Perform beam scanning strategy.
 
+        Homes motors to (0, 0) before starting and after normal
+        completion.  Use ``reset_step_position`` beforehand to define
+        where home is.
+
         Parameters
         ---------
-        az_range : array_like
-        el_range : array_like
+        az_range_deg : array_like
+        el_range_deg : array_like
         el_first : bool
         repeat_count : int
         pause_s : float
             Pause time at each position.
-        reset_pos : bool
         sleep_between : float
             Sleep between every scan (if `repeat_count` is not None).
         """
-        if reset_pos:
-            self.reset_deg_position(az_deg=0.0, el_deg=0.0)
+        # home before scanning
+        self.az_target_steps(0, wait_for_stop=True)
+        self.el_target_steps(0, wait_for_stop=True)
         # set order of scanning
         if el_first:
             mv_axis1, mv_axis2 = self.az_target_deg, self.el_target_deg
