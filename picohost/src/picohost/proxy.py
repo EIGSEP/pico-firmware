@@ -18,6 +18,7 @@ Usage::
 
 import json
 import logging
+import time
 import uuid
 
 from .base import PicoRFSwitch
@@ -97,6 +98,13 @@ class PicoProxy:
             return None
 
         request_id = str(uuid.uuid4())
+        # Capture current stream end so we don't miss fast responses.
+        try:
+            info = self.redis.xinfo_stream(RESP_STREAM)
+            last_id = info["last-generated-id"]
+        except Exception:
+            # Stream doesn't exist yet — read from the beginning.
+            last_id = "0-0"
         cmd = {"action": action, **kwargs}
         self.redis.xadd(
             CMD_STREAM,
@@ -107,18 +115,22 @@ class PicoProxy:
                 "cmd": json.dumps(cmd),
             },
         )
-        return self._wait_response(request_id)
+        return self._wait_response(request_id, last_id)
 
-    def _wait_response(self, request_id):
+    def _wait_response(self, request_id, last_id):
         """
         Poll ``stream:pico_resp`` for a response matching *request_id*.
         """
-        # Read only new messages from the response stream.
-        last_id = "$"
-        timeout_ms = int(self.timeout * 1000)
+        deadline = time.monotonic() + self.timeout
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"No response for {self.name} within {self.timeout}s"
+                )
+            block_ms = int(remaining * 1000)
             result = self.redis.xread(
-                {RESP_STREAM: last_id}, block=timeout_ms, count=10
+                {RESP_STREAM: last_id}, block=block_ms, count=10
             )
             if not result:
                 raise TimeoutError(
