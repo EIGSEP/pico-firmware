@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional, Callable
 from serial import Serial
 from serial.tools import list_ports
 
+from .flash_picos import find_pico_ports
+
 logger = logging.getLogger(__name__)
 
 # USB IDs for Raspberry Pi Pico
@@ -78,6 +80,7 @@ class PicoDevice:
         name=None,
         eig_redis=None,
         response_handler=None,
+        usb_serial: str = "",
     ):
         """
         Initialize a Pico device connection.
@@ -88,11 +91,13 @@ class PicoDevice:
             timeout: Serial read timeout in seconds (default: 1.0)
             name: str
             eig_redis: EigsepRedis instance
+            usb_serial: USB serial number for port re-discovery
         """
         self.logger = logger
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
+        self.usb_serial = usb_serial
         self.ser = None
         self._running = False
         self._reader_thread = None
@@ -165,6 +170,9 @@ class PicoDevice:
         """
         Disconnect and reconnect to the device.
 
+        If *usb_serial* is set the current USB port mapping is checked
+        first so that the device is found even after a USB re-enumeration.
+
         Calls ``on_reconnect()`` after a successful reconnect so that
         subclasses can re-send any configuration that the firmware loses
         across a serial drop (e.g. PicoMotor's delay settings).
@@ -175,11 +183,28 @@ class PicoDevice:
             True if reconnection succeeded, False otherwise.
         """
         self.disconnect()
+        if self.usb_serial:
+            self._rediscover_port()
         if self.connect():
             self.start()
             self.on_reconnect()
             return True
         return False
+
+    def _rediscover_port(self):
+        """Update ``self.port`` if the USB serial maps to a new device."""
+        try:
+            ports = find_pico_ports()
+        except Exception as e:
+            self.logger.warning(f"Port re-discovery failed: {e}")
+            return
+        for dev, ser in ports.items():
+            if ser == self.usb_serial and dev != self.port:
+                self.logger.info(
+                    f"{self.name}: port changed {self.port} -> {dev}"
+                )
+                self.port = dev
+                return
 
     def on_reconnect(self):
         """
@@ -457,6 +482,7 @@ class PicoPeltier(PicoDevice):
         name=None,
         eig_redis=None,
         keepalive_interval=10.0,
+        usb_serial="",
     ):
         """
         Parameters
@@ -481,7 +507,10 @@ class PicoPeltier(PicoDevice):
         self._keepalive_interval = keepalive_interval
         self.verbose = verbose
         self.status = {}
-        super().__init__(port, timeout=timeout, name=name, eig_redis=eig_redis)
+        super().__init__(
+            port, timeout=timeout, name=name,
+            eig_redis=eig_redis, usb_serial=usb_serial,
+        )
         self.set_response_handler(self.update_status)
         self.wait_for_updates()
         self._start_keepalive()
@@ -600,6 +629,7 @@ class PicoPotentiometer(PicoDevice):
         timeout=5.0,
         name=None,
         eig_redis=None,
+        usb_serial="",
     ):
         """
         Parameters
@@ -614,6 +644,8 @@ class PicoPotentiometer(PicoDevice):
         name : str, optional
         eig_redis : EigsepRedis, optional
             EigsepRedis response handler (default: None).
+        usb_serial : str, optional
+            USB serial number for port re-discovery.
         """
         self._cal = {"pot_el": None, "pot_az": None}
         super().__init__(
@@ -621,6 +653,7 @@ class PicoPotentiometer(PicoDevice):
             timeout=timeout,
             name=name,
             eig_redis=eig_redis,
+            usb_serial=usb_serial,
         )
         if calibration_file is not None:
             self.load_calibration(calibration_file)

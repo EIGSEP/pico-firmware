@@ -93,7 +93,13 @@ class PicoManager:
     relays commands from a Redis stream to the right device.
     """
 
-    def __init__(self, eig_redis, config_file="pico_config.json"):
+    def __init__(
+        self,
+        eig_redis,
+        config_file="pico_config.json",
+        uf2_path="build/pico_multi.uf2",
+        use_redis_config=True,
+    ):
         """
         Parameters
         ----------
@@ -105,9 +111,16 @@ class PicoManager:
             ``redis.Redis`` is accepted.
         config_file : str or Path
             Path to ``pico_config.json`` produced by ``flash-picos``.
+        uf2_path : str or Path
+            Path to the UF2 firmware file for auto-flashing.
+        use_redis_config : bool
+            If ``True`` (default), check Redis for existing config
+            before falling back to the file/flash.
         """
         self.eig_redis = eig_redis
         self.config_file = Path(config_file)
+        self.uf2_path = Path(uf2_path)
+        self.use_redis_config = use_redis_config
         self.picos = {}
         self._running = False
         self._health_thread = None
@@ -131,15 +144,89 @@ class PicoManager:
 
     def discover(self):
         """
-        Read ``pico_config.json``, instantiate the matching
-        :class:`PicoDevice` subclass for each entry, and publish the
-        device list / config / initial health to Redis.
+        Discover pico devices using a cascading config strategy:
+
+        1. Redis ``CONFIG_HASH`` (previous run persisted config)
+        2. JSON config file on disk
+        3. Flash-and-discover (if UF2 exists)
+
+        After any source succeeds the config is written back to both
+        Redis (via :meth:`_register_devices`) and the JSON file (via
+        :meth:`_save_config_to_file`).
+        """
+        devices = (
+            self._load_config_from_redis()
+            if self.use_redis_config else None
+        )
+        if devices:
+            self.logger.info(
+                f"Loaded {len(devices)} device(s) from Redis"
+            )
+            self._register_devices(devices)
+            self._save_config_to_file(devices)
+            return
+
+        devices = self._load_config_from_file()
+        if devices:
+            self.logger.info(
+                f"Loaded {len(devices)} device(s) from config file"
+            )
+            self._register_devices(devices)
+            self._save_config_to_file(devices)
+            return
+
+        self._try_flash_discover()
+        if self.picos:
+            devices = self._current_device_list()
+            self._save_config_to_file(devices)
+
+    def _load_config_from_redis(self):
+        """
+        Try to load device config from the Redis ``CONFIG_HASH``.
+
+        Returns
+        -------
+        list[dict] or None
+            Device config dicts if Redis has config, ``None`` otherwise.
+        """
+        r = self._redis()
+        try:
+            raw = r.hgetall(CONFIG_HASH)
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to read config from Redis: {e}"
+            )
+            return None
+
+        if not raw:
+            return None
+
+        devices = []
+        for name, blob in raw.items():
+            blob = self._decode(blob)
+            try:
+                devices.append(json.loads(blob))
+            except json.JSONDecodeError:
+                self.logger.warning(
+                    f"Invalid JSON in Redis config for "
+                    f"{self._decode(name)}"
+                )
+        return devices if devices else None
+
+    def _load_config_from_file(self):
+        """
+        Read the device list from the JSON config file.
+
+        Returns
+        -------
+        list[dict] or None
+            Device config dicts if the file is valid, ``None`` otherwise.
         """
         if not self.config_file.exists():
             self.logger.warning(
                 f"Config file {self.config_file} not found"
             )
-            return
+            return None
 
         with open(self.config_file) as f:
             try:
@@ -148,8 +235,40 @@ class PicoManager:
                 self.logger.error(
                     f"Invalid JSON in config file: {e}"
                 )
-                raise ValueError(f"Invalid JSON in config file: {e}") from e
+                return None
 
+        return devices if devices else None
+
+    def _save_config_to_file(self, devices):
+        """Persist the device list to the JSON config file."""
+        try:
+            with open(self.config_file, "w") as f:
+                json.dump(devices, f, indent=2)
+            self.logger.debug(
+                f"Wrote {len(devices)} device(s) to {self.config_file}"
+            )
+        except OSError as e:
+            self.logger.warning(
+                f"Could not write config file {self.config_file}: {e}"
+            )
+
+    def _current_device_list(self):
+        """Build a device list from currently registered picos."""
+        devices = []
+        for name, pico in self.picos.items():
+            app_id = APP_IDS.get(name, -1)
+            devices.append({
+                "app_id": app_id,
+                "port": pico.port,
+                "usb_serial": getattr(pico, "usb_serial", ""),
+            })
+        return devices
+
+    def _register_devices(self, devices):
+        """
+        Instantiate the matching :class:`PicoDevice` subclass for each
+        entry in *devices* and publish to Redis.
+        """
         r = self._redis()
         for dev_info in devices:
             app_id = dev_info.get("app_id")
@@ -176,7 +295,10 @@ class PicoManager:
 
             cls = PICO_CLASSES.get(name, PicoDevice)
             try:
-                pico = cls(port, eig_redis=self.eig_redis, name=name)
+                pico = cls(
+                    port, eig_redis=self.eig_redis,
+                    name=name, usb_serial=usb_serial,
+                )
                 self.picos[name] = pico
                 r.sadd(PICOS_SET, name)
                 r.hset(CONFIG_HASH, name, json.dumps({
@@ -196,6 +318,27 @@ class PicoManager:
                 self.logger.error(
                     f"Failed to init {name} on {port}: {e}"
                 )
+
+    def _try_flash_discover(self):
+        """Attempt to flash attached Picos and discover devices."""
+        from .flash_picos import flash_and_discover
+
+        try:
+            devices = flash_and_discover(uf2_path=self.uf2_path)
+        except FileNotFoundError:
+            self.logger.warning(
+                f"UF2 file {self.uf2_path} not found, skipping flash"
+            )
+            return
+        except Exception as e:
+            self.logger.error(f"Flash-and-discover failed: {e}")
+            return
+
+        if not devices:
+            self.logger.warning("Flash produced no devices")
+            return
+
+        self._register_devices(devices)
 
     # --- Health Monitoring ---
 
@@ -221,10 +364,21 @@ class PicoManager:
                     f"(connected={connected}, stale={stale})"
                 )
                 try:
+                    old_port = pico.port
                     if pico.reconnect():
                         self.logger.info(f"{name}: reconnected")
                         r.sadd(PICOS_SET, name)
                         connected = True
+                        if pico.port != old_port:
+                            app_id = APP_IDS.get(name, -1)
+                            r.hset(CONFIG_HASH, name, json.dumps({
+                                "port": pico.port,
+                                "app_id": app_id,
+                                "usb_serial": pico.usb_serial,
+                            }))
+                            self._save_config_to_file(
+                                self._current_device_list()
+                            )
                     else:
                         r.srem(PICOS_SET, name)
                         connected = False
@@ -295,6 +449,10 @@ class PicoManager:
                     {"error": "command must be a JSON object"}
                 ),
             })
+            return
+
+        if target == "manager":
+            self._handle_manager_cmd(r, source, cmd)
             return
 
         pico = self.picos.get(target)
@@ -378,17 +536,13 @@ class PicoManager:
         """
         Route a parsed command dict to the right pico method.
 
-        If ``cmd["action"]`` is set, the named method is invoked with
-        the remaining fields as kwargs (subject to the
-        :data:`_BLOCKED_ACTIONS` deny-list). Otherwise the dict is sent
-        to the firmware as a raw JSON command via ``send_command``.
+        ``cmd["action"]`` must name a public method on the device class.
+        The method is invoked with the remaining fields as kwargs
+        (subject to the :data:`_BLOCKED_ACTIONS` deny-list).
         """
         action = cmd.pop("action", None)
         if action is None:
-            success = pico.send_command(cmd)
-            if not success:
-                raise RuntimeError("send_command failed")
-            return {"sent": True}
+            raise ValueError("'action' is required")
 
         if action in _BLOCKED_ACTIONS or action.startswith("_"):
             raise ValueError(f"Action '{action}' is not allowed")
@@ -401,6 +555,48 @@ class PicoManager:
 
         result = method(**cmd)
         return {"action": action, "result": result}
+
+    def _handle_manager_cmd(self, r, source, cmd):
+        """Handle commands targeted at the manager itself."""
+        action = cmd.get("action", "")
+        resp = {"target": "manager", "source": source}
+
+        if action == "rediscover":
+            self.logger.info(
+                f"Rediscover requested by {source}"
+            )
+            try:
+                for name, pico in list(self.picos.items()):
+                    try:
+                        pico.disconnect()
+                    except Exception:
+                        pass
+                    r.srem(PICOS_SET, name)
+                self.picos.clear()
+                self.discover()
+                device_names = list(self.picos.keys())
+                resp.update({
+                    "status": "ok",
+                    "data": json.dumps({
+                        "devices": device_names,
+                        "count": len(device_names),
+                    }),
+                })
+            except Exception as e:
+                self.logger.error(f"Rediscover failed: {e}")
+                resp.update({
+                    "status": "error",
+                    "data": json.dumps({"error": str(e)}),
+                })
+        else:
+            resp.update({
+                "status": "error",
+                "data": json.dumps(
+                    {"error": f"unknown manager action: {action}"}
+                ),
+            })
+
+        r.xadd(RESP_STREAM, resp)
 
     # --- Lifecycle ---
 
@@ -472,6 +668,19 @@ def main():
         help="Path to pico_config.json (default: pico_config.json)",
     )
     parser.add_argument(
+        "--uf2", default="build/pico_multi.uf2",
+        help="Path to pico_multi.uf2 for auto-flashing "
+             "(default: build/pico_multi.uf2)",
+    )
+    parser.add_argument(
+        "--no-redis-config", action="store_true",
+        help="Skip Redis config lookup, re-discover from file/flash",
+    )
+    parser.add_argument(
+        "--clear-config", action="store_true",
+        help="Clear stored config from Redis before discovering",
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
@@ -494,7 +703,14 @@ def main():
         sys.exit(1)
 
     r = EigsepRedis()
-    mgr = PicoManager(r, config_file=args.config)
+    if args.clear_config:
+        r.r.delete(CONFIG_HASH)
+    mgr = PicoManager(
+        r,
+        config_file=args.config,
+        uf2_path=args.uf2,
+        use_redis_config=not args.no_redis_config,
+    )
     mgr.run()
 
 

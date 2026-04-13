@@ -15,6 +15,7 @@ from picohost.manager import (
     APP_IDS,
     APP_NAMES,
     CMD_STREAM,
+    CONFIG_HASH,
     HEALTH_HASH,
     PICO_CLASSES,
     PICOS_SET,
@@ -160,12 +161,10 @@ class TestAppMappings:
 
 
 class TestRouteCommand:
-    def test_raw_command_sends_dict(self, mgr):
+    def test_missing_action_rejected(self, mgr):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        result = mgr._route_command(
-            pico, "rfswitch", {"some_key": "value"}
-        )
-        assert result == {"sent": True}
+        with pytest.raises(ValueError, match="'action' is required"):
+            mgr._route_command(pico, "rfswitch", {"some_key": "value"})
 
     def test_named_action_invokes_method(self, mgr):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
@@ -342,6 +341,40 @@ class TestDiscover:
         mgr.discover()
         assert mgr.picos == {}
 
+    def test_invalid_json_config_is_a_noop(self, mgr, tmp_path):
+        cfg = tmp_path / "bad.json"
+        cfg.write_text("{not valid json!!")
+        mgr.config_file = cfg
+        mgr.discover()  # must not raise
+        assert mgr.picos == {}
+
+    def test_flash_fallback_on_missing_config(
+        self, mgr, monkeypatch, tmp_path
+    ):
+        """discover() cascades to flash when Redis + file are empty."""
+        import picohost.manager as mgr_mod
+        import picohost.flash_picos as fp_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        monkeypatch.setattr(
+            fp_mod, "flash_and_discover",
+            lambda **kw: [
+                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
+            ],
+        )
+
+        mgr.config_file = tmp_path / "does-not-exist.json"
+        mgr.discover()
+        assert "rfswitch" in mgr.picos
+
+    def test_flash_fallback_uf2_missing_is_noop(self, mgr, tmp_path):
+        mgr.config_file = tmp_path / "does-not-exist.json"
+        mgr.uf2_path = tmp_path / "nonexistent.uf2"
+        mgr._try_flash_discover()
+        assert mgr.picos == {}
+
     def test_publishes_devices_to_redis(self, mgr, monkeypatch, tmp_path):
         # Stand the manager up against a config that points "rfswitch"
         # at /dev/dummy, then patch PICO_CLASSES so discover()
@@ -365,6 +398,139 @@ class TestDiscover:
         assert health["connected"] is True
 
 
+# --- Redis config store ---------------------------------------------------
+
+
+class TestRedisConfig:
+    def test_discover_from_redis(self, mgr, monkeypatch):
+        """When Redis has config, discover() uses it without touching file."""
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        r = mgr._redis()
+        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
+            "app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC",
+        }))
+        mgr.config_file = "/nonexistent/path.json"  # shouldn't be read
+        mgr.discover()
+        assert "rfswitch" in mgr.picos
+
+    def test_discover_skips_redis_when_disabled(
+        self, mgr, monkeypatch, tmp_path
+    ):
+        """--no-redis-config makes discover() skip Redis."""
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        # Populate Redis — should be ignored
+        r = mgr._redis()
+        r.hset(CONFIG_HASH, "motor", json.dumps({
+            "app_id": 0, "port": "/dev/dummy", "usb_serial": "OLD",
+        }))
+        # Provide a file with rfswitch instead
+        cfg = tmp_path / "pico_config.json"
+        cfg.write_text(json.dumps([
+            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "NEW"},
+        ]))
+        mgr.config_file = cfg
+        mgr.use_redis_config = False
+        mgr.discover()
+        assert "rfswitch" in mgr.picos
+        assert "motor" not in mgr.picos
+
+    def test_discover_writes_back_to_file(
+        self, mgr, monkeypatch, tmp_path
+    ):
+        """After discovering from Redis, config is written back to file."""
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        r = mgr._redis()
+        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
+            "app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC",
+        }))
+        cfg = tmp_path / "pico_config.json"
+        mgr.config_file = cfg
+        mgr.discover()
+        assert cfg.exists()
+        written = json.loads(cfg.read_text())
+        assert len(written) == 1
+        assert written[0]["app_id"] == 5
+
+    def test_file_fallback_when_redis_empty(
+        self, mgr, monkeypatch, tmp_path
+    ):
+        """When Redis is empty, discover() falls through to file."""
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        cfg = tmp_path / "pico_config.json"
+        cfg.write_text(json.dumps([
+            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
+        ]))
+        mgr.config_file = cfg
+        mgr.discover()
+        assert "rfswitch" in mgr.picos
+        # Verify config was also published to Redis
+        stored = json.loads(mgr._redis().hget(CONFIG_HASH, "rfswitch"))
+        assert stored["app_id"] == 5
+
+
+# --- manager commands -----------------------------------------------------
+
+
+class TestManagerCommand:
+    def test_rediscover_clears_and_reloads(
+        self, mgr, monkeypatch, tmp_path
+    ):
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        # Start with a device
+        _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        assert "rfswitch" in mgr.picos
+
+        # Set up Redis config for rediscover to find
+        r = mgr._redis()
+        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
+            "app_id": 5, "port": "/dev/dummy", "usb_serial": "X",
+        }))
+        cfg = tmp_path / "pico_config.json"
+        mgr.config_file = cfg
+
+        mgr._process_command(r, "1-0", {
+            "target": "manager",
+            "cmd": json.dumps({"action": "rediscover"}),
+            "source": "test",
+        })
+        _, resp = r._streams[RESP_STREAM][0]
+        assert resp["status"] == "ok"
+        data = json.loads(resp["data"])
+        assert "rfswitch" in data["devices"]
+        assert data["count"] == 1
+
+    def test_unknown_manager_action_returns_error(self, mgr):
+        r = mgr._redis()
+        mgr._process_command(r, "1-0", {
+            "target": "manager",
+            "cmd": json.dumps({"action": "nope"}),
+            "source": "test",
+        })
+        _, resp = r._streams[RESP_STREAM][0]
+        assert resp["status"] == "error"
+        assert "unknown manager action" in json.loads(resp["data"])["error"]
+
+
 # --- reconnect & timeout regressions --------------------------------------
 
 
@@ -385,6 +551,44 @@ class TestReconnectHook:
         motor.on_reconnect()
         assert len(calls) == 1
         assert calls[0] == motor._delay_kwargs
+
+    def test_port_rediscovery_updates_port(self, mgr, monkeypatch):
+        """When usb_serial maps to a new port, reconnect uses it."""
+        import picohost.base as base_mod
+
+        switch = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        switch.usb_serial = "SER_ABC"
+        old_port = switch.port
+
+        monkeypatch.setattr(
+            base_mod, "find_pico_ports",
+            lambda: {"/dev/ttyACM5": "SER_ABC"},
+        )
+        # _rediscover_port should update port
+        switch._rediscover_port()
+        assert switch.port == "/dev/ttyACM5"
+        assert switch.port != old_port
+
+    def test_port_rediscovery_noop_when_unchanged(self, mgr, monkeypatch):
+        import picohost.base as base_mod
+
+        switch = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        switch.usb_serial = "SER_ABC"
+        switch.port = "/dev/ttyACM0"
+
+        monkeypatch.setattr(
+            base_mod, "find_pico_ports",
+            lambda: {"/dev/ttyACM0": "SER_ABC"},
+        )
+        switch._rediscover_port()
+        assert switch.port == "/dev/ttyACM0"
+
+    def test_port_rediscovery_noop_without_usb_serial(self, mgr):
+        switch = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        original_port = switch.port
+        switch.usb_serial = ""
+        switch._rediscover_port()
+        assert switch.port == original_port
 
 
 class _StubDevice:

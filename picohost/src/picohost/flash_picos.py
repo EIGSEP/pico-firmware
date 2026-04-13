@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import subprocess
 import time
 import sys
@@ -7,6 +8,8 @@ import json
 from pathlib import Path
 from serial import Serial
 from serial.tools import list_ports
+
+logger = logging.getLogger(__name__)
 
 PICO_VID = 0x2E8A  # Raspberry Pi Foundation USB vendor ID
 PICO_PID_BOOTSEL = 0x0003  # BOOTSEL-mode PID
@@ -59,6 +62,74 @@ def read_json_from_serial(port, baud, timeout):
     raise RuntimeError(f"[{port}] Timed out waiting for JSON")
 
 
+def flash_and_discover(
+    uf2_path="build/pico_multi.uf2", port=None, baud=115200, timeout=10
+):
+    """
+    Flash all attached Picos and read device config from each.
+
+    Parameters
+    ----------
+    uf2_path : str or Path
+        Path to the UF2 firmware file.
+    port : str, optional
+        Limit to a single serial port.  ``None`` means all discovered
+        Picos.
+    baud : int
+        Serial baud rate for reading JSON after flash.
+    timeout : int
+        Seconds to wait for each Pico's JSON response.
+
+    Returns
+    -------
+    list[dict]
+        List of device info dicts, each with keys like ``app_id``,
+        ``port``, ``usb_serial``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the UF2 file does not exist.
+    """
+    uf2_path = Path(uf2_path)
+    if not uf2_path.is_file():
+        raise FileNotFoundError(f"UF2 file not found: {uf2_path}")
+
+    ports = find_pico_ports()
+    if port:
+        ports = {k: v for k, v in ports.items() if k == port}
+
+    if not ports:
+        logger.info("No Raspberry Pi Pico serial ports found")
+        return []
+
+    logger.info(f"Found Picos on: {ports}")
+    all_devices = []
+
+    for port_dev, port_serial in ports.items():
+        logger.info(f"Flashing Pico on port: {port_dev}")
+        try:
+            flash_uf2(uf2_path, port_serial)
+        except RuntimeError as e:
+            logger.error(f"Flash failed on {port_dev}: {e}")
+            continue
+
+        time.sleep(2)  # wait for reboot
+
+        try:
+            data = read_json_from_serial(port_dev, baud, timeout)
+        except RuntimeError as e:
+            logger.error(f"Serial read failed on {port_dev}: {e}")
+            continue
+
+        data["port"] = port_dev
+        data["usb_serial"] = port_serial
+        all_devices.append(data)
+        logger.info(f"Read device info from {port_dev}")
+
+    return all_devices
+
+
 def main():
     p = argparse.ArgumentParser(
         description=(
@@ -94,49 +165,21 @@ def main():
     )
     args = p.parse_args()
 
-    # Check if the UF2 file exists
-    uf2_path = Path(args.uf2)
-    if not uf2_path.is_file():
-        print(f"UF2 file not found: {uf2_path}", file=sys.stderr)
-        sys.exit(1)
-
-    ports = find_pico_ports()
-    if args.port:
-        ports = {k: v for k, v in ports.items() if k == args.port}
-    if not ports:
-        print(
-            "No Raspberry Pi Pico serial ports found.",
-            file=sys.stderr,
+    try:
+        all_devices = flash_and_discover(
+            uf2_path=args.uf2,
+            port=args.port,
+            baud=args.baud,
+            timeout=args.timeout,
         )
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found Picos on: {ports}")
-    all_devices = []
+    if not all_devices:
+        print("No devices discovered.", file=sys.stderr)
+        sys.exit(1)
 
-    for port_dev, port_serial in ports.items():
-        print("Flashing Pico on port:", port_dev)
-        try:
-            flash_uf2(uf2_path, port_serial)
-        except RuntimeError as e:
-            print(e, file=sys.stderr)
-            continue
-
-        # give the Pico a moment to reboot into user code
-        time.sleep(2)
-
-        try:
-            data = read_json_from_serial(port_dev, args.baud, args.timeout)
-        except RuntimeError as e:
-            print(e, file=sys.stderr)
-            continue
-
-        # Add port and serial info to the device data
-        data["port"] = port_dev
-        data["usb_serial"] = port_serial
-        all_devices.append(data)
-        print(f"Read device info from {port_dev}")
-
-    # Write all device info to a single file
     with open(args.output, "w") as f:
         json.dump(all_devices, f, indent=2)
     print(

@@ -22,6 +22,7 @@ class PicoMotor(PicoDevice):
         timeout=5.0,
         name=None,
         eig_redis=None,
+        usb_serial="",
     ):
         self.verbose = verbose
         self.step_angle_deg = step_angle_deg
@@ -41,7 +42,8 @@ class PicoMotor(PicoDevice):
         self.status = {}
         self._delay_kwargs = None
         super().__init__(
-            port, timeout=timeout, name=name, eig_redis=eig_redis
+            port, timeout=timeout, name=name,
+            eig_redis=eig_redis, usb_serial=usb_serial,
         )
         self.set_response_handler(self.update_status)
         self.set_delay()
