@@ -355,7 +355,11 @@ class PicoManager:
     def health_loop(self):
         """Periodic health check thread."""
         while self._running:
-            self._check_health()
+            try:
+                self._check_health()
+            except Exception as e:
+                if self._running:
+                    self.logger.error(f"health_loop error: {e}")
             time.sleep(HEALTH_CHECK_INTERVAL)
 
     def _check_health(self):
