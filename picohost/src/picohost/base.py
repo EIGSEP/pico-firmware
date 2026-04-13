@@ -166,6 +166,8 @@ class PicoDevice:
         Returns:
             True if connection successful, False otherwise
         """
+        if self.is_connected:
+            return True
         if not self._open_serial():
             return False
         self._start_reader()
@@ -573,6 +575,10 @@ class PicoPeltier(PicoDevice):
             self._keepalive_thread.join(timeout=2.0)
             self._keepalive_thread = None
         super().disconnect()
+
+    def on_reconnect(self):
+        """Restart the keepalive thread after a reconnect."""
+        self._start_keepalive()
 
     @property
     def watchdog_tripped(self):
