@@ -152,11 +152,7 @@ class TestAppMappings:
             assert APP_IDS[name] == app_id
 
     def test_pico_classes_cover_specialized_apps(self):
-        # Lidar intentionally has no specialized class — manager falls
-        # back to bare PicoDevice for it.
         for name in APP_NAMES.values():
-            if name == "lidar":
-                continue
             assert name in PICO_CLASSES
 
 

@@ -584,6 +584,12 @@ class PicoIMU(PicoDevice):
     pass
 
 
+class PicoLidar(PicoDevice):
+    """Specialized class for lidar distance sensor devices."""
+
+    pass
+
+
 class PicoPotentiometer(PicoDevice):
     """Potentiometer monitoring device with voltage-to-angle calibration."""
 
