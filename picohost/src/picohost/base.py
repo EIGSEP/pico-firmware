@@ -302,7 +302,10 @@ class PicoDevice:
                     self.last_status_time = time.time()
                     # upload to redis
                     if self.redis_handler:
-                        self.redis_handler(data)
+                        try:
+                            self.redis_handler(data)
+                        except Exception as e:
+                            self.logger.error(f"Redis publish failed: {e}")
                     # Call response handler if set
                     if self._response_handler:
                         self._response_handler(data)
