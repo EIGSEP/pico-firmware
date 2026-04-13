@@ -469,7 +469,7 @@ class PicoManager:
             return
 
         if target == "manager":
-            self._handle_manager_cmd(r, source, cmd)
+            self._handle_manager_cmd(r, source, cmd, request_id)
             return
 
         pico = self.picos.get(target)
@@ -564,10 +564,10 @@ class PicoManager:
         result = method(**cmd)
         return {"action": action, "result": result}
 
-    def _handle_manager_cmd(self, r, source, cmd):
+    def _handle_manager_cmd(self, r, source, cmd, request_id=""):
         """Handle commands targeted at the manager itself."""
         action = cmd.get("action", "")
-        resp = {"target": "manager", "source": source}
+        resp = {"target": "manager", "source": source, "request_id": request_id}
 
         if action == "rediscover":
             self.logger.info(f"Rediscover requested by {source}")

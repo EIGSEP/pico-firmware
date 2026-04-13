@@ -110,6 +110,13 @@ class MockRedis:
             self._cv.notify_all()
             return msg_id
 
+    def xinfo_stream(self, stream):
+        with self._cv:
+            msgs = self._streams.get(stream, [])
+            if not msgs:
+                raise Exception(f"no such key: {stream}")
+            return {"last-generated-id": msgs[-1][0]}
+
     def xread(self, streams, block=None, count=None):
         timeout_s = (block / 1000.0) if block else 0
         deadline = time.time() + timeout_s if block else 0
