@@ -349,27 +349,26 @@ class TestCommandRelay:
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "ok"
 
-    def test_raw_command_reaches_emulator(self, mgr):
+    def test_raw_command_rejected(self, mgr):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         wait_for_condition(
             lambda: pico.last_status.get("sensor_name") is not None,
             cadence_ms=CADENCE_MS,
         )
         r = mgr._redis()
-        before = pico.last_status.get("sw_state")
-        # Raw command (no "action" field) goes straight to send_command.
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"sw_state": 1}),
-            "source": "test",
-        })
-        settled = wait_for_settle(
-            lambda: pico.last_status.get("sw_state"),
-            initial=before,
-            cadence_ms=CADENCE_MS,
-            max_cycles=10,
+        # Commands without "action" must be rejected.
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"sw_state": 1}),
+                "source": "test",
+            },
         )
-        assert settled == 1
+        _, resp = r._streams[RESP_STREAM][0]
+        assert resp["status"] == "error"
+        assert "action" in resp["data"]
 
 
 # --- TestCmdLoopEndToEnd -----------------------------------------------------
