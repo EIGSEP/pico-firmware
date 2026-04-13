@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.0.0](https://github.com/EIGSEP/pico-firmware/compare/v1.0.0...v2.0.0) (2026-04-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **picohost:** PicoDevice.start()/stop() removed from public API. PicoMotor.stop() renamed to PicoMotor.halt().
+
+### Features
+
+* **picohost:** add cascading config discovery, flash integration, and Redis config store ([2f5c873](https://github.com/EIGSEP/pico-firmware/commit/2f5c873d0de483115644629d7a9229e4414f9b29))
+* **picohost:** add PicoLidar class, raise on duplicate device name ([0d4eafd](https://github.com/EIGSEP/pico-firmware/commit/0d4eafddd2e1cc7f7954c552f9e38eeb2c173d9f))
+* **picohost:** add PicoManager service for redis-based pico orchestration ([4aceac9](https://github.com/EIGSEP/pico-firmware/commit/4aceac94fefc5f26cd55aaa36b32a4f7242fdcba))
+* **picohost:** add reconnect hook and last_status_time tracking ([a7c2801](https://github.com/EIGSEP/pico-firmware/commit/a7c28015b421894fe335fe53c1fedd50590a4f03))
+* **picohost:** scan() homes before and after, rework motor_manual as zeroing script ([fbcca2a](https://github.com/EIGSEP/pico-firmware/commit/fbcca2a72fe3218cd18c9136f044766bcc848cb6))
+
+
+### Bug Fixes
+
+* **picohost:** fix PicoMotor halt no-op params, broken reset_deg_position, and missing scan homing ([e6c115d](https://github.com/EIGSEP/pico-firmware/commit/e6c115d4cf1382f5f15522f59d190d7100a9ec9b))
+* **picohost:** make connect() idempotent and restart keepalive on reconnect ([5f898d8](https://github.com/EIGSEP/pico-firmware/commit/5f898d8c00a2127003914d59e0f6101fb96ccfd8))
+* **picohost:** prevent Redis failures from killing background threads ([1ffe4d4](https://github.com/EIGSEP/pico-firmware/commit/1ffe4d419b4bbde92c35be9a435cd0d85331f4dc))
+
+
+### Code Refactoring
+
+* **picohost:** simplify PicoDevice lifecycle API ([cb03742](https://github.com/EIGSEP/pico-firmware/commit/cb037425f9337a8c2cf85096305490bd797dbe90))
+
 ## [1.0.0](https://github.com/EIGSEP/pico-firmware/compare/v0.1.0...v1.0.0) (2026-04-07)
 
 
