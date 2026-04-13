@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.0](https://github.com/EIGSEP/pico-firmware/compare/v2.0.0...v2.1.0) (2026-04-13)
+
+
+### Features
+
+* **picohost:** add PicoProxy for Redis-mediated device control ([7a873da](https://github.com/EIGSEP/pico-firmware/commit/7a873da519eeca7c84e936a3a0aac7dcb89f7e27))
+
+
+### Bug Fixes
+
+* **picohost:** fix proxy response race, timeout drift, and manager request_id echo ([d380d7e](https://github.com/EIGSEP/pico-firmware/commit/d380d7eaa33ca2e0c062c4d55880877f49d13e8f))
+
 ## [2.0.0](https://github.com/EIGSEP/pico-firmware/compare/v1.0.0...v2.0.0) (2026-04-13)
 
 
