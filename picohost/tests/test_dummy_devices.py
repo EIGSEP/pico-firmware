@@ -188,35 +188,25 @@ class TestDummyPicoMotor:
     def test_scan_does_not_home_on_interrupt(self):
         """scan() only halts (does not home) when interrupted."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
-        cadence = motor.EMULATOR_CADENCE_MS
-        # move to a known non-zero position first
-        motor.az_target_steps(1000, wait_for_stop=True)
-        wait_for_settle(
-            lambda: motor.status.get("az_pos"),
-            cadence_ms=cadence,
-            max_cycles=200,
-        )
-        # scan with infinite repeat; we'll interrupt it
+        # patch wait_for_stop to raise after the initial homing
+        # (2 calls for home-az + home-el, then interrupt during scan)
+        real_wait = motor.wait_for_stop
+        call_count = 0
+
+        def interrupt_after_homing(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            real_wait(*a, **kw)
+            if call_count > 2:
+                raise KeyboardInterrupt
+
+        motor.wait_for_stop = interrupt_after_homing
         with pytest.raises(KeyboardInterrupt):
-            # patch wait_for_stop to raise on second call
-            real_wait = motor.wait_for_stop
-            call_count = 0
-
-            def interrupt_on_second(*a, **kw):
-                nonlocal call_count
-                call_count += 1
-                real_wait(*a, **kw)
-                if call_count >= 2:
-                    raise KeyboardInterrupt
-
-            motor.wait_for_stop = interrupt_on_second
             motor.scan(
                 az_range_deg=np.array([-10.0, 0.0, 10.0]),
                 el_range_deg=np.array([-10.0, 0.0, 10.0]),
             )
-        # halt was called, but motors should NOT have homed to 0
-        # (az was at 1000 before scan, so it moved during scan but
-        # the key point is homing did not run)
+        # halt was called, but post-scan homing did not run
         assert motor.status["az_target_pos"] == motor.status["az_pos"]
         assert motor.status["el_target_pos"] == motor.status["el_pos"]
         motor.disconnect()

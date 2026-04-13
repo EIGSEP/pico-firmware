@@ -64,11 +64,6 @@ def main():
     except KeyError:
         last_status = None
     c = PicoMotor(port, verbose=True)
-    # zeroed = c.status['az_pos'] == 0 and c.status['el_pos'] == 0
-    # if zeroed and (last_status is not None):
-    #    print('Resetting to last known position.')
-    #    c.reset_step_position(az_step=last_status['az_pos'], el_step=last_status['el_pos'])
-    c.reset_step_position(az_step=0, el_step=0)
     c.set_delay(
         az_up_delay_us=2400,
         az_dn_delay_us=300,
