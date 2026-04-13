@@ -442,35 +442,30 @@ class PicoManager:
         f = {self._decode(k): self._decode(v) for k, v in fields.items()}
         target = f.get("target", "")
         source = f.get("source", "unknown")
+        request_id = f.get("request_id", "")
         cmd_raw = f.get("cmd", "{}")
+
+        def _err(error_msg):
+            r.xadd(
+                RESP_STREAM,
+                {
+                    "target": target,
+                    "source": source,
+                    "request_id": request_id,
+                    "status": "error",
+                    "data": json.dumps({"error": error_msg}),
+                },
+            )
 
         try:
             cmd = json.loads(cmd_raw)
         except json.JSONDecodeError:
             self.logger.error(f"Invalid JSON in command: {cmd_raw}")
-            r.xadd(
-                RESP_STREAM,
-                {
-                    "target": target,
-                    "source": source,
-                    "status": "error",
-                    "data": json.dumps({"error": "invalid JSON"}),
-                },
-            )
+            _err("invalid JSON")
             return
         if not isinstance(cmd, dict):
             self.logger.error(f"Command must be a JSON object: {cmd_raw}")
-            r.xadd(
-                RESP_STREAM,
-                {
-                    "target": target,
-                    "source": source,
-                    "status": "error",
-                    "data": json.dumps(
-                        {"error": "command must be a JSON object"}
-                    ),
-                },
-            )
+            _err("command must be a JSON object")
             return
 
         if target == "manager":
@@ -480,20 +475,16 @@ class PicoManager:
         pico = self.picos.get(target)
         if pico is None:
             self.logger.error(f"Unknown target: {target}")
-            r.xadd(
-                RESP_STREAM,
-                {
-                    "target": target,
-                    "source": source,
-                    "status": "error",
-                    "data": json.dumps({"error": f"unknown target: {target}"}),
-                },
-            )
+            _err(f"unknown target: {target}")
             return
 
         # Soft claims: warn (but allow) when a non-owner sends a command
         # to a claimed device. Claims are advisory, not enforced.
-        resp = {"target": target, "source": source}
+        resp = {
+            "target": target,
+            "source": source,
+            "request_id": request_id,
+        }
         claim_key = f"pico_claim:{target}"
         current_owner = r.get(claim_key)
         if current_owner is not None:
@@ -511,15 +502,7 @@ class PicoManager:
             try:
                 ttl = int(ttl)
             except (ValueError, TypeError):
-                r.xadd(
-                    RESP_STREAM,
-                    {
-                        "target": target,
-                        "source": source,
-                        "status": "error",
-                        "data": json.dumps({"error": f"invalid ttl: {ttl!r}"}),
-                    },
-                )
+                _err(f"invalid ttl: {ttl!r}")
                 return
             r.set(claim_key, source, ex=ttl)
             resp.update(
