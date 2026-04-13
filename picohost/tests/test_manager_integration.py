@@ -132,9 +132,7 @@ class MockRedis:
                 # "$" means only messages added after this call.
                 snapshot = len(msgs)
                 if block and block > 0:
-                    self._xread_event.wait(
-                        timeout=min(block / 1000.0, 0.5)
-                    )
+                    self._xread_event.wait(timeout=min(block / 1000.0, 0.5))
                     self._xread_event.clear()
                     msgs = self._streams.get(stream_name, [])
                     new_msgs = msgs[snapshot:]
@@ -145,7 +143,7 @@ class MockRedis:
                 new_msgs = []
                 for i, (mid, _) in enumerate(msgs):
                     if mid == last_id:
-                        new_msgs = msgs[i + 1:]
+                        new_msgs = msgs[i + 1 :]
                         break
 
             if new_msgs:
@@ -167,11 +165,17 @@ def _attach(mgr, name, dummy_cls):
     mgr.picos[name] = pico
     r = mgr._redis()
     r.sadd(PICOS_SET, name)
-    r.hset(CONFIG_HASH, name, json.dumps({
-        "port": "/dev/dummy",
-        "app_id": APP_IDS.get(name, -1),
-        "usb_serial": "DUMMY",
-    }))
+    r.hset(
+        CONFIG_HASH,
+        name,
+        json.dumps(
+            {
+                "port": "/dev/dummy",
+                "app_id": APP_IDS.get(name, -1),
+                "usb_serial": "DUMMY",
+            }
+        ),
+    )
     return pico
 
 
@@ -285,11 +289,15 @@ class TestCommandRelay:
         )
         r = mgr._redis()
         before = pico.last_status.get("sw_state")
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
+                "source": "test",
+            },
+        )
         settled = wait_for_settle(
             lambda: pico.last_status.get("sw_state"),
             initial=before,
@@ -307,14 +315,20 @@ class TestCommandRelay:
             cadence_ms=CADENCE_MS,
         )
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "motor",
-            "cmd": json.dumps({
-                "action": "motor_command",
-                "az_set_target_pos": 300,
-            }),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "motor",
+                "cmd": json.dumps(
+                    {
+                        "action": "motor_command",
+                        "az_set_target_pos": 300,
+                    }
+                ),
+                "source": "test",
+            },
+        )
         # 300 steps / 60 steps_per_op = 5 ops + margin
         settled = wait_for_settle(
             lambda: pico.status.get("az_pos"),
@@ -331,15 +345,21 @@ class TestCommandRelay:
             cadence_ms=CADENCE_MS,
         )
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "tempctrl",
-            "cmd": json.dumps({
-                "action": "set_temperature",
-                "T_LNA": 30.0,
-                "LNA_hyst": 0.5,
-            }),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "tempctrl",
+                "cmd": json.dumps(
+                    {
+                        "action": "set_temperature",
+                        "T_LNA": 30.0,
+                        "LNA_hyst": 0.5,
+                    }
+                ),
+                "source": "test",
+            },
+        )
         # Only verify the target was set, not convergence.
         wait_for_condition(
             lambda: pico.status.get("LNA_T_target") == 30.0,
@@ -356,7 +376,6 @@ class TestCommandRelay:
             cadence_ms=CADENCE_MS,
         )
         r = mgr._redis()
-        # Commands without "action" must be rejected.
         mgr._process_command(
             r,
             "1-0",
@@ -381,7 +400,9 @@ class TestCmdLoopEndToEnd:
         """Start only the cmd thread (not the full manager)."""
         mgr._running = True
         mgr._cmd_thread = threading.Thread(
-            target=mgr.cmd_loop, daemon=True, name="cmd-test",
+            target=mgr.cmd_loop,
+            daemon=True,
+            name="cmd-test",
         )
         mgr._cmd_thread.start()
 
@@ -394,11 +415,14 @@ class TestCmdLoopEndToEnd:
         self._start_cmd_loop(mgr)
         r = mgr._redis()
         before = pico.last_status.get("sw_state")
-        r.xadd(CMD_STREAM, {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
-            "source": "e2e_test",
-        })
+        r.xadd(
+            CMD_STREAM,
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
+                "source": "e2e_test",
+            },
+        )
         # Wait for response in RESP_STREAM.
         wait_for_condition(
             lambda: len(r._streams.get(RESP_STREAM, [])) > 0,
@@ -425,24 +449,29 @@ class TestCmdLoopEndToEnd:
         )
         self._start_cmd_loop(mgr)
         r = mgr._redis()
-        r.xadd(CMD_STREAM, {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
-            "source": "test",
-        })
-        r.xadd(CMD_STREAM, {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
-            "source": "test",
-        })
+        r.xadd(
+            CMD_STREAM,
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
+                "source": "test",
+            },
+        )
+        r.xadd(
+            CMD_STREAM,
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
+                "source": "test",
+            },
+        )
         wait_for_condition(
             lambda: len(r._streams.get(RESP_STREAM, [])) >= 2,
             cadence_ms=CADENCE_MS,
             max_cycles=40,
         )
         assert all(
-            resp["status"] == "ok"
-            for _, resp in r._streams[RESP_STREAM]
+            resp["status"] == "ok" for _, resp in r._streams[RESP_STREAM]
         )
         # Final state should match the last command.
         settled = wait_for_settle(
@@ -455,11 +484,14 @@ class TestCmdLoopEndToEnd:
     def test_error_for_unknown_target(self, mgr):
         self._start_cmd_loop(mgr)
         r = mgr._redis()
-        r.xadd(CMD_STREAM, {
-            "target": "nonexistent",
-            "cmd": "{}",
-            "source": "test",
-        })
+        r.xadd(
+            CMD_STREAM,
+            {
+                "target": "nonexistent",
+                "cmd": "{}",
+                "source": "test",
+            },
+        )
         wait_for_condition(
             lambda: len(r._streams.get(RESP_STREAM, [])) > 0,
             cadence_ms=CADENCE_MS,
@@ -480,12 +512,22 @@ class TestDiscoverIntegration:
         import picohost.manager as mgr_mod
 
         cfg = tmp_path / "pico_config.json"
-        cfg.write_text(json.dumps([
-            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "INT123"},
-        ]))
+        cfg.write_text(
+            json.dumps(
+                [
+                    {
+                        "app_id": 5,
+                        "port": "/dev/dummy",
+                        "usb_serial": "INT123",
+                    },
+                ]
+            )
+        )
         mgr.config_file = cfg
         monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch,
+            mgr_mod.PICO_CLASSES,
+            "rfswitch",
+            DummyPicoRFSwitch,
         )
         mgr.discover()
         assert "rfswitch" in mgr.picos

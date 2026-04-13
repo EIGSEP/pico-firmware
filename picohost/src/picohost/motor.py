@@ -42,8 +42,11 @@ class PicoMotor(PicoDevice):
         self.status = {}
         self._delay_kwargs = None
         super().__init__(
-            port, timeout=timeout, name=name,
-            eig_redis=eig_redis, usb_serial=usb_serial,
+            port,
+            timeout=timeout,
+            name=name,
+            eig_redis=eig_redis,
+            usb_serial=usb_serial,
         )
         self.set_response_handler(self.update_status)
         self.set_delay()

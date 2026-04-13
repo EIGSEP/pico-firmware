@@ -74,15 +74,25 @@ CLAIM_TTL = 300  # default soft-claim TTL in seconds
 # Methods that must not be invoked via the command stream. These are
 # either local lifecycle calls (no firmware effect, dangerous to expose),
 # or blocking helpers that would stall the cmd thread.
-_BLOCKED_ACTIONS = frozenset({
-    "connect", "disconnect", "reconnect",
-    "start", "stop",
-    "set_response_handler", "set_raw_handler",
-    "wait_for_response", "wait_for_updates",
-    "wait_for_start", "wait_for_stop",
-    "find_pico_ports", "read_line", "parse_response",
-    "update_status",
-})
+_BLOCKED_ACTIONS = frozenset(
+    {
+        "connect",
+        "disconnect",
+        "reconnect",
+        "start",
+        "stop",
+        "set_response_handler",
+        "set_raw_handler",
+        "wait_for_response",
+        "wait_for_updates",
+        "wait_for_start",
+        "wait_for_stop",
+        "find_pico_ports",
+        "read_line",
+        "parse_response",
+        "update_status",
+    }
+)
 
 
 class PicoManager:
@@ -155,13 +165,10 @@ class PicoManager:
         :meth:`_save_config_to_file`).
         """
         devices = (
-            self._load_config_from_redis()
-            if self.use_redis_config else None
+            self._load_config_from_redis() if self.use_redis_config else None
         )
         if devices:
-            self.logger.info(
-                f"Loaded {len(devices)} device(s) from Redis"
-            )
+            self.logger.info(f"Loaded {len(devices)} device(s) from Redis")
             self._register_devices(devices)
             self._save_config_to_file(devices)
             return
@@ -193,9 +200,7 @@ class PicoManager:
         try:
             raw = r.hgetall(CONFIG_HASH)
         except Exception as e:
-            self.logger.warning(
-                f"Failed to read config from Redis: {e}"
-            )
+            self.logger.warning(f"Failed to read config from Redis: {e}")
             return None
 
         if not raw:
@@ -208,8 +213,7 @@ class PicoManager:
                 devices.append(json.loads(blob))
             except json.JSONDecodeError:
                 self.logger.warning(
-                    f"Invalid JSON in Redis config for "
-                    f"{self._decode(name)}"
+                    f"Invalid JSON in Redis config for {self._decode(name)}"
                 )
         return devices if devices else None
 
@@ -223,18 +227,14 @@ class PicoManager:
             Device config dicts if the file is valid, ``None`` otherwise.
         """
         if not self.config_file.exists():
-            self.logger.warning(
-                f"Config file {self.config_file} not found"
-            )
+            self.logger.warning(f"Config file {self.config_file} not found")
             return None
 
         with open(self.config_file) as f:
             try:
                 devices = json.load(f)
             except json.JSONDecodeError as e:
-                self.logger.error(
-                    f"Invalid JSON in config file: {e}"
-                )
+                self.logger.error(f"Invalid JSON in config file: {e}")
                 return None
 
         return devices if devices else None
@@ -257,11 +257,13 @@ class PicoManager:
         devices = []
         for name, pico in self.picos.items():
             app_id = APP_IDS.get(name, -1)
-            devices.append({
-                "app_id": app_id,
-                "port": pico.port,
-                "usb_serial": getattr(pico, "usb_serial", ""),
-            })
+            devices.append(
+                {
+                    "app_id": app_id,
+                    "port": pico.port,
+                    "usb_serial": getattr(pico, "usb_serial", ""),
+                }
+            )
         return devices
 
     def _register_devices(self, devices):
@@ -283,41 +285,49 @@ class PicoManager:
 
             name = APP_NAMES.get(app_id)
             if name is None:
-                self.logger.warning(
-                    f"Unknown app_id {app_id}, skipping"
-                )
+                self.logger.warning(f"Unknown app_id {app_id}, skipping")
                 continue
 
             if name in self.picos:
-                raise ValueError(
-                    f"Duplicate device name '{name}' in config"
-                )
+                raise ValueError(f"Duplicate device name '{name}' in config")
 
             cls = PICO_CLASSES.get(name, PicoDevice)
             try:
                 pico = cls(
-                    port, eig_redis=self.eig_redis,
-                    name=name, usb_serial=usb_serial,
+                    port,
+                    eig_redis=self.eig_redis,
+                    name=name,
+                    usb_serial=usb_serial,
                 )
                 self.picos[name] = pico
                 r.sadd(PICOS_SET, name)
-                r.hset(CONFIG_HASH, name, json.dumps({
-                    "port": port,
-                    "app_id": app_id,
-                    "usb_serial": usb_serial,
-                }))
-                r.hset(HEALTH_HASH, name, json.dumps({
-                    "connected": True,
-                    "last_seen": time.time(),
-                    "app_id": app_id,
-                }))
+                r.hset(
+                    CONFIG_HASH,
+                    name,
+                    json.dumps(
+                        {
+                            "port": port,
+                            "app_id": app_id,
+                            "usb_serial": usb_serial,
+                        }
+                    ),
+                )
+                r.hset(
+                    HEALTH_HASH,
+                    name,
+                    json.dumps(
+                        {
+                            "connected": True,
+                            "last_seen": time.time(),
+                            "app_id": app_id,
+                        }
+                    ),
+                )
                 self.logger.info(
                     f"Discovered {name} (app_id={app_id}) on {port}"
                 )
             except Exception as e:
-                self.logger.error(
-                    f"Failed to init {name} on {port}: {e}"
-                )
+                self.logger.error(f"Failed to init {name} on {port}: {e}")
 
     def _try_flash_discover(self):
         """Attempt to flash attached Picos and discover devices."""
@@ -360,8 +370,7 @@ class PicoManager:
 
             if not healthy:
                 self.logger.warning(
-                    f"{name}: unhealthy "
-                    f"(connected={connected}, stale={stale})"
+                    f"{name}: unhealthy (connected={connected}, stale={stale})"
                 )
                 try:
                     old_port = pico.port
@@ -371,11 +380,17 @@ class PicoManager:
                         connected = True
                         if pico.port != old_port:
                             app_id = APP_IDS.get(name, -1)
-                            r.hset(CONFIG_HASH, name, json.dumps({
-                                "port": pico.port,
-                                "app_id": app_id,
-                                "usb_serial": pico.usb_serial,
-                            }))
+                            r.hset(
+                                CONFIG_HASH,
+                                name,
+                                json.dumps(
+                                    {
+                                        "port": pico.port,
+                                        "app_id": app_id,
+                                        "usb_serial": pico.usb_serial,
+                                    }
+                                ),
+                            )
                             self._save_config_to_file(
                                 self._current_device_list()
                             )
@@ -383,18 +398,22 @@ class PicoManager:
                         r.srem(PICOS_SET, name)
                         connected = False
                 except Exception as e:
-                    self.logger.error(
-                        f"{name}: reconnect failed: {e}"
-                    )
+                    self.logger.error(f"{name}: reconnect failed: {e}")
                     r.srem(PICOS_SET, name)
                     connected = False
 
             app_id = APP_IDS.get(name, -1)
-            r.hset(HEALTH_HASH, name, json.dumps({
-                "connected": connected,
-                "last_seen": pico.last_status_time or 0,
-                "app_id": app_id,
-            }))
+            r.hset(
+                HEALTH_HASH,
+                name,
+                json.dumps(
+                    {
+                        "connected": connected,
+                        "last_seen": pico.last_status_time or 0,
+                        "app_id": app_id,
+                    }
+                ),
+            )
 
     # --- Command Relay ---
 
@@ -404,9 +423,7 @@ class PicoManager:
         last_id = "$"  # only read new messages
         while self._running:
             try:
-                result = r.xread(
-                    {CMD_STREAM: last_id}, block=1000, count=10
-                )
+                result = r.xread({CMD_STREAM: last_id}, block=1000, count=10)
                 if not result:
                     continue
                 for _stream, messages in result:
@@ -420,10 +437,7 @@ class PicoManager:
 
     def _process_command(self, r, msg_id, fields):
         """Validate and dispatch a single command stream entry."""
-        f = {
-            self._decode(k): self._decode(v)
-            for k, v in fields.items()
-        }
+        f = {self._decode(k): self._decode(v) for k, v in fields.items()}
         target = f.get("target", "")
         source = f.get("source", "unknown")
         cmd_raw = f.get("cmd", "{}")
@@ -432,23 +446,29 @@ class PicoManager:
             cmd = json.loads(cmd_raw)
         except json.JSONDecodeError:
             self.logger.error(f"Invalid JSON in command: {cmd_raw}")
-            r.xadd(RESP_STREAM, {
-                "target": target,
-                "source": source,
-                "status": "error",
-                "data": json.dumps({"error": "invalid JSON"}),
-            })
+            r.xadd(
+                RESP_STREAM,
+                {
+                    "target": target,
+                    "source": source,
+                    "status": "error",
+                    "data": json.dumps({"error": "invalid JSON"}),
+                },
+            )
             return
         if not isinstance(cmd, dict):
             self.logger.error(f"Command must be a JSON object: {cmd_raw}")
-            r.xadd(RESP_STREAM, {
-                "target": target,
-                "source": source,
-                "status": "error",
-                "data": json.dumps(
-                    {"error": "command must be a JSON object"}
-                ),
-            })
+            r.xadd(
+                RESP_STREAM,
+                {
+                    "target": target,
+                    "source": source,
+                    "status": "error",
+                    "data": json.dumps(
+                        {"error": "command must be a JSON object"}
+                    ),
+                },
+            )
             return
 
         if target == "manager":
@@ -458,14 +478,15 @@ class PicoManager:
         pico = self.picos.get(target)
         if pico is None:
             self.logger.error(f"Unknown target: {target}")
-            r.xadd(RESP_STREAM, {
-                "target": target,
-                "source": source,
-                "status": "error",
-                "data": json.dumps(
-                    {"error": f"unknown target: {target}"}
-                ),
-            })
+            r.xadd(
+                RESP_STREAM,
+                {
+                    "target": target,
+                    "source": source,
+                    "status": "error",
+                    "data": json.dumps({"error": f"unknown target: {target}"}),
+                },
+            )
             return
 
         # Soft claims: warn (but allow) when a non-owner sends a command
@@ -478,8 +499,7 @@ class PicoManager:
             if current_owner != source:
                 warning = f"overriding claim by {current_owner}"
                 self.logger.warning(
-                    f"{target}: {source} overrides "
-                    f"claim by {current_owner}"
+                    f"{target}: {source} overrides claim by {current_owner}"
                 )
                 resp["warning"] = warning
 
@@ -489,47 +509,52 @@ class PicoManager:
             try:
                 ttl = int(ttl)
             except (ValueError, TypeError):
-                r.xadd(RESP_STREAM, {
-                    "target": target,
-                    "source": source,
-                    "status": "error",
-                    "data": json.dumps(
-                        {"error": f"invalid ttl: {ttl!r}"}
-                    ),
-                })
+                r.xadd(
+                    RESP_STREAM,
+                    {
+                        "target": target,
+                        "source": source,
+                        "status": "error",
+                        "data": json.dumps({"error": f"invalid ttl: {ttl!r}"}),
+                    },
+                )
                 return
             r.set(claim_key, source, ex=ttl)
-            resp.update({
-                "status": "ok",
-                "data": json.dumps(
-                    {"claimed": target, "ttl": ttl}
-                ),
-            })
+            resp.update(
+                {
+                    "status": "ok",
+                    "data": json.dumps({"claimed": target, "ttl": ttl}),
+                }
+            )
             r.xadd(RESP_STREAM, resp)
             return
         if action == "release":
             r.delete(claim_key)
-            resp.update({
-                "status": "ok",
-                "data": json.dumps({"released": target}),
-            })
+            resp.update(
+                {
+                    "status": "ok",
+                    "data": json.dumps({"released": target}),
+                }
+            )
             r.xadd(RESP_STREAM, resp)
             return
 
         try:
             result = self._route_command(pico, target, cmd)
-            resp.update({
-                "status": "ok",
-                "data": json.dumps(
-                    result if result is not None else {}
-                ),
-            })
+            resp.update(
+                {
+                    "status": "ok",
+                    "data": json.dumps(result if result is not None else {}),
+                }
+            )
         except Exception as e:
             self.logger.error(f"Command failed on {target}: {e}")
-            resp.update({
-                "status": "error",
-                "data": json.dumps({"error": str(e)}),
-            })
+            resp.update(
+                {
+                    "status": "error",
+                    "data": json.dumps({"error": str(e)}),
+                }
+            )
         r.xadd(RESP_STREAM, resp)
 
     def _route_command(self, pico, target, cmd):
@@ -549,9 +574,7 @@ class PicoManager:
 
         method = getattr(pico, action, None)
         if method is None or not callable(method):
-            raise ValueError(
-                f"Unknown action '{action}' for {target}"
-            )
+            raise ValueError(f"Unknown action '{action}' for {target}")
 
         result = method(**cmd)
         return {"action": action, "result": result}
@@ -562,9 +585,7 @@ class PicoManager:
         resp = {"target": "manager", "source": source}
 
         if action == "rediscover":
-            self.logger.info(
-                f"Rediscover requested by {source}"
-            )
+            self.logger.info(f"Rediscover requested by {source}")
             try:
                 for name, pico in list(self.picos.items()):
                     try:
@@ -575,26 +596,34 @@ class PicoManager:
                 self.picos.clear()
                 self.discover()
                 device_names = list(self.picos.keys())
-                resp.update({
-                    "status": "ok",
-                    "data": json.dumps({
-                        "devices": device_names,
-                        "count": len(device_names),
-                    }),
-                })
+                resp.update(
+                    {
+                        "status": "ok",
+                        "data": json.dumps(
+                            {
+                                "devices": device_names,
+                                "count": len(device_names),
+                            }
+                        ),
+                    }
+                )
             except Exception as e:
                 self.logger.error(f"Rediscover failed: {e}")
-                resp.update({
-                    "status": "error",
-                    "data": json.dumps({"error": str(e)}),
-                })
+                resp.update(
+                    {
+                        "status": "error",
+                        "data": json.dumps({"error": str(e)}),
+                    }
+                )
         else:
-            resp.update({
-                "status": "error",
-                "data": json.dumps(
-                    {"error": f"unknown manager action: {action}"}
-                ),
-            })
+            resp.update(
+                {
+                    "status": "error",
+                    "data": json.dumps(
+                        {"error": f"unknown manager action: {action}"}
+                    ),
+                }
+            )
 
         r.xadd(RESP_STREAM, resp)
 
@@ -618,9 +647,7 @@ class PicoManager:
         self.logger.info("PicoManager stopping...")
         self._running = False
         if self._health_thread:
-            self._health_thread.join(
-                timeout=HEALTH_CHECK_INTERVAL + 1
-            )
+            self._health_thread.join(timeout=HEALTH_CHECK_INTERVAL + 1)
         if self._cmd_thread:
             self._cmd_thread.join(timeout=2)
 
@@ -629,11 +656,17 @@ class PicoManager:
             try:
                 pico.disconnect()
                 r.srem(PICOS_SET, name)
-                r.hset(HEALTH_HASH, name, json.dumps({
-                    "connected": False,
-                    "last_seen": 0,
-                    "app_id": APP_IDS.get(name, -1),
-                }))
+                r.hset(
+                    HEALTH_HASH,
+                    name,
+                    json.dumps(
+                        {
+                            "connected": False,
+                            "last_seen": 0,
+                            "app_id": APP_IDS.get(name, -1),
+                        }
+                    ),
+                )
             except Exception as e:
                 self.logger.error(f"Error stopping {name}: {e}")
         self.picos.clear()
@@ -644,9 +677,7 @@ class PicoManager:
         signal.signal(signal.SIGTERM, lambda *_: self.stop())
         self.discover()
         if not self.picos:
-            self.logger.warning(
-                "No picos discovered, running anyway"
-            )
+            self.logger.warning("No picos discovered, running anyway")
         self.start()
         try:
             while self._running:
@@ -660,28 +691,31 @@ class PicoManager:
 
 def main():
     """Console-script and ``python -m picohost.manager`` entry point."""
-    parser = argparse.ArgumentParser(
-        description="EIGSEP Pico Manager"
-    )
+    parser = argparse.ArgumentParser(description="EIGSEP Pico Manager")
     parser.add_argument(
-        "--config", default="pico_config.json",
+        "--config",
+        default="pico_config.json",
         help="Path to pico_config.json (default: pico_config.json)",
     )
     parser.add_argument(
-        "--uf2", default="build/pico_multi.uf2",
+        "--uf2",
+        default="build/pico_multi.uf2",
         help="Path to pico_multi.uf2 for auto-flashing "
-             "(default: build/pico_multi.uf2)",
+        "(default: build/pico_multi.uf2)",
     )
     parser.add_argument(
-        "--no-redis-config", action="store_true",
+        "--no-redis-config",
+        action="store_true",
         help="Skip Redis config lookup, re-discover from file/flash",
     )
     parser.add_argument(
-        "--clear-config", action="store_true",
+        "--clear-config",
+        action="store_true",
         help="Clear stored config from Redis before discovering",
     )
     parser.add_argument(
-        "--log-level", default="INFO",
+        "--log-level",
+        default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
