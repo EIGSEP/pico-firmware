@@ -75,18 +75,18 @@ def main():
         el_up_delay_us=2400,
         el_dn_delay_us=600,
     )
-    c.stop()
+    c.halt()
     # try:
     #    #c.el_move_deg(30, wait_for_stop=True)
     #    c.az_move_deg(100, wait_for_stop=True)
     ##    c.az_target_deg(180, wait_for_stop=True)
     ##    c.az_target_deg(-180, wait_for_stop=True)
     # except(KeyboardInterrupt):
-    #    c.stop()
+    #    c.halt()
     # finally:
-    #    c.stop()
+    #    c.halt()
     try:
-        c.stop()
+        c.halt()
         c.scan(
             az_range_deg=np.linspace(-180.0, 180.0, 10),
             el_range_deg=np.linspace(-180.0, 180.0, 10),
@@ -96,9 +96,9 @@ def main():
             sleep_between=args.sleep_s,
         )
     except KeyboardInterrupt:
-        c.stop()
+        c.halt()
     finally:
-        c.stop()
+        c.halt()
 
 
 if __name__ == "__main__":

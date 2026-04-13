@@ -43,17 +43,14 @@ class DummyPicoDevice(PicoDevice):
             )
             self._emulator.attach(self._peer)
             self._emulator.start()
+        self._start_reader()
         return True
 
     def disconnect(self):
         if hasattr(self, "_emulator") and self._emulator:
             self._emulator.stop()
             self._emulator = None
-        # Stop the reader thread explicitly via PicoDevice.stop() to avoid
-        # PicoMotor.stop() (which sends a halt command instead of stopping
-        # the thread).
-        PicoDevice.stop(self)
-        self.ser = None
+        super().disconnect()
 
 
 class DummyPicoMotor(DummyPicoDevice, PicoMotor):
@@ -69,11 +66,6 @@ class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
 class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
     EMULATOR_CLASS = TempCtrlEmulator
     EMULATOR_CADENCE_MS = 50.0
-
-    def disconnect(self):
-        # PicoPeltier.stop() handles keepalive + reader thread cleanup
-        PicoPeltier.stop(self)
-        super().disconnect()
 
 
 class DummyPicoIMU(DummyPicoDevice, PicoIMU):

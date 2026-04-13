@@ -79,8 +79,6 @@ _BLOCKED_ACTIONS = frozenset(
         "connect",
         "disconnect",
         "reconnect",
-        "start",
-        "stop",
         "set_response_handler",
         "set_raw_handler",
         "wait_for_response",
