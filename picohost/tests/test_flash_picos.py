@@ -16,14 +16,19 @@ def _mock_flash(monkeypatch, tmp_path):
     uf2 = tmp_path / "test.uf2"
     uf2.write_bytes(b"\x00")
 
-    monkeypatch.setattr(fp, "find_pico_ports", lambda: {
-        "/dev/ttyACM0": "SER_A",
-        "/dev/ttyACM1": "SER_B",
-    })
+    monkeypatch.setattr(
+        fp,
+        "find_pico_ports",
+        lambda: {
+            "/dev/ttyACM0": "SER_A",
+            "/dev/ttyACM1": "SER_B",
+        },
+    )
 
     flashed = []
     monkeypatch.setattr(
-        fp, "flash_uf2",
+        fp,
+        "flash_uf2",
         lambda path, serial: flashed.append(serial),
     )
 
@@ -32,7 +37,8 @@ def _mock_flash(monkeypatch, tmp_path):
         "/dev/ttyACM1": {"app_id": 5},
     }
     monkeypatch.setattr(
-        fp, "read_json_from_serial",
+        fp,
+        "read_json_from_serial",
         lambda port, baud, timeout: serial_data[port],
     )
 
@@ -75,11 +81,16 @@ class TestFlashAndDiscover:
 
         uf2 = tmp_path / "test.uf2"
         uf2.write_bytes(b"\x00")
-        monkeypatch.setattr(fp, "find_pico_ports", lambda: {
-            "/dev/ttyACM0": "SER_A",
-        })
         monkeypatch.setattr(
-            fp, "flash_uf2",
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+            },
+        )
+        monkeypatch.setattr(
+            fp,
+            "flash_uf2",
             lambda path, serial: (_ for _ in ()).throw(
                 RuntimeError("picotool failed")
             ),
@@ -92,12 +103,17 @@ class TestFlashAndDiscover:
 
         uf2 = tmp_path / "test.uf2"
         uf2.write_bytes(b"\x00")
-        monkeypatch.setattr(fp, "find_pico_ports", lambda: {
-            "/dev/ttyACM0": "SER_A",
-        })
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+            },
+        )
         monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
         monkeypatch.setattr(
-            fp, "read_json_from_serial",
+            fp,
+            "read_json_from_serial",
             lambda port, baud, timeout: (_ for _ in ()).throw(
                 RuntimeError("timeout")
             ),

@@ -197,7 +197,8 @@ class TestRouteCommand:
     def test_peltier_set_temperature(self, mgr):
         pico = _attach(mgr, "tempctrl", DummyPicoPeltier)
         result = mgr._route_command(
-            pico, "tempctrl",
+            pico,
+            "tempctrl",
             {"action": "set_temperature", "T_LNA": 25.0, "LNA_hyst": 0.5},
         )
         assert result["action"] == "set_temperature"
@@ -211,11 +212,15 @@ class TestProcessCommand:
     def test_valid_command_publishes_ok_response(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
+                "source": "test",
+            },
+        )
         assert len(r._streams[RESP_STREAM]) == 1
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "ok"
@@ -223,11 +228,15 @@ class TestProcessCommand:
 
     def test_unknown_target_publishes_error(self, mgr):
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "ghost",
-            "cmd": "{}",
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "ghost",
+                "cmd": "{}",
+                "source": "test",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "error"
         assert "unknown target" in json.loads(resp["data"])["error"]
@@ -235,11 +244,15 @@ class TestProcessCommand:
     def test_invalid_json_publishes_error(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": "not json",
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": "not json",
+                "source": "test",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "error"
 
@@ -250,13 +263,17 @@ class TestProcessCommand:
         """
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
-        mgr._process_command(r, b"1-0", {
-            b"target": b"rfswitch",
-            b"cmd": json.dumps(
-                {"action": "switch", "state": "RFANT"}
-            ).encode(),
-            b"source": b"test",
-        })
+        mgr._process_command(
+            r,
+            b"1-0",
+            {
+                b"target": b"rfswitch",
+                b"cmd": json.dumps(
+                    {"action": "switch", "state": "RFANT"}
+                ).encode(),
+                b"source": b"test",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "ok"
 
@@ -268,33 +285,45 @@ class TestClaims:
     def test_claim_sets_owner(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "claim", "ttl": 60}),
-            "source": "switch_loop",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "claim", "ttl": 60}),
+                "source": "switch_loop",
+            },
+        )
         assert r.get("pico_claim:rfswitch") == "switch_loop"
 
     def test_release_clears_owner(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
         r.set("pico_claim:rfswitch", "switch_loop")
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "release"}),
-            "source": "switch_loop",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "release"}),
+                "source": "switch_loop",
+            },
+        )
         assert r.get("pico_claim:rfswitch") is None
 
     def test_override_warns_but_allows(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
         r.set("pico_claim:rfswitch", "switch_loop")
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
-            "source": "interactive",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
+                "source": "interactive",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "ok"
         assert "switch_loop" in resp["warning"]
@@ -303,11 +332,15 @@ class TestClaims:
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         r = mgr._redis()
         r.set("pico_claim:rfswitch", "switch_loop")
-        mgr._process_command(r, "1-0", {
-            "target": "rfswitch",
-            "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
-            "source": "switch_loop",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "rfswitch",
+                "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
+                "source": "switch_loop",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert "warning" not in resp
 
@@ -359,7 +392,8 @@ class TestDiscover:
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
         )
         monkeypatch.setattr(
-            fp_mod, "flash_and_discover",
+            fp_mod,
+            "flash_and_discover",
             lambda **kw: [
                 {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
             ],
@@ -382,9 +416,17 @@ class TestDiscover:
         import picohost.manager as mgr_mod
 
         cfg = tmp_path / "pico_config.json"
-        cfg.write_text(json.dumps([
-            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC123"},
-        ]))
+        cfg.write_text(
+            json.dumps(
+                [
+                    {
+                        "app_id": 5,
+                        "port": "/dev/dummy",
+                        "usb_serial": "ABC123",
+                    },
+                ]
+            )
+        )
         mgr.config_file = cfg
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
@@ -410,9 +452,17 @@ class TestRedisConfig:
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
         )
         r = mgr._redis()
-        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
-            "app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC",
-        }))
+        r.hset(
+            CONFIG_HASH,
+            "rfswitch",
+            json.dumps(
+                {
+                    "app_id": 5,
+                    "port": "/dev/dummy",
+                    "usb_serial": "ABC",
+                }
+            ),
+        )
         mgr.config_file = "/nonexistent/path.json"  # shouldn't be read
         mgr.discover()
         assert "rfswitch" in mgr.picos
@@ -428,23 +478,33 @@ class TestRedisConfig:
         )
         # Populate Redis — should be ignored
         r = mgr._redis()
-        r.hset(CONFIG_HASH, "motor", json.dumps({
-            "app_id": 0, "port": "/dev/dummy", "usb_serial": "OLD",
-        }))
+        r.hset(
+            CONFIG_HASH,
+            "motor",
+            json.dumps(
+                {
+                    "app_id": 0,
+                    "port": "/dev/dummy",
+                    "usb_serial": "OLD",
+                }
+            ),
+        )
         # Provide a file with rfswitch instead
         cfg = tmp_path / "pico_config.json"
-        cfg.write_text(json.dumps([
-            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "NEW"},
-        ]))
+        cfg.write_text(
+            json.dumps(
+                [
+                    {"app_id": 5, "port": "/dev/dummy", "usb_serial": "NEW"},
+                ]
+            )
+        )
         mgr.config_file = cfg
         mgr.use_redis_config = False
         mgr.discover()
         assert "rfswitch" in mgr.picos
         assert "motor" not in mgr.picos
 
-    def test_discover_writes_back_to_file(
-        self, mgr, monkeypatch, tmp_path
-    ):
+    def test_discover_writes_back_to_file(self, mgr, monkeypatch, tmp_path):
         """After discovering from Redis, config is written back to file."""
         import picohost.manager as mgr_mod
 
@@ -452,9 +512,17 @@ class TestRedisConfig:
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
         )
         r = mgr._redis()
-        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
-            "app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC",
-        }))
+        r.hset(
+            CONFIG_HASH,
+            "rfswitch",
+            json.dumps(
+                {
+                    "app_id": 5,
+                    "port": "/dev/dummy",
+                    "usb_serial": "ABC",
+                }
+            ),
+        )
         cfg = tmp_path / "pico_config.json"
         mgr.config_file = cfg
         mgr.discover()
@@ -463,9 +531,7 @@ class TestRedisConfig:
         assert len(written) == 1
         assert written[0]["app_id"] == 5
 
-    def test_file_fallback_when_redis_empty(
-        self, mgr, monkeypatch, tmp_path
-    ):
+    def test_file_fallback_when_redis_empty(self, mgr, monkeypatch, tmp_path):
         """When Redis is empty, discover() falls through to file."""
         import picohost.manager as mgr_mod
 
@@ -473,9 +539,13 @@ class TestRedisConfig:
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
         )
         cfg = tmp_path / "pico_config.json"
-        cfg.write_text(json.dumps([
-            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
-        ]))
+        cfg.write_text(
+            json.dumps(
+                [
+                    {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
+                ]
+            )
+        )
         mgr.config_file = cfg
         mgr.discover()
         assert "rfswitch" in mgr.picos
@@ -488,9 +558,7 @@ class TestRedisConfig:
 
 
 class TestManagerCommand:
-    def test_rediscover_clears_and_reloads(
-        self, mgr, monkeypatch, tmp_path
-    ):
+    def test_rediscover_clears_and_reloads(self, mgr, monkeypatch, tmp_path):
         import picohost.manager as mgr_mod
 
         monkeypatch.setitem(
@@ -502,17 +570,29 @@ class TestManagerCommand:
 
         # Set up Redis config for rediscover to find
         r = mgr._redis()
-        r.hset(CONFIG_HASH, "rfswitch", json.dumps({
-            "app_id": 5, "port": "/dev/dummy", "usb_serial": "X",
-        }))
+        r.hset(
+            CONFIG_HASH,
+            "rfswitch",
+            json.dumps(
+                {
+                    "app_id": 5,
+                    "port": "/dev/dummy",
+                    "usb_serial": "X",
+                }
+            ),
+        )
         cfg = tmp_path / "pico_config.json"
         mgr.config_file = cfg
 
-        mgr._process_command(r, "1-0", {
-            "target": "manager",
-            "cmd": json.dumps({"action": "rediscover"}),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "manager",
+                "cmd": json.dumps({"action": "rediscover"}),
+                "source": "test",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "ok"
         data = json.loads(resp["data"])
@@ -521,11 +601,15 @@ class TestManagerCommand:
 
     def test_unknown_manager_action_returns_error(self, mgr):
         r = mgr._redis()
-        mgr._process_command(r, "1-0", {
-            "target": "manager",
-            "cmd": json.dumps({"action": "nope"}),
-            "source": "test",
-        })
+        mgr._process_command(
+            r,
+            "1-0",
+            {
+                "target": "manager",
+                "cmd": json.dumps({"action": "nope"}),
+                "source": "test",
+            },
+        )
         _, resp = r._streams[RESP_STREAM][0]
         assert resp["status"] == "error"
         assert "unknown manager action" in json.loads(resp["data"])["error"]
@@ -561,7 +645,8 @@ class TestReconnectHook:
         old_port = switch.port
 
         monkeypatch.setattr(
-            base_mod, "find_pico_ports",
+            base_mod,
+            "find_pico_ports",
             lambda: {"/dev/ttyACM5": "SER_ABC"},
         )
         # _rediscover_port should update port
@@ -577,7 +662,8 @@ class TestReconnectHook:
         switch.port = "/dev/ttyACM0"
 
         monkeypatch.setattr(
-            base_mod, "find_pico_ports",
+            base_mod,
+            "find_pico_ports",
             lambda: {"/dev/ttyACM0": "SER_ABC"},
         )
         switch._rediscover_port()
