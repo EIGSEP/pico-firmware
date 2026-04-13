@@ -80,7 +80,7 @@ class PicoMotor(PicoDevice):
         return int(s * self.microstep * self.gear_teeth)
 
     def steps_to_deg(self, steps: int) -> float:
-        """Convert degrees to motor pulses."""
+        """Convert motor pulses to degrees."""
         s = steps / self.microstep / self.gear_teeth
         deg = s * self.step_angle_deg
         return float(deg)
@@ -108,7 +108,7 @@ class PicoMotor(PicoDevice):
         """Set az and el position to specified count."""
         az_pos = None if az_deg is None else self.deg_to_steps(az_deg)
         el_pos = None if el_deg is None else self.deg_to_steps(el_deg)
-        self.reset_step_position(az_pos=az_pos, el_pos=el_pos)
+        self.reset_step_position(az_step=az_pos, el_step=el_pos)
 
     def set_delay(
         self,
@@ -125,10 +125,9 @@ class PicoMotor(PicoDevice):
         }
         self.motor_command(**self._delay_kwargs)
 
-    def halt(self, az=True, el=True):
-        """Hard stop on motors. Default: both."""
-        cmd = {"halt": 0}
-        self.motor_command(**cmd)
+    def halt(self):
+        """Hard stop on both motors."""
+        self.motor_command(halt=0)
 
     def _do_wait(self, wait_for_start, wait_for_stop):
         if wait_for_start:
@@ -219,10 +218,20 @@ class PicoMotor(PicoDevice):
         while not self.is_moving() and time.time() < t + timeout:
             time.sleep(0.1)
 
-    def wait_for_stop(self):
+    def wait_for_stop(self, stall_timeout=30):
         if self.verbose:
             print("Waiting for stop.")
+        last_pos = (self.status["az_pos"], self.status["el_pos"])
+        t = time.time()
         while self.is_moving():
+            pos = (self.status["az_pos"], self.status["el_pos"])
+            if pos != last_pos:
+                last_pos = pos
+                t = time.time()
+            elif time.time() - t >= stall_timeout:
+                raise TimeoutError(
+                    f"Motor stalled for {stall_timeout}s without progress"
+                )
             time.sleep(0.1)
 
     def scan(
@@ -294,3 +303,7 @@ class PicoMotor(PicoDevice):
                     time.sleep(sleep_between)
         finally:
             self.halt()
+
+        # home motors one at a time after normal completion
+        self.az_target_steps(0, wait_for_stop=True)
+        self.el_target_steps(0, wait_for_stop=True)
