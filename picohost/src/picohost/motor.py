@@ -4,9 +4,12 @@ Provides common functionality for serial communication with Pico devices.
 """
 
 import json
+import logging
 import time
 import numpy as np
 from .base import PicoDevice
+
+logger = logging.getLogger(__name__)
 
 
 class PicoMotor(PicoDevice):
@@ -60,7 +63,7 @@ class PicoMotor(PicoDevice):
     def update_status(self, data):
         """Update internal status based on unpacked json packets from picos."""
         if self.verbose:
-            print(json.dumps(data, indent=2, sort_keys=True))
+            logger.debug(json.dumps(data, indent=2, sort_keys=True))
         self.status.update(data)
 
     def wait_for_updates(self, timeout=10):
@@ -220,7 +223,7 @@ class PicoMotor(PicoDevice):
 
     def wait_for_stop(self, stall_timeout=30):
         if self.verbose:
-            print("Waiting for stop.")
+            logger.debug("Waiting for stop.")
         last_pos = (self.status["az_pos"], self.status["el_pos"])
         t = time.time()
         while self.is_moving():
@@ -279,14 +282,13 @@ class PicoMotor(PicoDevice):
                     break
                 for val1 in axis1_rng:
                     if self.verbose:
-                        print("MOVE AXIS 1 TO", val1)
+                        logger.info("MOVE AXIS 1 TO %s", val1)
                     mv_axis1(val1, wait_for_stop=True)
                     if pause_s is None:
                         if self.verbose:
-                            print(
-                                "MOVE AXIS 2 FROM",
+                            logger.info(
+                                "MOVE AXIS 2 FROM %s TO %s",
                                 axis2_rng[0],
-                                "TO",
                                 axis2_rng[-1],
                             )
                         # continuous motion
@@ -302,7 +304,7 @@ class PicoMotor(PicoDevice):
                 i += 1
                 if sleep_between is not None:
                     if self.verbose:
-                        print(f"Sleeping for {sleep_between} s)")
+                        logger.info("Sleeping for %s s", sleep_between)
                     time.sleep(sleep_between)
         finally:
             self.halt()

@@ -15,8 +15,11 @@ Controls:
 
 import json
 import curses
+import logging
 
 from picohost import PicoMotor
+
+logger = logging.getLogger(__name__)
 
 
 def main(screen):
@@ -106,10 +109,11 @@ def main(screen):
         c.halt()
 
     if zeroed:
-        print("Step counters zeroed. Motors are at home (0, 0).")
+        logger.info("Step counters zeroed. Motors are at home (0, 0).")
     else:
-        print("Exited without zeroing.")
+        logger.info("Exited without zeroing.")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     curses.wrapper(main)
