@@ -16,7 +16,7 @@ from .base import (
 )
 from .motor import PicoMotor
 from .manager import PicoManager
-from .proxy import PicoProxy, RFSwitchProxy
+from .proxy import PicoProxy
 from . import testing
 from . import emulators
 
@@ -30,7 +30,6 @@ __all__ = [
     "PicoPotentiometer",
     "PicoManager",
     "PicoProxy",
-    "RFSwitchProxy",
     "testing",
     "emulators",
 ]
