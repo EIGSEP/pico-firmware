@@ -141,8 +141,8 @@ Two independent Peltier control channels, each with a DS18B20 temperature sensor
 
 | Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
 |---------|-----------------|----------|---------------|---------------|-----|
-| **LNA** | 27 | 8 | 10 | 12 | PIO0 |
-| **LOAD** | 26 | 9 | 11 | 13 | PIO1 |
+| **LOAD** | 27 | 8 | 10 | 12 | PIO0 |
+| **LNA** | 26 | 9 | 11 | 13 | PIO1 |
 
 JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`).
 

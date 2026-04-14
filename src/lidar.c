@@ -6,8 +6,8 @@
 #include <stdio.h>
 
 #define I2C_PORT i2c0
-#define I2C_SDA 0
-#define I2C_SCL 1
+#define I2C_SDA 12
+#define I2C_SCL 13
 #define I2C_FREQ 100000
 #define I2C_ADDR 0x66
 
