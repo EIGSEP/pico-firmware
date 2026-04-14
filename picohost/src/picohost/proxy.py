@@ -1,19 +1,23 @@
 """
-Redis-backed proxies for pico devices managed by PicoManager.
+Redis-backed proxy for pico devices managed by PicoManager.
 
-A proxy has the same command interface as the real device class but
-routes calls through Redis instead of serial. Construction always
-succeeds — no hardware check. At command time the proxy checks
-whether PicoManager has the device registered; if not, the command
-is a no-op that returns ``None``.
+A proxy routes device method calls through Redis instead of serial.
+Construction always succeeds — no hardware check. At command time the
+proxy checks whether PicoManager has the device registered; if not, the
+command is a no-op that returns ``None``. Every device method is invoked
+by name via :meth:`PicoProxy.send_command`; there is intentionally no
+per-device subclass.
 
 Usage::
 
-    from picohost.proxy import RFSwitchProxy
+    from picohost.proxy import PicoProxy
 
-    sw = RFSwitchProxy("rfswitch", redis_client)
-    sw.switch("RFANT")       # routed via PicoManager
-    sw.is_available           # True if PicoManager has registered it
+    sw = PicoProxy("rfswitch", redis_client)
+    sw.send_command("switch", state="RFANT")   # routed via PicoManager
+    sw.is_available                             # True if registered
+
+    peltier = PicoProxy("tempctrl", redis_client)
+    peltier.send_command("set_temperature", T_LNA=25, T_LOAD=25)
 """
 
 import json
@@ -21,7 +25,6 @@ import logging
 import time
 import uuid
 
-from .base import PicoRFSwitch
 from .manager import CMD_STREAM, HEALTH_HASH, PICOS_SET, RESP_STREAM
 
 logger = logging.getLogger(__name__)
@@ -164,45 +167,3 @@ class PicoProxy:
                             f"{data.get('error', data)}"
                         )
                     return data
-
-
-class RFSwitchProxy(PicoProxy):
-    """
-    Redis-backed proxy for an RF switch managed by PicoManager.
-
-    Drop-in replacement for :class:`PicoRFSwitch` — exposes the same
-    ``.switch()`` method and ``.path_str`` / ``.paths`` attributes so
-    that ``cmt_vna.VNA`` can use it without modification.
-    """
-
-    path_str = PicoRFSwitch.path_str
-
-    @staticmethod
-    def rbin(s):
-        return int(s[::-1], 2)
-
-    @property
-    def paths(self):
-        return {k: self.rbin(v) for k, v in self.path_str.items()}
-
-    def switch(self, state: str) -> bool:
-        """
-        Set RF switch state via PicoManager.
-
-        Returns ``True`` on success, ``False`` if the device is
-        unavailable (no-op).
-
-        Raises
-        ------
-        ValueError
-            If *state* is not a valid switch path.
-        """
-        if state not in self.path_str:
-            raise ValueError(
-                f"Invalid switch state '{state}'. "
-                f"Valid states: {list(self.path_str.keys())}"
-            )
-        result = self.send_command("switch", state=state)
-        if result is None:
-            return False
-        return True

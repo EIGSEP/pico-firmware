@@ -17,7 +17,7 @@ from picohost.manager import (
     RESP_STREAM,
     PicoManager,
 )
-from picohost.proxy import PicoProxy, RFSwitchProxy
+from picohost.proxy import PicoProxy
 from picohost.testing import DummyPicoRFSwitch
 
 
@@ -193,65 +193,30 @@ def mgr(redis):
 
 @pytest.fixture
 def sw(redis, mgr):
-    """RFSwitchProxy wired to the running manager."""
-    return RFSwitchProxy("rfswitch", redis, source="test", timeout=5.0)
+    """PicoProxy for the rfswitch device wired to the running manager."""
+    return PicoProxy("rfswitch", redis, source="test", timeout=5.0)
 
 
-# --- RFSwitchProxy ---------------------------------------------------------
-
-
-class TestRFSwitchProxy:
-
-    def test_switch_round_trip(self, sw):
-        """switch() routes through PicoManager and returns True."""
-        assert sw.switch("RFANT") is True
-
-    def test_switch_invalid_state_raises(self, sw):
-        with pytest.raises(ValueError, match="Invalid switch state"):
-            sw.switch("BOGUS")
-
-    def test_is_available(self, sw):
-        assert sw.is_available is True
-
-    def test_unavailable_returns_false(self, redis):
-        proxy = RFSwitchProxy("ghost", redis, timeout=1.0)
-        assert proxy.is_available is False
-        assert proxy.switch("RFANT") is False
-
-    def test_path_str_matches_real(self):
-        from picohost.base import PicoRFSwitch
-        assert RFSwitchProxy.path_str == PicoRFSwitch.path_str
-
-    def test_paths_computation(self, sw):
-        # RFANT = "00000000" → 0
-        assert sw.paths["RFANT"] == 0
-        # VNAO = "10000000" → 1 (LSB first)
-        assert sw.paths["VNAO"] == 1
-
-    def test_health_available(self, sw, redis):
-        # PicoManager writes health in _check_health, but we can also
-        # manually set it to verify the proxy reads it.
-        redis.hset(
-            "pico_health", "rfswitch",
-            json.dumps({"connected": True, "last_seen": 1.0, "app_id": 5}),
-        )
-        h = sw.health
-        assert h["connected"] is True
-        assert h["app_id"] == 5
-
-    def test_health_missing(self, redis):
-        proxy = RFSwitchProxy("ghost", redis)
-        assert proxy.health is None
-
-
-# --- PicoProxy base --------------------------------------------------------
+# --- PicoProxy -------------------------------------------------------------
 
 
 class TestPicoProxy:
 
+    def test_send_command_round_trip(self, sw):
+        """send_command routes through PicoManager and returns device result."""
+        result = sw.send_command("switch", state="RFANT")
+        assert result is not None
+        # Manager wraps the device return as {"action": ..., "result": ...}
+        assert result["action"] == "switch"
+
     def test_send_command_unavailable_returns_none(self, redis):
         proxy = PicoProxy("nonexistent", redis, timeout=1.0)
         assert proxy.send_command("switch", state="RFANT") is None
+
+    def test_send_command_invalid_state_raises(self, sw):
+        """Device-side validation surfaces as RuntimeError from the proxy."""
+        with pytest.raises(RuntimeError, match="Invalid switch state"):
+            sw.send_command("switch", state="BOGUS")
 
     def test_send_command_timeout(self, redis):
         """If manager never responds, proxy raises TimeoutError."""
@@ -266,6 +231,28 @@ class TestPicoProxy:
         with pytest.raises(RuntimeError, match="not allowed"):
             proxy.send_command("disconnect")
 
+    def test_is_available_true(self, sw):
+        assert sw.is_available is True
+
+    def test_is_available_false(self, redis):
+        proxy = PicoProxy("ghost", redis, timeout=1.0)
+        assert proxy.is_available is False
+
+    def test_health_available(self, sw, redis):
+        # PicoManager writes health in _check_health, but we can also
+        # manually set it to verify the proxy reads it.
+        redis.hset(
+            "pico_health", "rfswitch",
+            json.dumps({"connected": True, "last_seen": 1.0, "app_id": 5}),
+        )
+        h = sw.health
+        assert h["connected"] is True
+        assert h["app_id"] == 5
+
+    def test_health_missing(self, redis):
+        proxy = PicoProxy("ghost", redis)
+        assert proxy.health is None
+
 
 # --- request_id echo -------------------------------------------------------
 
@@ -274,7 +261,7 @@ class TestRequestId:
 
     def test_response_contains_request_id(self, sw, redis):
         """The manager echoes request_id in the response."""
-        sw.switch("RFANT")
+        sw.send_command("switch", state="RFANT")
         # Check that RESP_STREAM has at least one message with request_id
         msgs = redis._streams.get(RESP_STREAM, [])
         assert len(msgs) > 0
@@ -283,8 +270,8 @@ class TestRequestId:
         assert fields["request_id"] != ""
 
     def test_request_id_unique_per_call(self, sw, redis):
-        sw.switch("RFANT")
-        sw.switch("RFNON")
+        sw.send_command("switch", state="RFANT")
+        sw.send_command("switch", state="RFNON")
         msgs = redis._streams.get(RESP_STREAM, [])
         ids = [f["request_id"] for _, f in msgs]
         assert len(set(ids)) == len(ids)
