@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.2.0](https://github.com/EIGSEP/pico-firmware/compare/v2.1.0...v2.2.0) (2026-04-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **picohost:** `picohost.RFSwitchProxy` removed. Replace `RFSwitchProxy("rfswitch", r).switch(state)` with `PicoProxy("rfswitch", r).send_command("switch", state=state)`.
+
+### Code Refactoring
+
+* **picohost:** drop RFSwitchProxy, use generic PicoProxy only ([9e13d6e](https://github.com/EIGSEP/pico-firmware/commit/9e13d6e1b70f6aad0f351465f823959294bd3ed3))
+
 ## [2.1.0](https://github.com/EIGSEP/pico-firmware/compare/v2.0.0...v2.1.0) (2026-04-13)
 
 
