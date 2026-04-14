@@ -6,14 +6,14 @@
 #include "eigsep_command.h"
 
 // define rfswitch pins
-#define RFSWITCH4_PIN   5
-#define RFSWITCH2_PIN   6
-#define RFSWITCH3_PIN   7
-#define RFSWITCH1_PIN   8
-#define RFSWITCH0_PIN   9
-#define RFSWITCH6_PIN  10
-#define RFSWITCH7_PIN  11
-#define RFSWITCH5_PIN  12
+#define RFSWITCH0_PIN   8
+#define RFSWITCH1_PIN   9
+#define RFSWITCH2_PIN  10
+#define RFSWITCH3_PIN  11
+#define RFSWITCH4_PIN  12
+#define RFSWITCH5_PIN  13
+#define RFSWITCH6_PIN  14
+#define RFSWITCH7_PIN  15
 
 
 typedef struct {
