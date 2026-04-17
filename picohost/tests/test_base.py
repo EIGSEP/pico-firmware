@@ -87,6 +87,34 @@ class TestPicoDevice:
         assert device.last_status.get("value") == 99
         device.disconnect()
 
+    def test_redis_handler_is_bound_before_connect(self):
+        """__init__ binds redis_handler before connect() is invoked."""
+
+        class ProbePicoDevice(DummyPicoDevice):
+            def connect(self):
+                self.redis_handler_seen_in_connect = self.redis_handler
+                return super().connect()
+
+        device = ProbePicoDevice("/dev/dummy")
+        assert device.redis_handler_seen_in_connect is None
+        device.disconnect()
+
+    def test_redis_handler_with_client_is_bound_before_connect(self):
+        """Configured Redis handler is available during connect()."""
+
+        class FakeRedis:
+            def add_metadata(self, _name, _data):
+                pass
+
+        class ProbePicoDevice(DummyPicoDevice):
+            def connect(self):
+                self.redis_handler_seen_in_connect = self.redis_handler
+                return super().connect()
+
+        device = ProbePicoDevice("/dev/dummy", eig_redis=FakeRedis())
+        assert callable(device.redis_handler_seen_in_connect)
+        device.disconnect()
+
 
 class TestPicoMotor:
     """Test PicoMotor commands and status via DummyPicoMotor (with emulator)."""

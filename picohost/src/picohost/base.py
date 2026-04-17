@@ -110,11 +110,11 @@ class PicoDevice:
         else:
             self.name = name
 
-        self.connect()
         if eig_redis is not None:
             self.redis_handler = redis_handler(eig_redis)
         else:
             self.redis_handler = None
+        self.connect()
 
         if response_handler is not None:
             self.set_response_handler(response_handler)
