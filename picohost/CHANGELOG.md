@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/EIGSEP/pico-firmware/compare/v2.2.0...v2.2.1) (2026-04-17)
+
+
+### Bug Fixes
+
+* initialize redis hander before starting Pico reader thread([#48](https://github.com/EIGSEP/pico-firmware/issues/48)) ([40cbb5a](https://github.com/EIGSEP/pico-firmware/commit/40cbb5a5556a1995124c6264a2ab7991abf70d21))
+
 ## [2.2.0](https://github.com/EIGSEP/pico-firmware/compare/v2.1.0...v2.2.0) (2026-04-14)
 
 
