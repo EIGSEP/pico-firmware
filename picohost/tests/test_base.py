@@ -214,6 +214,92 @@ class TestPicoRFSwitch:
         switch.disconnect()
 
 
+class TestRFSwitchRedisHandler:
+    """Verify _rfswitch_redis_handler augments the payload with sw_state_name.
+
+    The published payload (what the base handler receives) must include a
+    human-readable name for every known ``sw_state`` integer, and ``None``
+    for integers not in :attr:`PicoRFSwitch.path_str` (mid-switch, manual
+    override, firmware bug). The published shape stays stable either way,
+    and every added field must satisfy the scalar-only contract documented
+    on :func:`picohost.base.redis_handler`.
+    """
+
+    _SCALAR_TYPES = (str, int, float, bool, type(None))
+
+    def _capture(self, switch, data):
+        """Run the redis handler against a given status dict and return
+        what the base handler would receive."""
+        captured = {}
+        switch._base_redis_handler = lambda d: captured.update(d)
+        switch._rfswitch_redis_handler(data)
+        return captured
+
+    def test_known_state_maps_to_name(self):
+        """Every entry in path_str round-trips via sw_state_name."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            for name, sw_state in switch.paths.items():
+                published = self._capture(
+                    switch,
+                    {"sensor_name": "rfswitch", "sw_state": sw_state},
+                )
+                assert published["sw_state"] == sw_state
+                assert published["sw_state_name"] == name
+        finally:
+            switch.disconnect()
+
+    def test_unknown_state_publishes_none_name(self):
+        """Integers not in path_str get sw_state_name = None."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            unknown = max(switch.paths.values()) + 1
+            assert unknown not in switch.paths.values()
+            published = self._capture(
+                switch,
+                {"sensor_name": "rfswitch", "sw_state": unknown},
+            )
+            assert published["sw_state"] == unknown
+            assert published["sw_state_name"] is None
+        finally:
+            switch.disconnect()
+
+    def test_missing_sw_state_does_not_crash(self):
+        """A status dict without sw_state still publishes (name=None)."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            published = self._capture(switch, {"sensor_name": "rfswitch"})
+            assert published["sw_state_name"] is None
+        finally:
+            switch.disconnect()
+
+    def test_handler_does_not_mutate_input(self):
+        """The caller's dict is untouched by the handler."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            data = {"sensor_name": "rfswitch", "sw_state": 0}
+            self._capture(switch, data)
+            assert data == {"sensor_name": "rfswitch", "sw_state": 0}
+        finally:
+            switch.disconnect()
+
+    def test_published_dict_is_scalar_only(self):
+        """Every value in the published dict is a permitted scalar type."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            for sw_state in (0, 1, 255):
+                published = self._capture(
+                    switch,
+                    {"sensor_name": "rfswitch", "sw_state": sw_state},
+                )
+                for k, v in published.items():
+                    assert isinstance(v, self._SCALAR_TYPES), (
+                        f"field {k!r} has non-scalar type {type(v).__name__}"
+                    )
+        finally:
+            switch.disconnect()
+
+
 class TestPicoPeltier:
     """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
 

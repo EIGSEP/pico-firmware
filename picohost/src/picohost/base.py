@@ -458,6 +458,27 @@ class PicoRFSwitch(PicoDevice):
     def paths(self):
         return {k: self.rbin(v) for k, v in self.path_str.items()}
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._name_by_state = {v: k for k, v in self.paths.items()}
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._rfswitch_redis_handler
+
+    def _rfswitch_redis_handler(self, data):
+        """Add the human-readable switch name before uploading to Redis.
+
+        Firmware reports ``sw_state`` as a raw 8-bit integer. Downstream
+        consumers should see a named state (``"VNAO"``, ``"RFANT"``, etc.)
+        alongside the raw integer, so the encoding lives in one place.
+        ``sw_state_name`` is ``None`` when the integer does not match any
+        entry in :attr:`path_str` (mid-switch, manual override, firmware
+        bug); the shape stays stable regardless.
+        """
+        data = data.copy()
+        data["sw_state_name"] = self._name_by_state.get(data.get("sw_state"))
+        self._base_redis_handler(data)
+
     def switch(self, state: str) -> None:
         """
         Set RF switch state.
