@@ -100,11 +100,11 @@ class TestPicoDevice:
         assert device.redis_handler_seen_in_connect is None
         device.disconnect()
 
-    def test_redis_handler_with_client_is_bound_before_connect(self):
-        """Configured Redis handler is available during connect()."""
+    def test_redis_handler_with_writer_is_bound_before_connect(self):
+        """Configured metadata handler is available during connect()."""
 
-        class FakeRedis:
-            def add_metadata(self, _name, _data):
+        class FakeMetadataWriter:
+            def add(self, _key, _value):
                 pass
 
         class ProbePicoDevice(DummyPicoDevice):
@@ -112,7 +112,9 @@ class TestPicoDevice:
                 self.redis_handler_seen_in_connect = self.redis_handler
                 return super().connect()
 
-        device = ProbePicoDevice("/dev/dummy", eig_redis=FakeRedis())
+        device = ProbePicoDevice(
+            "/dev/dummy", metadata_writer=FakeMetadataWriter()
+        )
         assert callable(device.redis_handler_seen_in_connect)
         device.disconnect()
 

@@ -6,11 +6,11 @@ formatting) and test_emulator_integration.py (which tests individual
 devices directly), these tests verify the full pipeline:
 
     Redis command -> PicoManager -> DummyDevice -> MockSerial ->
-    Emulator -> state change -> reader thread -> redis_handler ->
-    MockRedis.add_metadata()
+    Emulator -> state change -> reader thread -> MetadataWriter.add()
 
-The enhanced MockRedis here captures ``add_metadata`` calls and supports
-blocking ``xread`` so that ``cmd_loop`` can pick up injected commands.
+The transport here is a fakeredis-backed ``DummyTransport``, so
+``cmd_loop`` really blocks on ``xread`` and ``MetadataWriter.add``
+really writes to an in-process Redis snapshot.
 """
 
 import json
@@ -18,17 +18,17 @@ import threading
 import time
 
 import pytest
-
 from conftest import wait_for_condition, wait_for_settle
-from picohost.manager import (
-    APP_IDS,
-    CMD_STREAM,
-    CONFIG_HASH,
-    HEALTH_HASH,
-    PICOS_SET,
-    RESP_STREAM,
-    PicoManager,
+from eigsep_redis import HeartbeatReader, MetadataSnapshotReader
+from eigsep_redis.testing import DummyTransport
+
+from picohost.buses import PicoConfigStore
+from picohost.keys import (
+    PICO_CMD_STREAM,
+    PICO_RESP_STREAM,
+    pico_heartbeat_name,
 )
+from picohost.manager import HEARTBEAT_TTL, PicoManager
 from picohost.testing import (
     DummyPicoMotor,
     DummyPicoPeltier,
@@ -38,156 +38,48 @@ from picohost.testing import (
 CADENCE_MS = 50  # matches DummyPico* EMULATOR_CADENCE_MS
 
 
-# --- Enhanced MockRedis ------------------------------------------------------
-
-
-class MockRedis:
-    """
-    In-process Redis substitute with metadata capture and blocking xread.
-
-    Extends the minimal stub pattern from test_manager.py with two
-    capabilities needed for integration testing:
-
-    * ``_metadata_log`` captures every ``add_metadata(name, data)`` call
-      so tests can assert that emulator status flows through the reader
-      thread's ``redis_handler``.
-
-    * ``xread`` supports blocking via ``threading.Event`` so that
-      ``cmd_loop()`` can pick up commands injected by tests.
-    """
-
-    def __init__(self):
-        self._sets = {}
-        self._hashes = {}
-        self._keys = {}
-        self._streams = {}
-        self._metadata_log = []
-        self._xread_event = threading.Event()
-        # PicoManager._redis() returns self.r if it exists, else self.
-        self.r = self
-
-    # -- redis_handler entry point --
-
-    def add_metadata(self, name, data):
-        self._metadata_log.append((name, dict(data)))
-
-    # -- sets --
-
-    def sadd(self, key, *values):
-        self._sets.setdefault(key, set()).update(values)
-
-    def srem(self, key, *values):
-        if key in self._sets:
-            self._sets[key] -= set(values)
-
-    def smembers(self, key):
-        return set(self._sets.get(key, set()))
-
-    # -- hashes --
-
-    def hset(self, name, key=None, value=None, mapping=None):
-        self._hashes.setdefault(name, {})
-        if key is not None:
-            self._hashes[name][key] = value
-        if mapping:
-            self._hashes[name].update(mapping)
-
-    def hget(self, name, key):
-        return self._hashes.get(name, {}).get(key)
-
-    def hgetall(self, name):
-        return dict(self._hashes.get(name, {}))
-
-    # -- keys --
-
-    def set(self, key, value, ex=None):
-        self._keys[key] = value
-
-    def get(self, key):
-        return self._keys.get(key)
-
-    def delete(self, *keys):
-        for key in keys:
-            self._keys.pop(key, None)
-
-    # -- streams --
-
-    def xadd(self, stream, fields, maxlen=None):
-        msgs = self._streams.setdefault(stream, [])
-        msg_id = f"{len(msgs)}-0"
-        msgs.append((msg_id, fields))
-        self._xread_event.set()
-        return msg_id
-
-    def xread(self, streams, block=None, count=None):
-        """Return messages newer than the requested ID.
-
-        When ``last_id == "$"`` and ``block > 0``, waits for new messages
-        via ``_xread_event`` (set by ``xadd``).
-        """
-        for stream_name, last_id in streams.items():
-            msgs = self._streams.get(stream_name, [])
-
-            if last_id == "$":
-                # "$" means only messages added after this call.
-                snapshot = len(msgs)
-                if block and block > 0:
-                    self._xread_event.wait(timeout=min(block / 1000.0, 0.5))
-                    self._xread_event.clear()
-                    msgs = self._streams.get(stream_name, [])
-                    new_msgs = msgs[snapshot:]
-                else:
-                    new_msgs = []
-            else:
-                # Return messages after last_id.
-                new_msgs = []
-                for i, (mid, _) in enumerate(msgs):
-                    if mid == last_id:
-                        new_msgs = msgs[i + 1 :]
-                        break
-
-            if new_msgs:
-                if count:
-                    new_msgs = new_msgs[:count]
-                return [(stream_name, new_msgs)]
-        return []
-
-
 # --- helpers -----------------------------------------------------------------
 
 
 def _attach(mgr, name, dummy_cls):
-    """
-    Build a Dummy* device, register it in the manager, and mark it
-    as published in Redis -- same effect as ``discover()``.
-    """
-    pico = dummy_cls("/dev/dummy", eig_redis=mgr.eig_redis, name=name)
-    mgr.picos[name] = pico
-    r = mgr._redis()
-    r.sadd(PICOS_SET, name)
-    r.hset(
-        CONFIG_HASH,
-        name,
-        json.dumps(
-            {
-                "port": "/dev/dummy",
-                "app_id": APP_IDS.get(name, -1),
-                "usb_serial": "DUMMY",
-            }
-        ),
+    """Build a Dummy device, register it, and emit initial heartbeat."""
+    from eigsep_redis import HeartbeatWriter
+
+    pico = dummy_cls(
+        "/dev/dummy",
+        metadata_writer=mgr._metadata_writer,
+        name=name,
     )
+    mgr.picos[name] = pico
+    mgr._heartbeats[name] = HeartbeatWriter(
+        mgr.transport, name=pico_heartbeat_name(name)
+    )
+    mgr._heartbeats[name].set(ex=HEARTBEAT_TTL, alive=True)
     return pico
 
 
-def _metadata_names(mock_redis):
-    """Set of sensor names that have appeared in add_metadata calls."""
-    return {name for name, _ in mock_redis._metadata_log}
+def _last_response(transport):
+    entries = transport.r.xrange(PICO_RESP_STREAM)
+    assert entries, "expected at least one response entry"
+    _, fields = entries[-1]
+    return {k.decode(): v.decode() for k, v in fields.items()}
+
+
+def _all_responses(transport):
+    return [
+        {k.decode(): v.decode() for k, v in fields.items()}
+        for _, fields in transport.r.xrange(PICO_RESP_STREAM)
+    ]
+
+
+def _metadata_snapshot(transport):
+    return MetadataSnapshotReader(transport)
 
 
 @pytest.fixture
 def mgr():
-    """PicoManager wired to an enhanced MockRedis."""
-    m = PicoManager(MockRedis())
+    """PicoManager wired to a fakeredis-backed transport."""
+    m = PicoManager(DummyTransport())
     yield m
     m._running = False
     if m._cmd_thread:
@@ -206,29 +98,25 @@ def mgr():
 
 
 class TestStatusPublication:
-    """Emulator status flows through redis_handler into add_metadata()."""
+    """Emulator status flows through MetadataWriter into Redis."""
 
-    def test_add_metadata_receives_status(self, mgr):
-        mock = mgr.eig_redis
+    def test_metadata_snapshot_receives_status(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        snap = _metadata_snapshot(mgr.transport)
         wait_for_condition(
-            lambda: len(mock._metadata_log) > 0,
+            lambda: "rfswitch" in snap.get(),
             cadence_ms=CADENCE_MS,
         )
-        names = _metadata_names(mock)
-        assert "rfswitch" in names
-        _, data = next(
-            (n, d) for n, d in mock._metadata_log if n == "rfswitch"
-        )
-        assert "sensor_name" in data
+        data = snap.get("rfswitch")
+        assert data["sensor_name"] == "rfswitch"
         assert "sw_state" in data
 
     def test_multiple_devices_publish_independently(self, mgr):
-        mock = mgr.eig_redis
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         _attach(mgr, "motor", DummyPicoMotor)
+        snap = _metadata_snapshot(mgr.transport)
         wait_for_condition(
-            lambda: _metadata_names(mock) >= {"rfswitch", "motor"},
+            lambda: {"rfswitch", "motor"}.issubset(snap.get()),
             cadence_ms=CADENCE_MS,
         )
 
@@ -250,29 +138,35 @@ class TestStatusPublication:
 class TestHealthMonitoring:
     """_check_health() against live emulator-backed devices."""
 
-    def test_live_device_reported_healthy(self, mgr):
+    def test_live_device_heartbeat_alive(self, mgr):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         wait_for_condition(
             lambda: pico.last_status_time is not None,
             cadence_ms=CADENCE_MS,
         )
         mgr._check_health()
-        r = mgr._redis()
-        health = json.loads(r.hget(HEALTH_HASH, "rfswitch"))
-        assert health["connected"] is True
-        assert health["last_seen"] > 0
-        assert health["app_id"] == APP_IDS["rfswitch"]
+        hb_reader = HeartbeatReader(
+            mgr.transport, name=pico_heartbeat_name("rfswitch")
+        )
+        assert hb_reader.check() is True
 
-    def test_health_reflects_actual_status_time(self, mgr):
+    def test_stopped_device_heartbeat_dead(self, mgr, monkeypatch):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         wait_for_condition(
             lambda: pico.last_status_time is not None,
             cadence_ms=CADENCE_MS,
         )
+        # Simulate a silent, unreachable device: disconnect, backdate
+        # last_status_time past HEALTH_TIMEOUT, and force reconnect()
+        # to fail so _check_health gives up and writes alive=False.
+        pico.disconnect()
+        pico.last_status_time = time.time() - 60
+        monkeypatch.setattr(pico, "reconnect", lambda: False)
         mgr._check_health()
-        r = mgr._redis()
-        health = json.loads(r.hget(HEALTH_HASH, "rfswitch"))
-        assert health["last_seen"] == pico.last_status_time
+        hb_reader = HeartbeatReader(
+            mgr.transport, name=pico_heartbeat_name("rfswitch")
+        )
+        assert hb_reader.check() is False
 
 
 # --- TestCommandRelay -------------------------------------------------------
@@ -287,10 +181,8 @@ class TestCommandRelay:
             lambda: pico.last_status.get("sensor_name") is not None,
             cadence_ms=CADENCE_MS,
         )
-        r = mgr._redis()
         before = pico.last_status.get("sw_state")
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -305,7 +197,7 @@ class TestCommandRelay:
             max_cycles=10,
         )
         assert settled == pico.paths["VNAO"]
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
 
     def test_motor_moves_to_target(self, mgr):
@@ -314,9 +206,7 @@ class TestCommandRelay:
             lambda: pico.last_status_time is not None,
             cadence_ms=CADENCE_MS,
         )
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "motor",
@@ -344,9 +234,7 @@ class TestCommandRelay:
             lambda: pico.last_status_time is not None,
             cadence_ms=CADENCE_MS,
         )
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "tempctrl",
@@ -360,13 +248,12 @@ class TestCommandRelay:
                 "source": "test",
             },
         )
-        # Only verify the target was set, not convergence.
         wait_for_condition(
             lambda: pico.last_status.get("LNA_T_target") == 30.0,
             cadence_ms=CADENCE_MS,
             max_cycles=10,
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
 
     def test_raw_command_rejected(self, mgr):
@@ -375,9 +262,7 @@ class TestCommandRelay:
             lambda: pico.last_status.get("sensor_name") is not None,
             cadence_ms=CADENCE_MS,
         )
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -385,7 +270,7 @@ class TestCommandRelay:
                 "source": "test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "error"
         assert "action" in resp["data"]
 
@@ -406,6 +291,9 @@ class TestCmdLoopEndToEnd:
         )
         mgr._cmd_thread.start()
 
+    def _count_responses(self, mgr):
+        return mgr.transport.r.xlen(PICO_RESP_STREAM)
+
     def test_stream_message_processed(self, mgr):
         pico = _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         wait_for_condition(
@@ -413,26 +301,23 @@ class TestCmdLoopEndToEnd:
             cadence_ms=CADENCE_MS,
         )
         self._start_cmd_loop(mgr)
-        r = mgr._redis()
         before = pico.last_status.get("sw_state")
-        r.xadd(
-            CMD_STREAM,
+        mgr.transport.r.xadd(
+            PICO_CMD_STREAM,
             {
                 "target": "rfswitch",
                 "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
                 "source": "e2e_test",
             },
         )
-        # Wait for response in RESP_STREAM.
         wait_for_condition(
-            lambda: len(r._streams.get(RESP_STREAM, [])) > 0,
+            lambda: self._count_responses(mgr) > 0,
             cadence_ms=CADENCE_MS,
             max_cycles=40,
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
         assert resp["target"] == "rfswitch"
-        # Verify emulator state actually changed.
         settled = wait_for_settle(
             lambda: pico.last_status.get("sw_state"),
             initial=before,
@@ -448,17 +333,16 @@ class TestCmdLoopEndToEnd:
             cadence_ms=CADENCE_MS,
         )
         self._start_cmd_loop(mgr)
-        r = mgr._redis()
-        r.xadd(
-            CMD_STREAM,
+        mgr.transport.r.xadd(
+            PICO_CMD_STREAM,
             {
                 "target": "rfswitch",
                 "cmd": json.dumps({"action": "switch", "state": "VNAO"}),
                 "source": "test",
             },
         )
-        r.xadd(
-            CMD_STREAM,
+        mgr.transport.r.xadd(
+            PICO_CMD_STREAM,
             {
                 "target": "rfswitch",
                 "cmd": json.dumps({"action": "switch", "state": "RFANT"}),
@@ -466,14 +350,13 @@ class TestCmdLoopEndToEnd:
             },
         )
         wait_for_condition(
-            lambda: len(r._streams.get(RESP_STREAM, [])) >= 2,
+            lambda: self._count_responses(mgr) >= 2,
             cadence_ms=CADENCE_MS,
             max_cycles=40,
         )
         assert all(
-            resp["status"] == "ok" for _, resp in r._streams[RESP_STREAM]
+            resp["status"] == "ok" for resp in _all_responses(mgr.transport)
         )
-        # Final state should match the last command.
         settled = wait_for_settle(
             lambda: pico.last_status.get("sw_state"),
             cadence_ms=CADENCE_MS,
@@ -483,9 +366,12 @@ class TestCmdLoopEndToEnd:
 
     def test_error_for_unknown_target(self, mgr):
         self._start_cmd_loop(mgr)
-        r = mgr._redis()
-        r.xadd(
-            CMD_STREAM,
+        # Give cmd_loop a moment to reach its first blocking xread so
+        # the $ cursor is in place before we xadd (otherwise the add
+        # races ahead of the read and the message is missed).
+        time.sleep(0.1)
+        mgr.transport.r.xadd(
+            PICO_CMD_STREAM,
             {
                 "target": "nonexistent",
                 "cmd": "{}",
@@ -493,11 +379,11 @@ class TestCmdLoopEndToEnd:
             },
         )
         wait_for_condition(
-            lambda: len(r._streams.get(RESP_STREAM, [])) > 0,
+            lambda: self._count_responses(mgr) > 0,
             cadence_ms=CADENCE_MS,
             max_cycles=40,
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "error"
         assert "unknown target" in json.loads(resp["data"])["error"]
 
@@ -508,22 +394,18 @@ class TestCmdLoopEndToEnd:
 class TestDiscoverIntegration:
     """discover() with Dummy classes produces live devices."""
 
-    def test_discover_creates_live_device(self, mgr, monkeypatch, tmp_path):
+    def test_discover_creates_live_device(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
 
-        cfg = tmp_path / "pico_config.json"
-        cfg.write_text(
-            json.dumps(
-                [
-                    {
-                        "app_id": 5,
-                        "port": "/dev/dummy",
-                        "usb_serial": "INT123",
-                    },
-                ]
-            )
+        PicoConfigStore(mgr.transport).upload(
+            [
+                {
+                    "app_id": 5,
+                    "port": "/dev/dummy",
+                    "usb_serial": "INT123",
+                },
+            ]
         )
-        mgr.config_file = cfg
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES,
             "rfswitch",
@@ -537,9 +419,9 @@ class TestDiscoverIntegration:
             lambda: pico.last_status.get("sensor_name") == "rfswitch",
             cadence_ms=CADENCE_MS,
         )
-        # Status should also flow to add_metadata.
-        mock = mgr.eig_redis
+        # Status flows into the metadata snapshot.
+        snap = _metadata_snapshot(mgr.transport)
         wait_for_condition(
-            lambda: "rfswitch" in _metadata_names(mock),
+            lambda: "rfswitch" in snap.get(),
             cadence_ms=CADENCE_MS,
         )

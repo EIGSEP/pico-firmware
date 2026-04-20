@@ -36,6 +36,7 @@ dev = [
   "pytest-cov",
   "pytest-timeout",
   "pyserial-mock==1.0.0",
+  "fakeredis",
 ]
 
 [tool.setuptools]
