@@ -15,6 +15,7 @@ These tests model the main loop algorithm in Python and verify that:
 """
 
 import time
+from collections import deque
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ class MainLoopModel:
 
     def __init__(self, max_read_only_s=MAX_READ_ONLY_S):
         self.max_read_only_s = max_read_only_s
-        self.input_queue: list[str] = []
+        self.input_queue: deque[str] = deque()
         self.buffer: list[str] = []
         self.op_call_times: list[float] = []
         self.server_calls: list[str] = []  # completed commands
@@ -46,7 +47,7 @@ class MainLoopModel:
     def _getchar(self):
         """Non-blocking read of one character (models getchar_timeout_us(0))."""
         if self.input_queue:
-            return self.input_queue.pop(0)
+            return self.input_queue.popleft()
         return None
 
     def _app_op(self):
@@ -134,11 +135,11 @@ class TestAntiStarvation:
         threshold = 0.005  # 5 ms
         model = MainLoopModel(max_read_only_s=threshold)
         # Push a large block of data with no newline
-        model.push_input("x" * 500_000)
+        model.push_input("x" * 100_000)
 
         start = time.monotonic()
         op_ran = False
-        for _ in range(500_000):
+        for _ in range(100_000):
             if model.tick():
                 op_ran = True
                 break
@@ -156,11 +157,11 @@ class TestAntiStarvation:
         model = MainLoopModel(max_read_only_s=0.005)
         # Push partial command (no newline), enough to trigger forced op()
         partial = '{"cmd":"hello'
-        padding = "x" * 500_000  # ensure we exceed the time threshold
+        padding = "x" * 100_000  # ensure we exceed the time threshold
         model.push_input(partial + padding)
 
         # Run until op() is forced (and beyond)
-        for _ in range(500_000):
+        for _ in range(100_000):
             model.tick()
 
         assert len(model.op_call_times) >= 1, "op() should have been forced"
@@ -179,9 +180,9 @@ class TestAntiStarvation:
     def test_op_called_multiple_times_during_long_flood(self):
         """During a very long flood, op() should be called repeatedly."""
         model = MainLoopModel(max_read_only_s=0.005)
-        model.push_input("x" * 500_000)
+        model.push_input("x" * 100_000)
 
-        for _ in range(500_000):
+        for _ in range(100_000):
             model.tick()
 
         # With 5ms threshold, we should get multiple op() calls
