@@ -172,7 +172,7 @@ class TestRouteCommand:
             pico, "rfswitch", {"action": "switch", "state": "RFANT"}
         )
         assert result["action"] == "switch"
-        assert result["result"] is True
+        assert result["result"] is None
 
     @pytest.mark.parametrize("action", sorted(_BLOCKED_ACTIONS))
     def test_blocked_actions_rejected(self, mgr, action):
@@ -202,7 +202,7 @@ class TestRouteCommand:
             {"action": "set_temperature", "T_LNA": 25.0, "LNA_hyst": 0.5},
         )
         assert result["action"] == "set_temperature"
-        assert result["result"] is True
+        assert result["result"] is None
 
 
 # --- _process_command -----------------------------------------------------
@@ -675,34 +675,6 @@ class TestReconnectHook:
         switch.usb_serial = ""
         switch._rediscover_port()
         assert switch.port == original_port
-
-
-class _StubDevice:
-    """Bare attribute holder for testing wait_for_updates in isolation."""
-
-    def __init__(self):
-        self.last_status = {}
-        self.name = "stub"
-
-
-class TestTimeoutError:
-    """
-    Both wait_for_updates methods used to use ``assert``, which gets
-    stripped under ``python -O``. They now raise TimeoutError; verify
-    that explicitly.
-    """
-
-    def test_peltier_wait_for_updates_raises_timeout(self):
-        from picohost.base import PicoPeltier
-
-        with pytest.raises(TimeoutError, match="No status"):
-            PicoPeltier.wait_for_updates(_StubDevice(), timeout=0.05)
-
-    def test_motor_wait_for_updates_raises_timeout(self):
-        from picohost.motor import PicoMotor
-
-        with pytest.raises(TimeoutError, match="No status"):
-            PicoMotor.wait_for_updates(_StubDevice(), timeout=0.05)
 
 
 # --- module-level constants -----------------------------------------------

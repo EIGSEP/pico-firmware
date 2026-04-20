@@ -40,18 +40,19 @@ class TestPicoDevice:
         """send_command() serializes a dict as compact JSON + newline."""
         device = DummyPicoDevice("/dev/dummy")
         cmd = {"cmd": "test", "value": 42}
-        assert device.send_command(cmd) is True
+        device.send_command(cmd)
 
         # No emulator on base DummyPicoDevice, so bytes stay in peer buffer
         expected_data = json.dumps(cmd, separators=(",", ":")) + "\n"
         assert device.ser.peer._read_buffer == expected_data.encode("utf-8")
         device.disconnect()
 
-    def test_send_command_returns_false_when_disconnected(self):
-        """send_command() returns False when the serial port is closed."""
+    def test_send_command_raises_when_disconnected(self):
+        """send_command() raises ConnectionError when the port is closed."""
         device = DummyPicoDevice("/dev/dummy")
         device.disconnect()
-        assert device.send_command({"cmd": "test"}) is False
+        with pytest.raises(ConnectionError):
+            device.send_command({"cmd": "test"})
 
     def test_parse_response_valid_json(self):
         """parse_response() returns a dict for valid JSON."""
@@ -156,7 +157,10 @@ class TestPicoMotor:
     def test_status_has_motor_fields(self):
         """Motor status should contain all expected fields from the emulator."""
         motor = DummyPicoMotor("/dev/dummy")
-        assert motor.last_status.get("sensor_name") == "motor"
+        wait_for_condition(
+            lambda: motor.last_status.get("sensor_name") == "motor",
+            cadence_ms=motor.EMULATOR_CADENCE_MS,
+        )
         for key in ("az_pos", "az_target_pos", "el_pos", "el_target_pos"):
             assert key in motor.last_status, f"Missing key: {key}"
         motor.disconnect()
@@ -170,7 +174,7 @@ class TestPicoRFSwitch:
         switch = DummyPicoRFSwitch("/dev/dummy")
         cadence = switch.EMULATOR_CADENCE_MS
         expected_state = switch.rbin(switch.path_str["VNAO"])
-        assert switch.switch("VNAO") is True
+        switch.switch("VNAO")
         wait_for_condition(
             lambda: switch.last_status.get("sw_state") == expected_state,
             cadence_ms=cadence,
@@ -182,7 +186,7 @@ class TestPicoRFSwitch:
         """Every defined path string can be switched without error."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         for state in switch.paths:
-            assert switch.switch(state) is True
+            switch.switch(state)
         switch.disconnect()
 
     def test_switch_invalid_state_raises(self):
@@ -216,7 +220,7 @@ class TestPicoPeltier:
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LNA_T_target")
-        assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
+        peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5)
         assert wait_for_settle(
             lambda: peltier.last_status.get("LNA_T_target"),
             initial=before,
@@ -231,7 +235,7 @@ class TestPicoPeltier:
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LOAD_hysteresis")
-        assert peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0) is True
+        peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0)
         assert wait_for_settle(
             lambda: peltier.last_status.get("LOAD_hysteresis"),
             initial=before,
@@ -246,11 +250,8 @@ class TestPicoPeltier:
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LNA_T_target")
-        assert (
-            peltier.set_temperature(
-                T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8
-            )
-            is True
+        peltier.set_temperature(
+            T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8
         )
         assert wait_for_settle(
             lambda: peltier.last_status.get("LNA_T_target"),
@@ -265,7 +266,7 @@ class TestPicoPeltier:
         """set_enable() updates the enabled flags in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(LNA=True, LOAD=True) is True
+        peltier.set_enable(LNA=True, LOAD=True)
         wait_for_condition(
             lambda: peltier.last_status.get("LNA_enabled") is True,
             cadence_ms=cadence,
@@ -277,7 +278,7 @@ class TestPicoPeltier:
         """Disabling channels is reflected in emulator status."""
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(LNA=False, LOAD=False) is True
+        peltier.set_enable(LNA=False, LOAD=False)
         wait_for_condition(
             lambda: peltier.last_status.get("LNA_enabled") is False,
             cadence_ms=cadence,
@@ -288,7 +289,10 @@ class TestPicoPeltier:
     def test_status_has_tempctrl_fields(self):
         """Peltier status should contain all tempctrl fields from the emulator."""
         peltier = DummyPicoPeltier("/dev/dummy")
-        assert peltier.last_status.get("sensor_name") == "tempctrl"
+        wait_for_condition(
+            lambda: peltier.last_status.get("sensor_name") == "tempctrl",
+            cadence_ms=peltier.EMULATOR_CADENCE_MS,
+        )
         for key in (
             "LNA_T_now",
             "LOAD_T_now",

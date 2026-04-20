@@ -90,9 +90,18 @@ RFSWITCH_FIELDS = {"sensor_name", "status", "app_id", "sw_state"}
 # --- Fixtures ---
 
 
+def _wait_for_first_status(device):
+    """Block until emulator has sent its first status packet."""
+    wait_for_condition(
+        lambda: bool(device.last_status),
+        cadence_ms=device.EMULATOR_CADENCE_MS,
+    )
+
+
 @pytest.fixture
 def motor():
     m = DummyPicoMotor("/dev/dummy")
+    _wait_for_first_status(m)
     yield m
     m.disconnect()
 
@@ -100,6 +109,7 @@ def motor():
 @pytest.fixture
 def rfswitch():
     s = DummyPicoRFSwitch("/dev/dummy")
+    _wait_for_first_status(s)
     yield s
     s.disconnect()
 
@@ -107,6 +117,7 @@ def rfswitch():
 @pytest.fixture
 def peltier():
     p = DummyPicoPeltier("/dev/dummy")
+    _wait_for_first_status(p)
     yield p
     p.disconnect()
 
@@ -114,6 +125,7 @@ def peltier():
 @pytest.fixture
 def imu():
     i = DummyPicoIMU("/dev/dummy")
+    _wait_for_first_status(i)
     yield i
     i.disconnect()
 
@@ -121,6 +133,7 @@ def imu():
 @pytest.fixture
 def tempmon():
     m = DummyPicoTempMon("/dev/dummy")
+    _wait_for_first_status(m)
     yield m
     m.disconnect()
 
@@ -128,6 +141,7 @@ def tempmon():
 @pytest.fixture
 def lidar():
     d = DummyPicoLidar("/dev/dummy")
+    _wait_for_first_status(d)
     yield d
     d.disconnect()
 

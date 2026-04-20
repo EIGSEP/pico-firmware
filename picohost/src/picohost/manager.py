@@ -82,7 +82,6 @@ _BLOCKED_ACTIONS = frozenset(
         "set_response_handler",
         "set_raw_handler",
         "wait_for_response",
-        "wait_for_updates",
         "wait_for_start",
         "wait_for_stop",
         "find_pico_ports",

@@ -1,4 +1,5 @@
 import logging
+import time
 
 try:
     import mockserial
@@ -35,6 +36,10 @@ class DummyPicoDevice(PicoDevice):
         self.ser.add_peer(self._peer)
         self._peer.add_peer(self.ser)
         self.ser.reset_input_buffer()
+        # Mirror PicoDevice._open_serial: stamp open time so the health
+        # loop gives us a HEALTH_TIMEOUT grace window before declaring
+        # the device stale and triggering a reconnect.
+        self.last_status_time = time.time()
         # Create and start emulator if a class is configured
         self._emulator = None
         if self.EMULATOR_CLASS is not None:

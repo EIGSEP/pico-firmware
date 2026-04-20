@@ -51,17 +51,18 @@ class TestDummyPicoDevice:
         """send_command() writes compact JSON + newline to the peer's read buffer."""
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         cmd = {"cmd": "test", "value": 123}
-        assert device.send_command(cmd) is True
+        device.send_command(cmd)
 
         expected = json.dumps(cmd, separators=(",", ":")) + "\n"
         assert device.ser.peer.read(len(expected)) == expected.encode()
         device.disconnect()
 
-    def test_send_command_returns_false_when_disconnected(self):
-        """send_command() returns False when there is no active connection."""
+    def test_send_command_raises_when_disconnected(self):
+        """send_command() raises ConnectionError when no active connection."""
         device = DummyPicoDevice(port="/dev/ttyUSB0")
         device.disconnect()
-        assert device.send_command({"cmd": "test"}) is False
+        with pytest.raises(ConnectionError):
+            device.send_command({"cmd": "test"})
 
     def test_reader_thread_populates_last_status(self):
         """JSON written by the peer is parsed by the reader thread into last_status."""
@@ -153,10 +154,13 @@ class TestDummyPicoMotor:
         )
         motor.disconnect()
 
-    def test_status_populated_on_init(self):
-        """wait_for_updates() in __init__ ensures status is populated immediately."""
+    def test_status_populated_after_first_cycle(self):
+        """First emulator status cycle populates the required motor keys."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
-        assert motor.last_status["sensor_name"] == "motor"
+        wait_for_condition(
+            lambda: motor.last_status.get("sensor_name") == "motor",
+            cadence_ms=motor.EMULATOR_CADENCE_MS,
+        )
         assert "az_pos" in motor.last_status
         assert "el_pos" in motor.last_status
         assert "az_target_pos" in motor.last_status
@@ -167,6 +171,9 @@ class TestDummyPicoMotor:
         """scan() returns motors to (0, 0) one at a time after finishing."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
         cadence = motor.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: "az_target_pos" in motor.last_status, cadence_ms=cadence
+        )
         motor.scan(
             az_range_deg=np.array([-10.0, 0.0, 10.0]),
             el_range_deg=np.array([-10.0, 0.0, 10.0]),
@@ -188,6 +195,10 @@ class TestDummyPicoMotor:
     def test_scan_does_not_home_on_interrupt(self):
         """scan() only halts (does not home) when interrupted."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
+        wait_for_condition(
+            lambda: "az_target_pos" in motor.last_status,
+            cadence_ms=motor.EMULATOR_CADENCE_MS,
+        )
         # patch wait_for_stop to raise after the initial homing
         # (2 calls for home-az + home-el, then interrupt during scan)
         real_wait = motor.wait_for_stop
@@ -241,9 +252,7 @@ class TestDummyPicoRFSwitch:
         switch = DummyPicoRFSwitch(port="/dev/ttyUSB0")
         cadence = switch.EMULATOR_CADENCE_MS
         for state in switch.paths:
-            assert switch.switch(state) is True, (
-                f"switch('{state}') returned False"
-            )
+            switch.switch(state)
 
         # Verify the last state is reflected
         last_state = list(switch.paths.keys())[-1]
@@ -281,7 +290,7 @@ class TestDummyPicoPeltier:
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LNA_T_target")
-        assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
+        peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5)
         assert wait_for_settle(
             lambda: peltier.last_status.get("LNA_T_target"),
             initial=before,
@@ -296,11 +305,8 @@ class TestDummyPicoPeltier:
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LOAD_T_target")
-        assert (
-            peltier.set_temperature(
-                T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5
-            )
-            is True
+        peltier.set_temperature(
+            T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5
         )
         assert wait_for_settle(
             lambda: peltier.last_status.get("LOAD_T_target"),
@@ -315,7 +321,7 @@ class TestDummyPicoPeltier:
         """Enabling LNA and disabling LOAD is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(LNA=True, LOAD=False) is True
+        peltier.set_enable(LNA=True, LOAD=False)
         wait_for_condition(
             lambda: peltier.last_status.get("LNA_enabled") is True,
             cadence_ms=cadence,
@@ -327,7 +333,7 @@ class TestDummyPicoPeltier:
         """Enabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(LNA=True, LOAD=True) is True
+        peltier.set_enable(LNA=True, LOAD=True)
         wait_for_condition(
             lambda: peltier.last_status.get("LNA_enabled") is True,
             cadence_ms=cadence,
@@ -339,7 +345,7 @@ class TestDummyPicoPeltier:
         """Disabling both channels is reflected in emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        assert peltier.set_enable(LNA=False, LOAD=False) is True
+        peltier.set_enable(LNA=False, LOAD=False)
         wait_for_condition(
             lambda: peltier.last_status.get("LNA_enabled") is False,
             cadence_ms=cadence,
@@ -347,10 +353,13 @@ class TestDummyPicoPeltier:
         assert peltier.last_status["LOAD_enabled"] is False
         peltier.disconnect()
 
-    def test_status_populated_on_init(self):
-        """wait_for_updates() in PicoStatus.__init__ populates status immediately."""
+    def test_status_populated_after_first_cycle(self):
+        """First emulator status cycle populates the required peltier keys."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
-        assert peltier.last_status["sensor_name"] == "tempctrl"
+        wait_for_condition(
+            lambda: peltier.last_status.get("sensor_name") == "tempctrl",
+            cadence_ms=peltier.EMULATOR_CADENCE_MS,
+        )
         assert "LNA_T_now" in peltier.last_status
         assert "LOAD_T_now" in peltier.last_status
         assert "LNA_drive_level" in peltier.last_status

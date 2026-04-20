@@ -534,10 +534,9 @@ class TestDiscoverIntegration:
         pico = mgr.picos["rfswitch"]
         assert pico.is_connected
         wait_for_condition(
-            lambda: pico.last_status_time is not None,
+            lambda: pico.last_status.get("sensor_name") == "rfswitch",
             cadence_ms=CADENCE_MS,
         )
-        assert pico.last_status["sensor_name"] == "rfswitch"
         # Status should also flow to add_metadata.
         mock = mgr.eig_redis
         wait_for_condition(
