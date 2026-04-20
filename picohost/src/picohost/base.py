@@ -243,8 +243,8 @@ class PicoDevice:
         if not self.is_connected:
             raise ConnectionError(f"{self.name} not connected")
 
+        json_str = json.dumps(cmd_dict, separators=(",", ":"))
         try:
-            json_str = json.dumps(cmd_dict, separators=(",", ":"))
             self.ser.write((json_str + "\n").encode("utf-8"))
             self.ser.flush()
         except Exception as e:
