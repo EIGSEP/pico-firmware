@@ -106,7 +106,7 @@ class TestDummyPicoMotor:
 
     Commands sent through the PicoMotor API are dispatched to the emulator,
     which updates its state and sends periodic status JSON that the reader
-    thread picks up into motor.status.
+    thread picks up into motor.last_status.
     """
 
     def test_deg_to_steps_known_values(self):
@@ -121,18 +121,18 @@ class TestDummyPicoMotor:
         """motor_command() is dispatched to the emulator and reflected in status."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
         cadence = motor.EMULATOR_CADENCE_MS
-        before = motor.status.get("az_target_pos")
+        before = motor.last_status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=1000, el_set_target_pos=500)
         assert (
             wait_for_settle(
-                lambda: motor.status.get("az_target_pos"),
+                lambda: motor.last_status.get("az_target_pos"),
                 initial=before,
                 cadence_ms=cadence,
                 max_cycles=10,
             )
             == 1000
         )
-        assert motor.status["el_target_pos"] == 500
+        assert motor.last_status["el_target_pos"] == 500
         motor.disconnect()
 
     def test_halt_sets_target_to_current(self):
@@ -141,13 +141,13 @@ class TestDummyPicoMotor:
         cadence = motor.EMULATOR_CADENCE_MS
         motor.motor_command(az_set_target_pos=1000)
         wait_for_condition(
-            lambda: motor.status.get("az_target_pos") == 1000,
+            lambda: motor.last_status.get("az_target_pos") == 1000,
             cadence_ms=cadence,
         )
         motor.halt()
         wait_for_condition(
             lambda: (
-                motor.status.get("az_target_pos") == motor.status.get("az_pos")
+                motor.last_status.get("az_target_pos") == motor.last_status.get("az_pos")
             ),
             cadence_ms=cadence,
         )
@@ -156,11 +156,11 @@ class TestDummyPicoMotor:
     def test_status_populated_on_init(self):
         """wait_for_updates() in __init__ ensures status is populated immediately."""
         motor = DummyPicoMotor(port="/dev/ttyUSB0")
-        assert motor.status["sensor_name"] == "motor"
-        assert "az_pos" in motor.status
-        assert "el_pos" in motor.status
-        assert "az_target_pos" in motor.status
-        assert "el_target_pos" in motor.status
+        assert motor.last_status["sensor_name"] == "motor"
+        assert "az_pos" in motor.last_status
+        assert "el_pos" in motor.last_status
+        assert "az_target_pos" in motor.last_status
+        assert "el_target_pos" in motor.last_status
         motor.disconnect()
 
     def test_scan_homes_after_normal_completion(self):
@@ -175,14 +175,14 @@ class TestDummyPicoMotor:
         # after scan completes, motors should be back at 0
         wait_for_condition(
             lambda: (
-                motor.status.get("az_pos") == 0
-                and motor.status.get("el_pos") == 0
+                motor.last_status.get("az_pos") == 0
+                and motor.last_status.get("el_pos") == 0
             ),
             cadence_ms=cadence,
             max_cycles=10,
         )
-        assert motor.status["az_pos"] == 0
-        assert motor.status["el_pos"] == 0
+        assert motor.last_status["az_pos"] == 0
+        assert motor.last_status["el_pos"] == 0
         motor.disconnect()
 
     def test_scan_does_not_home_on_interrupt(self):
@@ -207,8 +207,8 @@ class TestDummyPicoMotor:
                 el_range_deg=np.array([-10.0, 0.0, 10.0]),
             )
         # halt was called, but post-scan homing did not run
-        assert motor.status["az_target_pos"] == motor.status["az_pos"]
-        assert motor.status["el_target_pos"] == motor.status["el_pos"]
+        assert motor.last_status["az_target_pos"] == motor.last_status["az_pos"]
+        assert motor.last_status["el_target_pos"] == motor.last_status["el_pos"]
         motor.disconnect()
 
 
@@ -280,22 +280,22 @@ class TestDummyPicoPeltier:
         """Setting LNA channel target and hysteresis updates emulator status."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("LNA_T_target")
+        before = peltier.last_status.get("LNA_T_target")
         assert peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5) is True
         assert wait_for_settle(
-            lambda: peltier.status.get("LNA_T_target"),
+            lambda: peltier.last_status.get("LNA_T_target"),
             initial=before,
             cadence_ms=cadence,
             max_cycles=10,
         ) == pytest.approx(25.5)
-        assert peltier.status["LNA_hysteresis"] == pytest.approx(0.5)
+        assert peltier.last_status["LNA_hysteresis"] == pytest.approx(0.5)
         peltier.disconnect()
 
     def test_set_temperature_both_channels(self):
         """Setting both channels in one call updates both in emulator."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
         cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.status.get("LOAD_T_target")
+        before = peltier.last_status.get("LOAD_T_target")
         assert (
             peltier.set_temperature(
                 T_LNA=30.0, LNA_hyst=1.0, T_LOAD=25.0, LOAD_hyst=0.5
@@ -303,12 +303,12 @@ class TestDummyPicoPeltier:
             is True
         )
         assert wait_for_settle(
-            lambda: peltier.status.get("LOAD_T_target"),
+            lambda: peltier.last_status.get("LOAD_T_target"),
             initial=before,
             cadence_ms=cadence,
             max_cycles=10,
         ) == pytest.approx(25.0)
-        assert peltier.status["LNA_T_target"] == pytest.approx(30.0)
+        assert peltier.last_status["LNA_T_target"] == pytest.approx(30.0)
         peltier.disconnect()
 
     def test_set_enable_mixed(self):
@@ -317,10 +317,10 @@ class TestDummyPicoPeltier:
         cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(LNA=True, LOAD=False) is True
         wait_for_condition(
-            lambda: peltier.status.get("LNA_enabled") is True,
+            lambda: peltier.last_status.get("LNA_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.status["LOAD_enabled"] is False
+        assert peltier.last_status["LOAD_enabled"] is False
         peltier.disconnect()
 
     def test_enable_both_channels(self):
@@ -329,10 +329,10 @@ class TestDummyPicoPeltier:
         cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(LNA=True, LOAD=True) is True
         wait_for_condition(
-            lambda: peltier.status.get("LNA_enabled") is True,
+            lambda: peltier.last_status.get("LNA_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.status["LOAD_enabled"] is True
+        assert peltier.last_status["LOAD_enabled"] is True
         peltier.disconnect()
 
     def test_disable_both_channels(self):
@@ -341,19 +341,19 @@ class TestDummyPicoPeltier:
         cadence = peltier.EMULATOR_CADENCE_MS
         assert peltier.set_enable(LNA=False, LOAD=False) is True
         wait_for_condition(
-            lambda: peltier.status.get("LNA_enabled") is False,
+            lambda: peltier.last_status.get("LNA_enabled") is False,
             cadence_ms=cadence,
         )
-        assert peltier.status["LOAD_enabled"] is False
+        assert peltier.last_status["LOAD_enabled"] is False
         peltier.disconnect()
 
     def test_status_populated_on_init(self):
         """wait_for_updates() in PicoStatus.__init__ populates status immediately."""
         peltier = DummyPicoPeltier(port="/dev/ttyUSB0")
-        assert peltier.status["sensor_name"] == "tempctrl"
-        assert "LNA_T_now" in peltier.status
-        assert "LOAD_T_now" in peltier.status
-        assert "LNA_drive_level" in peltier.status
+        assert peltier.last_status["sensor_name"] == "tempctrl"
+        assert "LNA_T_now" in peltier.last_status
+        assert "LOAD_T_now" in peltier.last_status
+        assert "LNA_drive_level" in peltier.last_status
         peltier.disconnect()
 
 

@@ -19,7 +19,7 @@ def wait_for_settle(
 
     Returns the settled value so callers can assert on it directly::
 
-        assert wait_for_settle(lambda: motor.status.get("az_pos")) == 500
+        assert wait_for_settle(lambda: motor.last_status.get("az_pos")) == 500
 
     When *cadence_ms* is provided, *timeout* and *poll_interval* are derived
     from the emulator cadence unless explicitly overridden::

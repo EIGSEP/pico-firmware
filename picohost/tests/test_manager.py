@@ -681,7 +681,7 @@ class _StubDevice:
     """Bare attribute holder for testing wait_for_updates in isolation."""
 
     def __init__(self):
-        self.status = {}
+        self.last_status = {}
         self.name = "stub"
 
 

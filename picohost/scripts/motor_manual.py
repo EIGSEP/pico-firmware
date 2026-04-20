@@ -69,8 +69,12 @@ def main(screen):
         screen.clear()
         screen.addstr(0, 0, "=== Motor Zeroing ===")
         screen.addstr(2, 0, f"Jog step: {deg:.1f} deg")
-        screen.addstr(3, 0, f"AZ pos: {c.status.get('az_pos', '?')}")
-        screen.addstr(4, 0, f"EL pos: {c.status.get('el_pos', '?')}")
+        if c.is_connected:
+            screen.addstr(3, 0, f"AZ pos: {c.last_status.get('az_pos', '?')}")
+            screen.addstr(4, 0, f"EL pos: {c.last_status.get('el_pos', '?')}")
+        else:
+            screen.addstr(3, 0, "AZ pos: DISCONNECTED (waiting for reconnect)")
+            screen.addstr(4, 0, "EL pos: ---")
         screen.addstr(6, 0, "u/d = jog EL | l/r = jog AZ")
         screen.addstr(7, 0, "+/- = change step size")
         screen.addstr(8, 0, "Enter = zero and exit | q = quit")
@@ -83,6 +87,8 @@ def main(screen):
             if ch == -1:
                 continue
             if ch == ord("\n"):
+                if not c.is_connected:
+                    continue
                 c.halt()
                 c.reset_step_position(az_step=0, el_step=0)
                 zeroed = True
@@ -91,18 +97,21 @@ def main(screen):
                 key = chr(ch).lower()
                 if key == "q":
                     break
-                elif key == "u":
-                    c.el_move_deg(deg, wait_for_stop=True)
-                elif key == "d":
-                    c.el_move_deg(-deg, wait_for_stop=True)
-                elif key == "l":
-                    c.az_move_deg(deg, wait_for_stop=True)
-                elif key == "r":
-                    c.az_move_deg(-deg, wait_for_stop=True)
                 elif key == "+":
                     deg += 1
                 elif key == "-":
                     deg = max(0.1, deg - 1)
+                elif key in ("u", "d", "l", "r"):
+                    if not c.is_connected:
+                        continue
+                    if key == "u":
+                        c.el_move_deg(deg, wait_for_stop=True)
+                    elif key == "d":
+                        c.el_move_deg(-deg, wait_for_stop=True)
+                    elif key == "l":
+                        c.az_move_deg(deg, wait_for_stop=True)
+                    elif key == "r":
+                        c.az_move_deg(-deg, wait_for_stop=True)
     except KeyboardInterrupt:
         pass
     finally:
