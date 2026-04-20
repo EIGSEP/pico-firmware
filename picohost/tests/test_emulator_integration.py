@@ -138,17 +138,17 @@ def lidar():
 class TestMotorIntegration:
     def test_status_fields(self, motor):
         """Motor emulator populates all status fields via reader thread."""
-        assert set(motor.status.keys()) == MOTOR_FIELDS
-        assert motor.status["sensor_name"] == "motor"
+        assert set(motor.last_status.keys()) == MOTOR_FIELDS
+        assert motor.last_status["sensor_name"] == "motor"
 
     def test_command_round_trip(self, motor):
         """Command sent through serial is processed by emulator."""
         cadence = motor.EMULATOR_CADENCE_MS
-        before = motor.status.get("az_target_pos")
+        before = motor.last_status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=500)
         assert (
             wait_for_settle(
-                lambda: motor.status.get("az_target_pos"),
+                lambda: motor.last_status.get("az_target_pos"),
                 initial=before,
                 cadence_ms=cadence,
                 max_cycles=10,
@@ -160,7 +160,7 @@ class TestMotorIntegration:
         expected_ops = math.ceil(500 / steps_per_op)
         assert (
             wait_for_settle(
-                lambda: motor.status.get("az_pos"),
+                lambda: motor.last_status.get("az_pos"),
                 initial=0,
                 cadence_ms=cadence,
                 max_cycles=expected_ops + 10,
@@ -204,8 +204,8 @@ class TestRFSwitchIntegration:
 class TestPeltierIntegration:
     def test_status_fields(self, peltier):
         """Peltier emulator populates all status fields via reader thread."""
-        assert set(peltier.status.keys()) == TEMPCTRL_FIELDS
-        assert peltier.status["sensor_name"] == "tempctrl"
+        assert set(peltier.last_status.keys()) == TEMPCTRL_FIELDS
+        assert peltier.last_status["sensor_name"] == "tempctrl"
 
     def test_command_round_trip(self, peltier):
         """Temperature control converges to target through serial pipeline."""
@@ -215,7 +215,7 @@ class TestPeltierIntegration:
         # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
         # ~333 ops to converge + margin for hysteresis settling
         settled = wait_for_settle(
-            lambda: round(peltier.status.get("LNA_T_now", 0), 1),
+            lambda: round(peltier.last_status.get("LNA_T_now", 0), 1),
             cadence_ms=cadence,
             max_cycles=500,
             stable_count=5,
@@ -263,7 +263,7 @@ class TestIMUIntegration:
 class TestMotorIntegrationTypes:
     def test_status_types(self, motor):
         """Verify motor status value types through serial pipeline."""
-        s = motor.status
+        s = motor.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["status"], str)
         assert isinstance(s["app_id"], int)
@@ -279,7 +279,7 @@ class TestMotorIntegrationTypes:
 class TestPeltierIntegrationTypes:
     def test_status_types(self, peltier):
         """Verify peltier status value types through serial pipeline."""
-        s = peltier.status
+        s = peltier.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
         # Booleans
@@ -404,7 +404,7 @@ class TestPeltierWatchdog:
         try:
             p.set_watchdog_timeout(500)
             time.sleep(1.0)
-            assert p.status.get("watchdog_tripped") is False
+            assert p.last_status.get("watchdog_tripped") is False
         finally:
             p.disconnect()
 
@@ -416,7 +416,7 @@ class TestPeltierWatchdog:
             p.set_watchdog_timeout(200)
             # 200ms watchdog / 50ms cadence = 4 ops + margin
             wait_for_condition(
-                lambda: p.status.get("watchdog_tripped") is True,
+                lambda: p.last_status.get("watchdog_tripped") is True,
                 cadence_ms=cadence,
                 max_cycles=20,
             )
@@ -469,7 +469,7 @@ class TestConvergenceTiming:
         margin = 10
         motor.motor_command(az_set_target_pos=target)
         settled = wait_for_settle(
-            lambda: motor.status.get("az_pos"),
+            lambda: motor.last_status.get("az_pos"),
             initial=0,
             cadence_ms=cadence,
             max_cycles=expected_ops + margin,
@@ -485,7 +485,7 @@ class TestConvergenceTiming:
         margin = 10
         motor.motor_command(az_set_target_pos=target)
         settled = wait_for_settle(
-            lambda: motor.status.get("az_pos"),
+            lambda: motor.last_status.get("az_pos"),
             initial=0,
             cadence_ms=cadence,
             max_cycles=expected_ops + margin,
@@ -507,13 +507,13 @@ class TestConvergenceTiming:
             el_set_target_pos=el_target,
         )
         az = wait_for_settle(
-            lambda: motor.status.get("az_pos"),
+            lambda: motor.last_status.get("az_pos"),
             initial=0,
             cadence_ms=cadence,
             max_cycles=slowest_ops + margin,
         )
         el = wait_for_settle(
-            lambda: motor.status.get("el_pos"),
+            lambda: motor.last_status.get("el_pos"),
             initial=0,
             cadence_ms=cadence,
             max_cycles=slowest_ops + margin,
@@ -524,11 +524,11 @@ class TestConvergenceTiming:
     def test_command_ack_within_few_cycles(self, motor):
         """Target-position update is visible in status within a few cycles."""
         cadence = motor.EMULATOR_CADENCE_MS
-        before = motor.status.get("az_target_pos")
+        before = motor.last_status.get("az_target_pos")
         motor.motor_command(az_set_target_pos=999)
         # Should appear within ~2-3 status cycles (command + next status send)
         settled = wait_for_settle(
-            lambda: motor.status.get("az_target_pos"),
+            lambda: motor.last_status.get("az_target_pos"),
             initial=before,
             cadence_ms=cadence,
             max_cycles=6,
@@ -548,7 +548,7 @@ class TestConvergenceTiming:
             p.set_temperature(T_LNA=35.0)
             p.set_enable(LNA=True)
             settled = wait_for_settle(
-                lambda: round(p.status.get("LNA_T_now", 0), 1),
+                lambda: round(p.last_status.get("LNA_T_now", 0), 1),
                 cadence_ms=cadence,
                 max_cycles=500,
                 stable_count=5,
@@ -571,7 +571,7 @@ class TestConvergenceTiming:
             # Allow generous margin for thread scheduling, but still
             # much tighter than the old hardcoded 2s timeout.
             wait_for_condition(
-                lambda: p.status.get("watchdog_tripped") is True,
+                lambda: p.last_status.get("watchdog_tripped") is True,
                 cadence_ms=cadence,
                 max_cycles=watchdog_cycles + 15,
             )

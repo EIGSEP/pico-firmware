@@ -88,7 +88,6 @@ _BLOCKED_ACTIONS = frozenset(
         "find_pico_ports",
         "read_line",
         "parse_response",
-        "update_status",
     }
 )
 

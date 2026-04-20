@@ -81,6 +81,7 @@ class PicoDevice:
         eig_redis=None,
         response_handler=None,
         usb_serial: str = "",
+        verbose: bool = False,
     ):
         """
         Initialize a Pico device connection.
@@ -88,16 +89,18 @@ class PicoDevice:
         Args:
             port: Serial port device (e.g., '/dev/ttyACM0' or 'COM3')
             baudrate: Serial baud rate (default: 115200)
-            timeout: Serial read timeout in seconds (default: 1.0)
+            timeout: Serial read timeout in seconds (default: 5.0)
             name: str
             eig_redis: EigsepRedis instance
             usb_serial: USB serial number for port re-discovery
+            verbose: log each received status packet at DEBUG level
         """
         self.logger = logger
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.usb_serial = usb_serial
+        self.verbose = verbose
         self.ser = None
         self._running = False
         self._reader_thread = None
@@ -312,6 +315,10 @@ class PicoDevice:
                 if data:  # is json
                     self.last_status = data
                     self.last_status_time = time.time()
+                    if self.verbose:
+                        self.logger.debug(
+                            json.dumps(data, sort_keys=True)
+                        )
                     # upload to redis
                     if self.redis_handler:
                         try:
@@ -519,29 +526,21 @@ class PicoPeltier(PicoDevice):
         self._keepalive_running = False
         self._keepalive_thread = None
         self._keepalive_interval = keepalive_interval
-        self.verbose = verbose
-        self.status = {}
         super().__init__(
             port,
             timeout=timeout,
             name=name,
             eig_redis=eig_redis,
             usb_serial=usb_serial,
+            verbose=verbose,
         )
-        self.set_response_handler(self.update_status)
         self.wait_for_updates()
         self._start_keepalive()
-
-    def update_status(self, data):
-        """Update internal status based on unpacked json packets from picos."""
-        if self.verbose:
-            print(json.dumps(data, indent=2, sort_keys=True))
-        self.status.update(data)
 
     def wait_for_updates(self, timeout=3):
         t = time.time()
         while True:
-            if len(self.status) != 0:
+            if len(self.last_status) != 0:
                 break
             if time.time() - t >= timeout:
                 raise TimeoutError(
@@ -583,7 +582,7 @@ class PicoPeltier(PicoDevice):
     @property
     def watchdog_tripped(self):
         """Whether the firmware watchdog has tripped and disabled the peltiers."""
-        return self.status.get("watchdog_tripped", False)
+        return self.last_status.get("watchdog_tripped", False)
 
     def set_watchdog_timeout(self, timeout_ms):
         """

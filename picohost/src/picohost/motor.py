@@ -3,7 +3,6 @@ Base class for Pico device communication.
 Provides common functionality for serial communication with Pico devices.
 """
 
-import json
 import logging
 import time
 import numpy as np
@@ -27,7 +26,6 @@ class PicoMotor(PicoDevice):
         eig_redis=None,
         usb_serial="",
     ):
-        self.verbose = verbose
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
         self.microstep = microstep
@@ -42,7 +40,6 @@ class PicoMotor(PicoDevice):
             "el_up_delay_us": int,
             "el_dn_delay_us": int,
         }
-        self.status = {}
         self._delay_kwargs = None
         super().__init__(
             port,
@@ -50,8 +47,8 @@ class PicoMotor(PicoDevice):
             name=name,
             eig_redis=eig_redis,
             usb_serial=usb_serial,
+            verbose=verbose,
         )
-        self.set_response_handler(self.update_status)
         self.set_delay()
         self.wait_for_updates()
 
@@ -60,16 +57,10 @@ class PicoMotor(PicoDevice):
         if self._delay_kwargs is not None:
             self.set_delay(**self._delay_kwargs)
 
-    def update_status(self, data):
-        """Update internal status based on unpacked json packets from picos."""
-        if self.verbose:
-            logger.debug(json.dumps(data, indent=2, sort_keys=True))
-        self.status.update(data)
-
     def wait_for_updates(self, timeout=10):
         t = time.time()
         while True:
-            if len(self.status) != 0:
+            if len(self.last_status) != 0:
                 break
             if time.time() - t >= timeout:
                 raise TimeoutError(
@@ -159,7 +150,7 @@ class PicoMotor(PicoDevice):
         self, delta_steps, wait_for_start=True, wait_for_stop=False
     ):
         """Move az in specified number of steps from current target."""
-        new_target = self.status["az_target_pos"] + delta_steps
+        new_target = self.last_status["az_target_pos"] + delta_steps
         self.az_target_steps(
             new_target,
             wait_for_start=wait_for_start,
@@ -195,7 +186,7 @@ class PicoMotor(PicoDevice):
         self, delta_steps, wait_for_start=True, wait_for_stop=False
     ):
         """Move el in specified number of steps from current target."""
-        new_target = self.status["el_target_pos"] + delta_steps
+        new_target = self.last_status["el_target_pos"] + delta_steps
         self.el_target_steps(
             new_target,
             wait_for_start=wait_for_start,
@@ -212,8 +203,8 @@ class PicoMotor(PicoDevice):
 
     def is_moving(self):
         return (
-            self.status["az_target_pos"] != self.status["az_pos"]
-            or self.status["el_target_pos"] != self.status["el_pos"]
+            self.last_status["az_target_pos"] != self.last_status["az_pos"]
+            or self.last_status["el_target_pos"] != self.last_status["el_pos"]
         )
 
     def wait_for_start(self, timeout=0.3):
@@ -224,10 +215,10 @@ class PicoMotor(PicoDevice):
     def wait_for_stop(self, stall_timeout=30):
         if self.verbose:
             logger.debug("Waiting for stop.")
-        last_pos = (self.status["az_pos"], self.status["el_pos"])
+        last_pos = (self.last_status["az_pos"], self.last_status["el_pos"])
         t = time.time()
         while self.is_moving():
-            pos = (self.status["az_pos"], self.status["el_pos"])
+            pos = (self.last_status["az_pos"], self.last_status["el_pos"])
             if pos != last_pos:
                 last_pos = pos
                 t = time.time()

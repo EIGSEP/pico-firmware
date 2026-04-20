@@ -331,7 +331,7 @@ class TestCommandRelay:
         )
         # 300 steps / 60 steps_per_op = 5 ops + margin
         settled = wait_for_settle(
-            lambda: pico.status.get("az_pos"),
+            lambda: pico.last_status.get("az_pos"),
             initial=0,
             cadence_ms=CADENCE_MS,
             max_cycles=20,
@@ -362,7 +362,7 @@ class TestCommandRelay:
         )
         # Only verify the target was set, not convergence.
         wait_for_condition(
-            lambda: pico.status.get("LNA_T_target") == 30.0,
+            lambda: pico.last_status.get("LNA_T_target") == 30.0,
             cadence_ms=CADENCE_MS,
             max_cycles=10,
         )
