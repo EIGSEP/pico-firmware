@@ -49,7 +49,7 @@ class PicoConfigStore:
     ``{"devices": [...], "upload_time": ...}`` — a *list* of device
     dicts is stored under the ``devices`` key so the canonical
     ``upload_time`` field injected by
-    :meth:`Transport._upload_dict` stays at the top level next to
+    :meth:`Transport.upload_dict` stays at the top level next to
     it.
 
     ``flash-picos`` uploads the list after every flash pass. The
@@ -71,7 +71,7 @@ class PicoConfigStore:
             Each dict must carry ``app_id``, ``port``, and
             ``usb_serial`` (extra fields are preserved verbatim).
         """
-        self.transport._upload_dict({"devices": list(devices)}, PICO_CONFIG_KEY)
+        self.transport.upload_dict({"devices": list(devices)}, PICO_CONFIG_KEY)
 
     def get(self):
         """Return the stored device list.
