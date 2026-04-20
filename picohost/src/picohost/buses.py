@@ -6,11 +6,16 @@ pattern in ``eigsep_observing.corr``: each class takes an
 ``eigsep_redis.Transport`` at construction, and the concerns are
 split into the smallest stable surface per bus.
 
-Four buses here:
+Five buses here:
 
 - :class:`PicoConfigStore` — persistent single-key blob holding the
   list of picos (app id, serial port, usb serial) written once by
   ``flash-picos`` and read on manager boot as the source of truth.
+- :class:`PotCalStore` — persistent single-key blob holding the
+  potentiometer calibration (voltage-to-angle slope/intercept for
+  both pots). Written by ``calibrate-pot`` and read by
+  :class:`picohost.PicoPotentiometer` at startup so a rebooted
+  pot Pico picks up its cal from Redis without a local JSON file.
 - :class:`PicoCmdReader` — blocking reader for the pico command
   stream. Consumed by the manager's command-relay thread.
 - :class:`PicoRespWriter` — writer for the pico response stream.
@@ -35,6 +40,7 @@ from .keys import (
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
     PICO_RESP_STREAM,
+    POT_CAL_KEY,
     pico_claim_key,
 )
 
@@ -99,6 +105,67 @@ class PicoConfigStore:
     def clear(self):
         """Delete the stored config. Used by ``--clear-config``."""
         self.transport.r.delete(PICO_CONFIG_KEY)
+
+
+class PotCalStore:
+    """
+    Persistent single-key store for potentiometer calibration.
+
+    The value under :data:`POT_CAL_KEY` is a JSON object shaped like
+    ``{"pot_el": [m, b], "pot_az": [m, b], "metadata": {...},
+    "upload_time": ...}`` — the canonical ``upload_time`` field is
+    injected by :meth:`Transport.upload_dict` at the top level.
+    ``metadata`` carries audit fields written by ``calibrate-pot``
+    (timestamp, port, sample count, raw voltages) and is preserved
+    verbatim on upload/get.
+
+    ``calibrate-pot`` uploads after each calibration run. A fresh
+    :class:`picohost.PicoPotentiometer` reads this store at
+    ``__init__`` time when given a :class:`PotCalStore` and applies
+    the cal before the first status tick — so a pot Pico that
+    reboots without a local cal file comes up calibrated from Redis.
+    """
+
+    def __init__(self, transport):
+        self.transport = transport
+
+    def upload(self, cal):
+        """Upload calibration parameters.
+
+        Parameters
+        ----------
+        cal : dict
+            Must carry ``pot_el`` and ``pot_az`` entries, each a
+            ``(slope, intercept)`` pair (list or tuple). Extra
+            fields (e.g. ``metadata``) are preserved verbatim.
+        """
+        self.transport.upload_dict(dict(cal), POT_CAL_KEY)
+
+    def get(self):
+        """Return the stored calibration dict.
+
+        Returns
+        -------
+        dict or None
+            ``None`` if no calibration has been uploaded, or if the
+            stored JSON fails to decode. The caller falls back to
+            its next source (JSON file, then uncalibrated).
+        """
+        raw = self.transport.get_raw(POT_CAL_KEY)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Corrupted {POT_CAL_KEY} in Redis ({e}); "
+                "falling back to next calibration source."
+            )
+            return None
+
+    def clear(self):
+        """Delete the stored calibration."""
+        self.transport.r.delete(POT_CAL_KEY)
 
 
 class PicoCmdReader:

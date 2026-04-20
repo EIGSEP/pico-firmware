@@ -637,6 +637,7 @@ class PicoPotentiometer(PicoDevice):
         self,
         port,
         calibration_file=None,
+        pot_cal_store=None,
         timeout=5.0,
         name=None,
         metadata_writer=None,
@@ -648,8 +649,14 @@ class PicoPotentiometer(PicoDevice):
         port : str
             Serial port device.
         calibration_file : str, optional
-            Path to a JSON calibration file. If provided, calibration
-            parameters are loaded at init.
+            Path to a JSON calibration file. Used only when Redis has
+            no calibration (or no ``pot_cal_store`` was provided).
+        pot_cal_store : picohost.buses.PotCalStore, optional
+            Redis-backed calibration store. When provided and the
+            store holds a calibration, it takes precedence over
+            ``calibration_file`` — the cal is applied before the
+            first status tick, so a pot Pico that reboots picks its
+            cal up from Redis without any on-disk file.
         timeout : float
             Serial read timeout in seconds (default: 5.0).
         name : str, optional
@@ -666,7 +673,18 @@ class PicoPotentiometer(PicoDevice):
             metadata_writer=metadata_writer,
             usb_serial=usb_serial,
         )
-        if calibration_file is not None:
+        # Cal source precedence: Redis wins, JSON fallback,
+        # uncalibrated if neither (matches the project decision that
+        # Redis is the canonical cal store).
+        cal_from_redis = None
+        if pot_cal_store is not None:
+            cal_from_redis = pot_cal_store.get()
+        if cal_from_redis is not None:
+            if "pot_el" in cal_from_redis:
+                self._cal["pot_el"] = tuple(cal_from_redis["pot_el"])
+            if "pot_az" in cal_from_redis:
+                self._cal["pot_az"] = tuple(cal_from_redis["pot_az"])
+        elif calibration_file is not None:
             self.load_calibration(calibration_file)
         # Wrap the base redis handler to convert voltages to angles
         if self.redis_handler is not None:
