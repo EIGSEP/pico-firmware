@@ -58,7 +58,7 @@ from .buses import (
     PicoConfigStore,
     PicoRespWriter,
 )
-from .keys import pico_heartbeat_name
+from .keys import PICO_CMD_STREAM, pico_heartbeat_name
 from .motor import PicoMotor
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,7 @@ class PicoManager:
         self._claim_store = PicoClaimStore(transport)
         self._status_writer = StatusWriter(transport)
         self._running = False
+        self._stop_event = threading.Event()
         self._health_thread = None
         self._cmd_thread = None
         # Serializes mutations of self.picos / self._heartbeats between
@@ -296,7 +297,8 @@ class PicoManager:
             except Exception as e:
                 if self._running:
                     self.logger.error(f"health_loop error: {e}")
-            time.sleep(HEALTH_CHECK_INTERVAL)
+            if self._stop_event.wait(HEALTH_CHECK_INTERVAL):
+                break
 
     def _check_health(self):
         """Run one iteration of health checks for all picos."""
@@ -346,6 +348,8 @@ class PicoManager:
             try:
                 messages = self._cmd_reader.read(timeout=1.0, count=10)
                 for msg_id, fields in messages:
+                    if not self._running:
+                        return
                     self._process_command(msg_id, fields)
             except Exception as e:
                 if self._running:
@@ -524,6 +528,7 @@ class PicoManager:
     def start(self):
         """Start the health monitor and command relay threads."""
         self._running = True
+        self._stop_event.clear()
         self._health_thread = threading.Thread(
             target=self.health_loop, daemon=True, name="health"
         )
@@ -538,6 +543,13 @@ class PicoManager:
         """Graceful shutdown: stop threads, disconnect picos, mark dead."""
         self._status("PicoManager stopping...")
         self._running = False
+        self._stop_event.set()
+        # Wake cmd_loop's blocking xread so it observes _running = False
+        # without waiting out the full block timeout.
+        try:
+            self.transport.r.xadd(PICO_CMD_STREAM, {"__shutdown__": "1"})
+        except Exception:
+            pass
         if self._health_thread:
             self._health_thread.join(timeout=HEALTH_CHECK_INTERVAL + 1)
         if self._cmd_thread:
