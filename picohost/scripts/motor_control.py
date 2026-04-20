@@ -106,7 +106,9 @@ def main():
             sleep_between=args.sleep_s,
         )
     except KeyboardInterrupt:
-        _try_halt(c)
+        pass
+    except (ConnectionError, RuntimeError) as e:
+        logger.error("Motor scan aborted: %s", e)
     finally:
         _try_halt(c)
 
