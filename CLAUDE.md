@@ -206,6 +206,17 @@ The project includes several libraries:
 - **onewire**: OneWire protocol library with PIO implementation
 - **BNO08x_Pico_Library**: IMU sensor library for BNO08x devices
 
+## Scripts and ownership
+
+The boundary between `picohost` and the sister `eigsep_observing` repo is drawn by **how the script talks to a Pico**, not by whether it's "operational":
+
+- **Opens a serial connection → lives in `picohost/scripts/`.** These are hardware bringup, emulator-less testing, and single-device maintenance tools. They must be prepared to stop the `PicoManager` service first, because the manager owns the serial port during normal ops.
+- **Talks to Picos via `PicoProxy`/Redis → lives in `eigsep_observing`.** These scripts assume `PicoManager` is running and never touch serial directly.
+
+**Rule of thumb:** if a script coordinates more than one Pico, it belongs in `eigsep_observing`. Science operations (e.g., a motor scan with intermittent VNA observations) always live in `eigsep_observing` and should log their execution runtime to Redis.
+
+**Infrastructure utilities** that *happen* to talk to Redis — `calibrate_pot`, `flash_picos`, `PicoManager` itself — are part of the Pico stack and belong in `picohost`. The test is "is this about the Pico stack?" vs. "is this about doing science?".
+
 ## CI / Release
 
 - **CI**: GitHub Actions runs pytest across Python 3.9-3.12 on every push/PR, plus a check that every firmware app has a corresponding emulator
