@@ -8,8 +8,11 @@ import json
 import tempfile
 
 import pytest
+from eigsep_redis.testing import DummyTransport
 
 from conftest import wait_for_condition
+from picohost.buses import PotCalStore
+from picohost.keys import POT_CAL_KEY
 from picohost.testing import DummyPicoPotentiometer
 
 
@@ -193,3 +196,126 @@ class TestPotRedisHandler:
         }
         assert expected_added.issubset(before)
         pot.disconnect()
+
+
+class TestPotCalStore:
+    """Round-trip and error-path coverage for the Redis cal store."""
+
+    def _cal_payload(self):
+        return {
+            "pot_el": [100.0, -50.0],
+            "pot_az": [200.0, -100.0],
+            "metadata": {"port": "/dev/ttyACM0", "turns": 10},
+        }
+
+    def test_empty_store_returns_none(self):
+        store = PotCalStore(DummyTransport())
+        assert store.get() is None
+
+    def test_upload_get_round_trip_preserves_fields(self):
+        """upload()/get() round-trips all fields including metadata."""
+        store = PotCalStore(DummyTransport())
+        payload = self._cal_payload()
+        store.upload(payload)
+        loaded = store.get()
+        assert loaded["pot_el"] == payload["pot_el"]
+        assert loaded["pot_az"] == payload["pot_az"]
+        assert loaded["metadata"] == payload["metadata"]
+        # Transport.upload_dict injects an upload_time field on every write.
+        assert "upload_time" in loaded
+
+    def test_corrupt_json_returns_none(self):
+        """Garbage in Redis → get() returns None so callers fall back."""
+        transport = DummyTransport()
+        transport.r.set(POT_CAL_KEY, b"not-json-{")
+        assert PotCalStore(transport).get() is None
+
+    def test_clear_removes_key(self):
+        store = PotCalStore(DummyTransport())
+        store.upload(self._cal_payload())
+        assert store.get() is not None
+        store.clear()
+        assert store.get() is None
+
+
+class TestPicoPotentiometerCalSource:
+    """Precedence: Redis wins, JSON fallback, uncalibrated if neither.
+
+    Validates the init-time source selection added for the Redis-as-
+    canonical-cal-store migration. Each test asserts on ``_cal`` directly
+    because the emulator sends voltages that the scalar-only contract
+    tests already cover; here we only care where the (m, b) pair came
+    from.
+    """
+
+    def _redis_cal(self):
+        return {
+            "pot_el": [100.0, -50.0],
+            "pot_az": [200.0, -100.0],
+        }
+
+    def _json_cal_file(self, tmp_path, cal):
+        path = tmp_path / "pot_cal.json"
+        with open(path, "w") as f:
+            json.dump(cal, f)
+        return str(path)
+
+    def test_redis_wins_over_json(self, tmp_path):
+        """Both sources present → Redis cal is applied, JSON is ignored."""
+        transport = DummyTransport()
+        store = PotCalStore(transport)
+        store.upload(self._redis_cal())
+        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        pot = DummyPicoPotentiometer(
+            "/dev/dummy",
+            calibration_file=self._json_cal_file(tmp_path, file_cal),
+            pot_cal_store=store,
+        )
+        try:
+            assert pot.is_calibrated
+            assert pot._cal["pot_el"] == (100.0, -50.0)
+            assert pot._cal["pot_az"] == (200.0, -100.0)
+        finally:
+            pot.disconnect()
+
+    def test_json_fallback_when_redis_empty(self, tmp_path):
+        """Redis miss + JSON present → JSON cal is applied."""
+        store = PotCalStore(DummyTransport())
+        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        pot = DummyPicoPotentiometer(
+            "/dev/dummy",
+            calibration_file=self._json_cal_file(tmp_path, file_cal),
+            pot_cal_store=store,
+        )
+        try:
+            assert pot.is_calibrated
+            assert pot._cal["pot_el"] == (1.0, 2.0)
+            assert pot._cal["pot_az"] == (3.0, 4.0)
+        finally:
+            pot.disconnect()
+
+    def test_uncalibrated_when_both_missing(self):
+        """No store and no file → pot is uncalibrated (current behavior)."""
+        pot = DummyPicoPotentiometer("/dev/dummy")
+        try:
+            assert pot.is_calibrated is False
+            assert pot._cal == {"pot_el": None, "pot_az": None}
+        finally:
+            pot.disconnect()
+
+    def test_corrupt_redis_falls_back_to_json(self, tmp_path):
+        """Garbage in Redis → PotCalStore.get returns None → JSON wins."""
+        transport = DummyTransport()
+        transport.r.set(POT_CAL_KEY, b"not-json-{")
+        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        pot = DummyPicoPotentiometer(
+            "/dev/dummy",
+            calibration_file=self._json_cal_file(tmp_path, file_cal),
+            pot_cal_store=PotCalStore(transport),
+        )
+        try:
+            assert pot.is_calibrated
+            assert pot._cal["pot_el"] == (1.0, 2.0)
+            assert pot._cal["pot_az"] == (3.0, 4.0)
+        finally:
+            pot.disconnect()

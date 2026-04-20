@@ -57,6 +57,7 @@ from .buses import (
     PicoCmdReader,
     PicoConfigStore,
     PicoRespWriter,
+    PotCalStore,
 )
 from .keys import PICO_CMD_STREAM, pico_heartbeat_name
 from .motor import PicoMotor
@@ -143,6 +144,7 @@ class PicoManager:
             :class:`MetadataWriter` (passed to each ``PicoDevice``),
             per-device :class:`HeartbeatWriter`,
             :class:`StatusWriter`, :class:`PicoConfigStore`,
+            :class:`PotCalStore` (passed to ``PicoPotentiometer``),
             :class:`PicoCmdReader`, :class:`PicoRespWriter`, and
             :class:`PicoClaimStore`.
         uf2_path : str or Path
@@ -155,6 +157,7 @@ class PicoManager:
         self._heartbeats = {}
         self._metadata_writer = MetadataWriter(transport)
         self._config_store = PicoConfigStore(transport)
+        self._pot_cal_store = PotCalStore(transport)
         self._cmd_reader = PicoCmdReader(transport)
         self._resp_writer = PicoRespWriter(transport)
         self._claim_store = PicoClaimStore(transport)
@@ -245,13 +248,15 @@ class PicoManager:
                 raise ValueError(f"Duplicate device name '{name}' in config")
 
             cls = PICO_CLASSES.get(name, PicoDevice)
+            kwargs = {
+                "metadata_writer": self._metadata_writer,
+                "name": name,
+                "usb_serial": usb_serial,
+            }
+            if cls is PicoPotentiometer:
+                kwargs["pot_cal_store"] = self._pot_cal_store
             try:
-                pico = cls(
-                    port,
-                    metadata_writer=self._metadata_writer,
-                    name=name,
-                    usb_serial=usb_serial,
-                )
+                pico = cls(port, **kwargs)
                 self.picos[name] = pico
                 self._heartbeats[name] = HeartbeatWriter(
                     self.transport, name=pico_heartbeat_name(name)
