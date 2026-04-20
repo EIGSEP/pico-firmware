@@ -139,7 +139,7 @@ class PotCalStore:
             ``(slope, intercept)`` pair (list or tuple). Extra
             fields (e.g. ``metadata``) are preserved verbatim.
         """
-        self.transport.upload_dict(dict(cal), POT_CAL_KEY)
+        self.transport.upload_dict(cal, POT_CAL_KEY)
 
     def get(self):
         """Return the stored calibration dict.
