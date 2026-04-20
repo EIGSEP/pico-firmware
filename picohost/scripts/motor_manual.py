@@ -86,36 +86,44 @@ def main(screen):
             ch = screen.getch()
             if ch == -1:
                 continue
-            if ch == ord("\n"):
-                if not c.is_connected:
-                    continue
-                c.halt()
-                c.reset_step_position(az_step=0, el_step=0)
-                zeroed = True
-                break
-            if 0 <= ch < 256:
-                key = chr(ch).lower()
-                if key == "q":
-                    break
-                elif key == "+":
-                    deg += 1
-                elif key == "-":
-                    deg = max(0.1, deg - 1)
-                elif key in ("u", "d", "l", "r"):
+            try:
+                if ch == ord("\n"):
                     if not c.is_connected:
                         continue
-                    if key == "u":
-                        c.el_move_deg(deg, wait_for_stop=True)
-                    elif key == "d":
-                        c.el_move_deg(-deg, wait_for_stop=True)
-                    elif key == "l":
-                        c.az_move_deg(deg, wait_for_stop=True)
-                    elif key == "r":
-                        c.az_move_deg(-deg, wait_for_stop=True)
+                    c.halt()
+                    c.reset_step_position(az_step=0, el_step=0)
+                    zeroed = True
+                    break
+                if 0 <= ch < 256:
+                    key = chr(ch).lower()
+                    if key == "q":
+                        break
+                    elif key == "+":
+                        deg += 1
+                    elif key == "-":
+                        deg = max(0.1, deg - 1)
+                    elif key in ("u", "d", "l", "r"):
+                        if not c.is_connected:
+                            continue
+                        if key == "u":
+                            c.el_move_deg(deg, wait_for_stop=True)
+                        elif key == "d":
+                            c.el_move_deg(-deg, wait_for_stop=True)
+                        elif key == "l":
+                            c.az_move_deg(deg, wait_for_stop=True)
+                        elif key == "r":
+                            c.az_move_deg(-deg, wait_for_stop=True)
+            except (ConnectionError, RuntimeError):
+                # Disconnect mid-dispatch, or no firmware status yet.
+                # Next refresh_status() tick will show state; skip this key.
+                continue
     except KeyboardInterrupt:
         pass
     finally:
-        c.halt()
+        try:
+            c.halt()
+        except ConnectionError:
+            pass
 
     if zeroed:
         logger.info("Step counters zeroed. Motors are at home (0, 0).")

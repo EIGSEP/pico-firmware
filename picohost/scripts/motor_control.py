@@ -5,10 +5,21 @@ and an infinite scanning mode.
 """
 
 import json
+import logging
 import numpy as np
 from eigsep_observing import EigsepRedis
 
 from picohost import PicoMotor
+
+logger = logging.getLogger(__name__)
+
+
+def _try_halt(c):
+    """Best-effort halt; log and swallow disconnect."""
+    try:
+        c.halt()
+    except ConnectionError as e:
+        logger.warning("halt skipped: %s", e)
 
 
 def main():
@@ -64,13 +75,17 @@ def main():
     except KeyError:
         last_status = None
     c = PicoMotor(port, verbose=True)
-    c.set_delay(
-        az_up_delay_us=2400,
-        az_dn_delay_us=300,
-        el_up_delay_us=2400,
-        el_dn_delay_us=600,
-    )
-    c.halt()
+    try:
+        c.set_delay(
+            az_up_delay_us=2400,
+            az_dn_delay_us=300,
+            el_up_delay_us=2400,
+            el_dn_delay_us=600,
+        )
+    except ConnectionError as e:
+        logger.error("Could not configure motor: %s", e)
+        return
+    _try_halt(c)
     # try:
     #    #c.el_move_deg(30, wait_for_stop=True)
     #    c.az_move_deg(100, wait_for_stop=True)
@@ -81,7 +96,7 @@ def main():
     # finally:
     #    c.halt()
     try:
-        c.halt()
+        _try_halt(c)
         c.scan(
             az_range_deg=np.linspace(-180.0, 180.0, 10),
             el_range_deg=np.linspace(-180.0, 180.0, 10),
@@ -91,9 +106,9 @@ def main():
             sleep_between=args.sleep_s,
         )
     except KeyboardInterrupt:
-        c.halt()
+        _try_halt(c)
     finally:
-        c.halt()
+        _try_halt(c)
 
 
 if __name__ == "__main__":

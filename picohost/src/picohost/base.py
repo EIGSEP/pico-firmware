@@ -229,27 +229,28 @@ class PicoDevice:
         """
         pass
 
-    def send_command(self, cmd_dict: Dict[str, Any]) -> bool:
+    def send_command(self, cmd_dict: Dict[str, Any]) -> None:
         """
         Send a JSON command to the device.
 
         Args:
             cmd_dict: Dictionary to be JSON-encoded and sent
 
-        Returns:
-            True if command sent successfully, False otherwise
+        Raises:
+            ConnectionError: device is not connected, or the underlying
+                write failed.
         """
         if not self.is_connected:
-            return False
+            raise ConnectionError(f"{self.name} not connected")
 
         try:
             json_str = json.dumps(cmd_dict, separators=(",", ":"))
             self.ser.write((json_str + "\n").encode("utf-8"))
             self.ser.flush()
-            return True
         except Exception as e:
-            self.logger.error(f"Failed to send command: {e}")
-            return False
+            raise ConnectionError(
+                f"{self.name} write failed: {e}"
+            ) from e
 
     def read_line(self) -> Optional[str]:
         """
@@ -452,7 +453,7 @@ class PicoRFSwitch(PicoDevice):
     def paths(self):
         return {k: self.rbin(v) for k, v in self.path_str.items()}
 
-    def switch(self, state: str) -> bool:
+    def switch(self, state: str) -> None:
         """
         Set RF switch state.
 
@@ -461,15 +462,12 @@ class PicoRFSwitch(PicoDevice):
         state: str
             Switch state path, see self.PATHS for valid keys
 
-        Returns
-        -------
-        bool
-            True if command sent successfully
-
         Raises
         -------
         ValueError
             If an invalid switch state is provided
+        ConnectionError
+            If the device is not connected or the write failed.
 
         """
         try:
@@ -479,13 +477,9 @@ class PicoRFSwitch(PicoDevice):
                 f"Invalid switch state '{state}'. Valid states: "
                 f"{list(self.paths.keys())}"
             ) from e
-        c = self.send_command({"sw_state": s})
-        if c:
-            time.sleep(0.05)  # allow time for switch to settle
-            self.logger.info(f"Switched to {state}.")
-        else:
-            self.logger.error(f"Failed to switch to {state}.")
-        return c
+        self.send_command({"sw_state": s})
+        time.sleep(0.05)  # allow time for switch to settle
+        self.logger.info(f"Switched to {state}.")
 
 
 class PicoPeltier(PicoDevice):
@@ -534,19 +528,7 @@ class PicoPeltier(PicoDevice):
             usb_serial=usb_serial,
             verbose=verbose,
         )
-        self.wait_for_updates()
         self._start_keepalive()
-
-    def wait_for_updates(self, timeout=3):
-        t = time.time()
-        while True:
-            if len(self.last_status) != 0:
-                break
-            if time.time() - t >= timeout:
-                raise TimeoutError(
-                    f"No status from {self.name} within {timeout}s"
-                )
-            time.sleep(0.1)
 
     def _start_keepalive(self):
         """Start the background keepalive thread."""
@@ -560,7 +542,11 @@ class PicoPeltier(PicoDevice):
     def _keepalive_thread_func(self):
         """Send empty commands periodically to reset the firmware watchdog."""
         while self._keepalive_running:
-            self.send_command({})
+            try:
+                self.send_command({})
+            except ConnectionError:
+                # Reader thread owns reconnection; keepalive survives drops.
+                pass
             # Sleep in small increments so thread stops promptly
             for _ in range(max(1, int(self._keepalive_interval * 10))):
                 if not self._keepalive_running:
@@ -593,12 +579,12 @@ class PicoPeltier(PicoDevice):
         timeout_ms : int
             Watchdog timeout in milliseconds. 0 disables the watchdog.
 
-        Returns
-        -------
-        bool
-            True if command sent successfully.
+        Raises
+        ------
+        ConnectionError
+            If the device is not connected or the write failed.
         """
-        return self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
+        self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
 
     def set_temperature(
         self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5
@@ -611,11 +597,11 @@ class PicoPeltier(PicoDevice):
         if T_LOAD is not None:
             cmd["LOAD_temp_target"] = T_LOAD
             cmd["LOAD_hysteresis"] = LOAD_hyst
-        return self.send_command(cmd)
+        self.send_command(cmd)
 
     def set_enable(self, LNA=True, LOAD=True):
         """Enable temperature control."""
-        return self.send_command({"LNA_enable": LNA, "LOAD_enable": LOAD})
+        self.send_command({"LNA_enable": LNA, "LOAD_enable": LOAD})
 
     def set_clamp(self, LNA=None, LOAD=None):
         """Set maximum drive level [0.0, 1.0], 0.6 default."""
@@ -624,7 +610,7 @@ class PicoPeltier(PicoDevice):
             cmd["LNA_clamp"] = LNA
         if LOAD is not None:
             cmd["LOAD_clamp"] = LOAD
-        return self.send_command(cmd)
+        self.send_command(cmd)
 
 
 class PicoIMU(PicoDevice):

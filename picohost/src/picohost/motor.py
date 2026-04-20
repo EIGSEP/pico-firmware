@@ -50,23 +50,11 @@ class PicoMotor(PicoDevice):
             verbose=verbose,
         )
         self.set_delay()
-        self.wait_for_updates()
 
     def on_reconnect(self):
         """Re-apply delay configuration after a serial reconnect."""
         if self._delay_kwargs is not None:
             self.set_delay(**self._delay_kwargs)
-
-    def wait_for_updates(self, timeout=10):
-        t = time.time()
-        while True:
-            if len(self.last_status) != 0:
-                break
-            if time.time() - t >= timeout:
-                raise TimeoutError(
-                    f"No status from {self.name} within {timeout}s"
-                )
-            time.sleep(0.1)
 
     def deg_to_steps(self, degrees: float) -> int:
         """Convert degrees to motor pulses."""
@@ -146,10 +134,16 @@ class PicoMotor(PicoDevice):
             wait_for_stop=wait_for_stop,
         )
 
+    def _require_status(self):
+        """Raise if no firmware status has been received yet."""
+        if not self.last_status:
+            raise RuntimeError(f"No status from {self.name} yet")
+
     def az_move_steps(
         self, delta_steps, wait_for_start=True, wait_for_stop=False
     ):
         """Move az in specified number of steps from current target."""
+        self._require_status()
         new_target = self.last_status["az_target_pos"] + delta_steps
         self.az_target_steps(
             new_target,
@@ -186,6 +180,7 @@ class PicoMotor(PicoDevice):
         self, delta_steps, wait_for_start=True, wait_for_stop=False
     ):
         """Move el in specified number of steps from current target."""
+        self._require_status()
         new_target = self.last_status["el_target_pos"] + delta_steps
         self.el_target_steps(
             new_target,
@@ -202,6 +197,7 @@ class PicoMotor(PicoDevice):
         )
 
     def is_moving(self):
+        self._require_status()
         return (
             self.last_status["az_target_pos"] != self.last_status["az_pos"]
             or self.last_status["el_target_pos"] != self.last_status["el_pos"]
@@ -215,6 +211,7 @@ class PicoMotor(PicoDevice):
     def wait_for_stop(self, stall_timeout=30):
         if self.verbose:
             logger.debug("Waiting for stop.")
+        self._require_status()
         last_pos = (self.last_status["az_pos"], self.last_status["el_pos"])
         t = time.time()
         while self.is_moving():
