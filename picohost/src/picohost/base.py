@@ -21,19 +21,23 @@ PICO_PID_CDC = 0x0009  # CDC mode (serial)
 PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
 
 
-def redis_handler(redis):
+def redis_handler(writer):
     """
-    Create a handler function to upload data to Redis.
+    Create a handler function that publishes a status dict via a
+    :class:`eigsep_redis.MetadataWriter`.
 
     Parameters
     ----------
-    redis : EigsepRedis
-        Custom EIGSEP Redis client instance.
+    writer : eigsep_redis.MetadataWriter
+        The metadata bus writer to publish through. The ``sensor_name``
+        field on each data dict is used as the metadata key (so
+        ``stream:{sensor_name}`` carries the per-sensor history and
+        ``metadata[sensor_name]`` holds the live snapshot).
 
     Returns
     -------
     handler : callable
-        Function that takes a data dictionary and uploads it to Redis.
+        Function that takes a data dictionary and publishes it.
 
     Notes
     -----
@@ -62,7 +66,7 @@ def redis_handler(redis):
         except KeyError:
             logger.error("Data does not contain 'sensor_name' key")
             return
-        redis.add_metadata(name, data)
+        writer.add(name, data)
 
     return handler
 
@@ -78,7 +82,7 @@ class PicoDevice:
         baudrate: int = 115200,
         timeout: float = 5.0,
         name=None,
-        eig_redis=None,
+        metadata_writer=None,
         response_handler=None,
         usb_serial: str = "",
         verbose: bool = False,
@@ -91,7 +95,8 @@ class PicoDevice:
             baudrate: Serial baud rate (default: 115200)
             timeout: Serial read timeout in seconds (default: 5.0)
             name: str
-            eig_redis: EigsepRedis instance
+            metadata_writer: eigsep_redis.MetadataWriter instance, or
+                ``None`` to disable Redis publication.
             usb_serial: USB serial number for port re-discovery
             verbose: log each received status packet at DEBUG level
         """
@@ -113,8 +118,8 @@ class PicoDevice:
         else:
             self.name = name
 
-        if eig_redis is not None:
-            self.redis_handler = redis_handler(eig_redis)
+        if metadata_writer is not None:
+            self.redis_handler = redis_handler(metadata_writer)
         else:
             self.redis_handler = None
         self.connect()
@@ -495,7 +500,7 @@ class PicoPeltier(PicoDevice):
         verbose=False,
         timeout=5.0,
         name=None,
-        eig_redis=None,
+        metadata_writer=None,
         keepalive_interval=10.0,
         usb_serial="",
     ):
@@ -504,8 +509,8 @@ class PicoPeltier(PicoDevice):
         ----------
         port : str
             Serial port device.
-        eig_redis : EigsepRedis
-            Redis client instance.
+        metadata_writer : eigsep_redis.MetadataWriter, optional
+            Metadata bus writer. ``None`` disables Redis publication.
         verbose : bool, optional
             Enable verbose output.
         timeout : float, optional
@@ -524,7 +529,7 @@ class PicoPeltier(PicoDevice):
             port,
             timeout=timeout,
             name=name,
-            eig_redis=eig_redis,
+            metadata_writer=metadata_writer,
             usb_serial=usb_serial,
             verbose=verbose,
         )
@@ -634,7 +639,7 @@ class PicoPotentiometer(PicoDevice):
         calibration_file=None,
         timeout=5.0,
         name=None,
-        eig_redis=None,
+        metadata_writer=None,
         usb_serial="",
     ):
         """
@@ -648,8 +653,8 @@ class PicoPotentiometer(PicoDevice):
         timeout : float
             Serial read timeout in seconds (default: 5.0).
         name : str, optional
-        eig_redis : EigsepRedis, optional
-            EigsepRedis response handler (default: None).
+        metadata_writer : eigsep_redis.MetadataWriter, optional
+            Metadata bus writer. ``None`` disables Redis publication.
         usb_serial : str, optional
             USB serial number for port re-discovery.
         """
@@ -658,7 +663,7 @@ class PicoPotentiometer(PicoDevice):
             port,
             timeout=timeout,
             name=name,
-            eig_redis=eig_redis,
+            metadata_writer=metadata_writer,
             usb_serial=usb_serial,
         )
         if calibration_file is not None:

@@ -446,11 +446,13 @@ class TestRedisIntegration:
         """Verify that redis_handler receives status data when configured."""
         received = []
 
-        class FakeRedis:
-            def add_metadata(self, name, data):
+        class FakeMetadataWriter:
+            def add(self, name, data):
                 received.append((name, data))
 
-        mon = DummyPicoTempMon("/dev/dummy", eig_redis=FakeRedis())
+        mon = DummyPicoTempMon(
+            "/dev/dummy", metadata_writer=FakeMetadataWriter()
+        )
         cadence = mon.EMULATOR_CADENCE_MS
         wait_for_condition(
             lambda: len(received) > 0,

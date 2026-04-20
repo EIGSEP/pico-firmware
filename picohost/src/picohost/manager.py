@@ -1,24 +1,48 @@
 """
 PicoManager - standalone service that owns all pico serial connections.
 
-The manager discovers devices from a ``pico_config.json`` produced by
-``flash-picos``, instantiates the matching :class:`PicoDevice` subclass
-for each one, monitors device health (reconnecting on serial drops),
-and relays commands from a Redis stream so that other processes can
-talk to picos without holding the serial port themselves.
+Redis is the source of truth. ``flash-picos`` writes the discovered
+device list into ``PicoConfigStore`` on the host side; the manager
+boots, reads that list, instantiates the matching :class:`PicoDevice`
+subclass per entry, and then exposes each device to the rest of the
+system through four bus surfaces (all from ``eigsep_redis`` /
+``picohost.buses``):
+
+- :class:`eigsep_redis.MetadataWriter` — per-sensor firmware status
+  (the 200 ms JSON packets) is republished onto ``stream:{sensor}``
+  and the ``metadata`` snapshot hash, same as every other sensor in
+  the system.
+- :class:`eigsep_redis.HeartbeatWriter` — per-device liveness under
+  ``heartbeat:pico:{name}`` with a TTL, so a consumer that loses its
+  view of a pico (or of the manager itself) detects it within the
+  TTL window via :class:`eigsep_redis.HeartbeatReader.check`.
+- :class:`eigsep_redis.StatusWriter` — manager-level log events
+  (discover, reconnect, stop) land on ``stream:status`` alongside
+  every other service's events.
+- :class:`picohost.buses.PicoCmdReader` /
+  :class:`picohost.buses.PicoRespWriter` /
+  :class:`picohost.buses.PicoClaimStore` — command/response stream
+  with soft claim ownership, the one surface that is picohost-specific
+  and has no eigsep_observing analogue.
 
 Usage:
-    python -m picohost.manager [--config pico_config.json] [--log-level INFO]
+    python -m picohost.manager [--uf2 build/pico_multi.uf2] [--log-level INFO]
 """
 
 import argparse
 import json
 import logging
 import signal
-import sys
 import threading
 import time
 from pathlib import Path
+
+from eigsep_redis import (
+    HeartbeatWriter,
+    MetadataWriter,
+    StatusWriter,
+    Transport,
+)
 
 from .base import (
     PicoDevice,
@@ -28,13 +52,20 @@ from .base import (
     PicoPotentiometer,
     PicoRFSwitch,
 )
+from .buses import (
+    PicoClaimStore,
+    PicoCmdReader,
+    PicoConfigStore,
+    PicoRespWriter,
+)
+from .keys import pico_heartbeat_name
 from .motor import PicoMotor
 
 logger = logging.getLogger(__name__)
 
 # Map firmware app_id (from src/pico_multi.h) to a logical device name.
-# Names are used as Redis keys and as the "target" field in command
-# stream entries — they must stay stable across releases.
+# Names are used as metadata/heartbeat keys and as the "target" field in
+# command stream entries — they must stay stable across releases.
 APP_NAMES = {
     0: "motor",
     1: "tempctrl",
@@ -59,16 +90,13 @@ PICO_CLASSES = {
     "rfswitch": PicoRFSwitch,
 }
 
-# Redis keys
-PICOS_SET = "picos"
-HEALTH_HASH = "pico_health"
-CONFIG_HASH = "pico_config"
-CMD_STREAM = "stream:pico_cmd"
-RESP_STREAM = "stream:pico_resp"
-
 # Timing
 HEALTH_CHECK_INTERVAL = 5.0  # seconds between health checks
 HEALTH_TIMEOUT = 10.0  # seconds without status before unhealthy
+# Heartbeat TTL is 4× the check interval so a single missed tick
+# (or a reconnection storm that blocks one pass) doesn't expire the
+# key before the next tick has a chance to re-assert liveness.
+HEARTBEAT_TTL = int(HEALTH_CHECK_INTERVAL * 4)
 CLAIM_TTL = 300  # default soft-claim TTL in seconds
 
 # Methods that must not be invoked via the command stream. These are
@@ -95,49 +123,53 @@ class PicoManager:
     """
     Standalone service that owns all pico serial connections.
 
-    Discovers devices from a config file, monitors their health, and
-    relays commands from a Redis stream to the right device.
+    Discovers devices from the Redis :class:`PicoConfigStore`,
+    monitors their health via per-device heartbeats, and relays
+    commands from :class:`PicoCmdReader` to the right
+    :class:`PicoDevice`.
     """
 
     def __init__(
         self,
-        eig_redis,
-        config_file="pico_config.json",
+        transport,
         uf2_path="build/pico_multi.uf2",
-        use_redis_config=True,
     ):
         """
         Parameters
         ----------
-        eig_redis : EigsepRedis or redis.Redis
-            Redis client used both as the source for incoming commands
-            and as the publication target for status, health, and
-            command responses. Either an :class:`EigsepRedis` (which
-            exposes the underlying client as ``.r``) or a bare
-            ``redis.Redis`` is accepted.
-        config_file : str or Path
-            Path to ``pico_config.json`` produced by ``flash-picos``.
+        transport : eigsep_redis.Transport
+            Shared transport used to construct every bus writer/reader
+            this manager needs. The same instance underpins
+            :class:`MetadataWriter` (passed to each ``PicoDevice``),
+            per-device :class:`HeartbeatWriter`,
+            :class:`StatusWriter`, :class:`PicoConfigStore`,
+            :class:`PicoCmdReader`, :class:`PicoRespWriter`, and
+            :class:`PicoClaimStore`.
         uf2_path : str or Path
-            Path to the UF2 firmware file for auto-flashing.
-        use_redis_config : bool
-            If ``True`` (default), check Redis for existing config
-            before falling back to the file/flash.
+            Path to the UF2 firmware file for auto-flashing when
+            Redis is empty at boot.
         """
-        self.eig_redis = eig_redis
-        self.config_file = Path(config_file)
+        self.transport = transport
         self.uf2_path = Path(uf2_path)
-        self.use_redis_config = use_redis_config
         self.picos = {}
+        self._heartbeats = {}
+        self._metadata_writer = MetadataWriter(transport)
+        self._config_store = PicoConfigStore(transport)
+        self._cmd_reader = PicoCmdReader(transport)
+        self._resp_writer = PicoRespWriter(transport)
+        self._claim_store = PicoClaimStore(transport)
+        self._status_writer = StatusWriter(transport)
         self._running = False
         self._health_thread = None
         self._cmd_thread = None
+        # Serializes mutations of self.picos / self._heartbeats between
+        # the health thread and the cmd thread (rediscover). Without it,
+        # a rediscover teardown can run concurrently with an in-flight
+        # reconnect on the same serial connection, and heartbeats popped
+        # by rediscover can be reasserted alive by a lingering health
+        # iteration.
+        self._lock = threading.Lock()
         self.logger = logger
-
-    def _redis(self):
-        """Return the underlying ``redis.Redis`` client."""
-        if hasattr(self.eig_redis, "r"):
-            return self.eig_redis.r
-        return self.eig_redis
 
     @staticmethod
     def _decode(value):
@@ -146,110 +178,37 @@ class PicoManager:
             return value.decode("utf-8")
         return str(value) if value is not None else ""
 
+    def _status(self, msg, level=logging.INFO):
+        """Log *msg* and mirror it onto the shared status stream."""
+        self.logger.log(level, msg)
+        try:
+            self._status_writer.send(msg, level=level)
+        except Exception as e:  # pragma: no cover - don't mask bugs behind status
+            self.logger.warning(f"Failed to publish status: {e}")
+
     # --- Discovery & Config ---
 
     def discover(self):
         """
-        Discover pico devices using a cascading config strategy:
+        Resolve the device list and instantiate devices.
 
-        1. Redis ``CONFIG_HASH`` (previous run persisted config)
-        2. JSON config file on disk
-        3. Flash-and-discover (if UF2 exists)
-
-        After any source succeeds the config is written back to both
-        Redis (via :meth:`_register_devices`) and the JSON file (via
-        :meth:`_save_config_to_file`).
+        1. Read :class:`PicoConfigStore` from Redis. If non-empty,
+           register those devices.
+        2. If empty, run :func:`flash_picos.flash_and_discover` and
+           publish the result back into the config store.
         """
-        devices = (
-            self._load_config_from_redis() if self.use_redis_config else None
-        )
+        devices = self._config_store.get()
         if devices:
-            self.logger.info(f"Loaded {len(devices)} device(s) from Redis")
+            self._status(f"Loaded {len(devices)} device(s) from Redis")
             self._register_devices(devices)
-            self._save_config_to_file(devices)
-            return
-
-        devices = self._load_config_from_file()
-        if devices:
-            self.logger.info(
-                f"Loaded {len(devices)} device(s) from config file"
-            )
-            self._register_devices(devices)
-            self._save_config_to_file(devices)
             return
 
         self._try_flash_discover()
         if self.picos:
-            devices = self._current_device_list()
-            self._save_config_to_file(devices)
-
-    def _load_config_from_redis(self):
-        """
-        Try to load device config from the Redis ``CONFIG_HASH``.
-
-        Returns
-        -------
-        list[dict] or None
-            Device config dicts if Redis has config, ``None`` otherwise.
-        """
-        r = self._redis()
-        try:
-            raw = r.hgetall(CONFIG_HASH)
-        except Exception as e:
-            self.logger.warning(f"Failed to read config from Redis: {e}")
-            return None
-
-        if not raw:
-            return None
-
-        devices = []
-        for name, blob in raw.items():
-            blob = self._decode(blob)
-            try:
-                devices.append(json.loads(blob))
-            except json.JSONDecodeError:
-                self.logger.warning(
-                    f"Invalid JSON in Redis config for {self._decode(name)}"
-                )
-        return devices if devices else None
-
-    def _load_config_from_file(self):
-        """
-        Read the device list from the JSON config file.
-
-        Returns
-        -------
-        list[dict] or None
-            Device config dicts if the file is valid, ``None`` otherwise.
-        """
-        if not self.config_file.exists():
-            self.logger.warning(f"Config file {self.config_file} not found")
-            return None
-
-        with open(self.config_file) as f:
-            try:
-                devices = json.load(f)
-            except json.JSONDecodeError as e:
-                self.logger.error(f"Invalid JSON in config file: {e}")
-                return None
-
-        return devices if devices else None
-
-    def _save_config_to_file(self, devices):
-        """Persist the device list to the JSON config file."""
-        try:
-            with open(self.config_file, "w") as f:
-                json.dump(devices, f, indent=2)
-            self.logger.debug(
-                f"Wrote {len(devices)} device(s) to {self.config_file}"
-            )
-        except OSError as e:
-            self.logger.warning(
-                f"Could not write config file {self.config_file}: {e}"
-            )
+            self._config_store.upload(self._current_device_list())
 
     def _current_device_list(self):
-        """Build a device list from currently registered picos."""
+        """Build a list of device dicts from currently registered picos."""
         devices = []
         for name, pico in self.picos.items():
             app_id = APP_IDS.get(name, -1)
@@ -263,11 +222,8 @@ class PicoManager:
         return devices
 
     def _register_devices(self, devices):
-        """
-        Instantiate the matching :class:`PicoDevice` subclass for each
-        entry in *devices* and publish to Redis.
-        """
-        r = self._redis()
+        """Instantiate each :class:`PicoDevice` and publish an initial
+        heartbeat."""
         for dev_info in devices:
             app_id = dev_info.get("app_id")
             port = dev_info.get("port")
@@ -291,39 +247,23 @@ class PicoManager:
             try:
                 pico = cls(
                     port,
-                    eig_redis=self.eig_redis,
+                    metadata_writer=self._metadata_writer,
                     name=name,
                     usb_serial=usb_serial,
                 )
                 self.picos[name] = pico
-                r.sadd(PICOS_SET, name)
-                r.hset(
-                    CONFIG_HASH,
-                    name,
-                    json.dumps(
-                        {
-                            "port": port,
-                            "app_id": app_id,
-                            "usb_serial": usb_serial,
-                        }
-                    ),
+                self._heartbeats[name] = HeartbeatWriter(
+                    self.transport, name=pico_heartbeat_name(name)
                 )
-                r.hset(
-                    HEALTH_HASH,
-                    name,
-                    json.dumps(
-                        {
-                            "connected": True,
-                            "last_seen": time.time(),
-                            "app_id": app_id,
-                        }
-                    ),
-                )
-                self.logger.info(
+                self._heartbeats[name].set(ex=HEARTBEAT_TTL, alive=True)
+                self._status(
                     f"Discovered {name} (app_id={app_id}) on {port}"
                 )
             except Exception as e:
-                self.logger.error(f"Failed to init {name} on {port}: {e}")
+                self._status(
+                    f"Failed to init {name} on {port}: {e}",
+                    level=logging.ERROR,
+                )
 
     def _try_flash_discover(self):
         """Attempt to flash attached Picos and discover devices."""
@@ -360,82 +300,59 @@ class PicoManager:
 
     def _check_health(self):
         """Run one iteration of health checks for all picos."""
-        r = self._redis()
-        for name, pico in list(self.picos.items()):
-            connected = pico.is_connected
-            last_seen = pico.last_status_time or 0
-            now = time.time()
-            stale = (now - last_seen) > HEALTH_TIMEOUT if last_seen else True
-            healthy = connected and not stale
-
-            if not healthy:
-                self.logger.warning(
-                    f"{name}: unhealthy (connected={connected}, stale={stale})"
+        with self._lock:
+            for name, pico in list(self.picos.items()):
+                connected = pico.is_connected
+                last_seen = pico.last_status_time or 0
+                now = time.time()
+                stale = (
+                    (now - last_seen) > HEALTH_TIMEOUT if last_seen else True
                 )
-                try:
-                    old_port = pico.port
-                    if pico.reconnect():
-                        self.logger.info(f"{name}: reconnected")
-                        r.sadd(PICOS_SET, name)
-                        connected = True
-                        if pico.port != old_port:
-                            app_id = APP_IDS.get(name, -1)
-                            r.hset(
-                                CONFIG_HASH,
-                                name,
-                                json.dumps(
-                                    {
-                                        "port": pico.port,
-                                        "app_id": app_id,
-                                        "usb_serial": pico.usb_serial,
-                                    }
-                                ),
-                            )
-                            self._save_config_to_file(
-                                self._current_device_list()
-                            )
-                    else:
-                        r.srem(PICOS_SET, name)
-                        connected = False
-                except Exception as e:
-                    self.logger.error(f"{name}: reconnect failed: {e}")
-                    r.srem(PICOS_SET, name)
-                    connected = False
+                healthy = connected and not stale
 
-            app_id = APP_IDS.get(name, -1)
-            r.hset(
-                HEALTH_HASH,
-                name,
-                json.dumps(
-                    {
-                        "connected": connected,
-                        "last_seen": pico.last_status_time or 0,
-                        "app_id": app_id,
-                    }
-                ),
-            )
+                if not healthy:
+                    self._status(
+                        f"{name}: unhealthy "
+                        f"(connected={connected}, stale={stale})",
+                        level=logging.WARNING,
+                    )
+                    try:
+                        old_port = pico.port
+                        if pico.reconnect():
+                            self._status(f"{name}: reconnected")
+                            connected = True
+                            if pico.port != old_port:
+                                self._config_store.upload(
+                                    self._current_device_list()
+                                )
+                        else:
+                            connected = False
+                    except Exception as e:
+                        self._status(
+                            f"{name}: reconnect failed: {e}",
+                            level=logging.ERROR,
+                        )
+                        connected = False
+
+                hb = self._heartbeats.get(name)
+                if hb is not None:
+                    hb.set(ex=HEARTBEAT_TTL, alive=connected)
 
     # --- Command Relay ---
 
     def cmd_loop(self):
         """Listen for incoming pico commands on the Redis stream."""
-        r = self._redis()
-        last_id = "$"  # only read new messages
         while self._running:
             try:
-                result = r.xread({CMD_STREAM: last_id}, block=1000, count=10)
-                if not result:
-                    continue
-                for _stream, messages in result:
-                    for msg_id, fields in messages:
-                        last_id = msg_id
-                        self._process_command(r, msg_id, fields)
+                messages = self._cmd_reader.read(timeout=1.0, count=10)
+                for msg_id, fields in messages:
+                    self._process_command(msg_id, fields)
             except Exception as e:
                 if self._running:
                     self.logger.error(f"cmd_loop error: {e}")
                     time.sleep(1)
 
-    def _process_command(self, r, msg_id, fields):
+    def _process_command(self, msg_id, fields):
         """Validate and dispatch a single command stream entry."""
         f = {self._decode(k): self._decode(v) for k, v in fields.items()}
         target = f.get("target", "")
@@ -444,15 +361,12 @@ class PicoManager:
         cmd_raw = f.get("cmd", "{}")
 
         def _err(error_msg):
-            r.xadd(
-                RESP_STREAM,
-                {
-                    "target": target,
-                    "source": source,
-                    "request_id": request_id,
-                    "status": "error",
-                    "data": json.dumps({"error": error_msg}),
-                },
+            self._resp_writer.send(
+                target=target,
+                source=source,
+                request_id=request_id,
+                status="error",
+                data={"error": error_msg},
             )
 
         try:
@@ -467,7 +381,7 @@ class PicoManager:
             return
 
         if target == "manager":
-            self._handle_manager_cmd(r, source, cmd, request_id)
+            self._handle_manager_cmd(source, cmd, request_id)
             return
 
         pico = self.picos.get(target)
@@ -478,21 +392,13 @@ class PicoManager:
 
         # Soft claims: warn (but allow) when a non-owner sends a command
         # to a claimed device. Claims are advisory, not enforced.
-        resp = {
-            "target": target,
-            "source": source,
-            "request_id": request_id,
-        }
-        claim_key = f"pico_claim:{target}"
-        current_owner = r.get(claim_key)
-        if current_owner is not None:
-            current_owner = self._decode(current_owner)
-            if current_owner != source:
-                warning = f"overriding claim by {current_owner}"
-                self.logger.warning(
-                    f"{target}: {source} overrides claim by {current_owner}"
-                )
-                resp["warning"] = warning
+        warning = None
+        current_owner = self._claim_store.get(target)
+        if current_owner is not None and current_owner != source:
+            warning = f"overriding claim by {current_owner}"
+            self.logger.warning(
+                f"{target}: {source} overrides claim by {current_owner}"
+            )
 
         action = cmd.get("action")
         if action == "claim":
@@ -502,43 +408,48 @@ class PicoManager:
             except (ValueError, TypeError):
                 _err(f"invalid ttl: {ttl!r}")
                 return
-            r.set(claim_key, source, ex=ttl)
-            resp.update(
-                {
-                    "status": "ok",
-                    "data": json.dumps({"claimed": target, "ttl": ttl}),
-                }
+            self._claim_store.set(target, source, ttl)
+            self._resp_writer.send(
+                target=target,
+                source=source,
+                request_id=request_id,
+                status="ok",
+                data={"claimed": target, "ttl": ttl},
+                warning=warning,
             )
-            r.xadd(RESP_STREAM, resp)
             return
         if action == "release":
-            r.delete(claim_key)
-            resp.update(
-                {
-                    "status": "ok",
-                    "data": json.dumps({"released": target}),
-                }
+            self._claim_store.delete(target)
+            self._resp_writer.send(
+                target=target,
+                source=source,
+                request_id=request_id,
+                status="ok",
+                data={"released": target},
+                warning=warning,
             )
-            r.xadd(RESP_STREAM, resp)
             return
 
         try:
             result = self._route_command(pico, target, cmd)
-            resp.update(
-                {
-                    "status": "ok",
-                    "data": json.dumps(result if result is not None else {}),
-                }
+            self._resp_writer.send(
+                target=target,
+                source=source,
+                request_id=request_id,
+                status="ok",
+                data=result if result is not None else {},
+                warning=warning,
             )
         except Exception as e:
             self.logger.error(f"Command failed on {target}: {e}")
-            resp.update(
-                {
-                    "status": "error",
-                    "data": json.dumps({"error": str(e)}),
-                }
+            self._resp_writer.send(
+                target=target,
+                source=source,
+                request_id=request_id,
+                status="error",
+                data={"error": str(e)},
+                warning=warning,
             )
-        r.xadd(RESP_STREAM, resp)
 
     def _route_command(self, pico, target, cmd):
         """
@@ -562,53 +473,51 @@ class PicoManager:
         result = method(**cmd)
         return {"action": action, "result": result}
 
-    def _handle_manager_cmd(self, r, source, cmd, request_id=""):
+    def _handle_manager_cmd(self, source, cmd, request_id=""):
         """Handle commands targeted at the manager itself."""
         action = cmd.get("action", "")
-        resp = {"target": "manager", "source": source, "request_id": request_id}
-
         if action == "rediscover":
-            self.logger.info(f"Rediscover requested by {source}")
+            self._status(f"Rediscover requested by {source}")
             try:
-                for name, pico in list(self.picos.items()):
-                    try:
-                        pico.disconnect()
-                    except Exception:
-                        pass
-                    r.srem(PICOS_SET, name)
-                self.picos.clear()
-                self.discover()
-                device_names = list(self.picos.keys())
-                resp.update(
-                    {
-                        "status": "ok",
-                        "data": json.dumps(
-                            {
-                                "devices": device_names,
-                                "count": len(device_names),
-                            }
-                        ),
-                    }
+                with self._lock:
+                    for name, pico in list(self.picos.items()):
+                        try:
+                            pico.disconnect()
+                        except Exception:
+                            pass
+                        hb = self._heartbeats.pop(name, None)
+                        if hb is not None:
+                            hb.set(ex=HEARTBEAT_TTL, alive=False)
+                    self.picos.clear()
+                    self.discover()
+                    device_names = list(self.picos.keys())
+                self._resp_writer.send(
+                    target="manager",
+                    source=source,
+                    request_id=request_id,
+                    status="ok",
+                    data={
+                        "devices": device_names,
+                        "count": len(device_names),
+                    },
                 )
             except Exception as e:
                 self.logger.error(f"Rediscover failed: {e}")
-                resp.update(
-                    {
-                        "status": "error",
-                        "data": json.dumps({"error": str(e)}),
-                    }
+                self._resp_writer.send(
+                    target="manager",
+                    source=source,
+                    request_id=request_id,
+                    status="error",
+                    data={"error": str(e)},
                 )
         else:
-            resp.update(
-                {
-                    "status": "error",
-                    "data": json.dumps(
-                        {"error": f"unknown manager action: {action}"}
-                    ),
-                }
+            self._resp_writer.send(
+                target="manager",
+                source=source,
+                request_id=request_id,
+                status="error",
+                data={"error": f"unknown manager action: {action}"},
             )
-
-        r.xadd(RESP_STREAM, resp)
 
     # --- Lifecycle ---
 
@@ -623,37 +532,33 @@ class PicoManager:
         )
         self._health_thread.start()
         self._cmd_thread.start()
-        self.logger.info("PicoManager started")
+        self._status("PicoManager started")
 
     def stop(self):
-        """Graceful shutdown: stop threads, disconnect picos, clear Redis."""
-        self.logger.info("PicoManager stopping...")
+        """Graceful shutdown: stop threads, disconnect picos, mark dead."""
+        self._status("PicoManager stopping...")
         self._running = False
         if self._health_thread:
             self._health_thread.join(timeout=HEALTH_CHECK_INTERVAL + 1)
         if self._cmd_thread:
             self._cmd_thread.join(timeout=2)
 
-        r = self._redis()
         for name, pico in self.picos.items():
             try:
                 pico.disconnect()
-                r.srem(PICOS_SET, name)
-                r.hset(
-                    HEALTH_HASH,
-                    name,
-                    json.dumps(
-                        {
-                            "connected": False,
-                            "last_seen": 0,
-                            "app_id": APP_IDS.get(name, -1),
-                        }
-                    ),
-                )
             except Exception as e:
                 self.logger.error(f"Error stopping {name}: {e}")
+            hb = self._heartbeats.get(name)
+            if hb is not None:
+                try:
+                    hb.set(ex=HEARTBEAT_TTL, alive=False)
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to clear heartbeat for {name}: {e}"
+                    )
         self.picos.clear()
-        self.logger.info("PicoManager stopped")
+        self._heartbeats.clear()
+        self._status("PicoManager stopped")
 
     def run(self):
         """Discover, start, and block until interrupted."""
@@ -676,25 +581,26 @@ def main():
     """Console-script and ``python -m picohost.manager`` entry point."""
     parser = argparse.ArgumentParser(description="EIGSEP Pico Manager")
     parser.add_argument(
-        "--config",
-        default="pico_config.json",
-        help="Path to pico_config.json (default: pico_config.json)",
-    )
-    parser.add_argument(
         "--uf2",
         default="build/pico_multi.uf2",
-        help="Path to pico_multi.uf2 for auto-flashing "
+        help="Path to pico_multi.uf2 for auto-flashing when Redis is empty "
         "(default: build/pico_multi.uf2)",
     )
     parser.add_argument(
-        "--no-redis-config",
-        action="store_true",
-        help="Skip Redis config lookup, re-discover from file/flash",
+        "--redis-host",
+        default="localhost",
+        help="Redis host (default: localhost)",
+    )
+    parser.add_argument(
+        "--redis-port",
+        type=int,
+        default=6379,
+        help="Redis port (default: 6379)",
     )
     parser.add_argument(
         "--clear-config",
         action="store_true",
-        help="Clear stored config from Redis before discovering",
+        help="Clear PicoConfigStore before discovering",
     )
     parser.add_argument(
         "--log-level",
@@ -709,25 +615,10 @@ def main():
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    try:
-        from eigsep_redis import EigsepRedis
-    except ImportError:
-        print(
-            "eigsep_redis is required to run PicoManager.\n"
-            "Install it with: pip install eigsep_redis",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    r = EigsepRedis()
+    transport = Transport(host=args.redis_host, port=args.redis_port)
+    mgr = PicoManager(transport, uf2_path=args.uf2)
     if args.clear_config:
-        r.r.delete(CONFIG_HASH)
-    mgr = PicoManager(
-        r,
-        config_file=args.config,
-        uf2_path=args.uf2,
-        use_redis_config=not args.no_redis_config,
-    )
+        mgr._config_store.clear()
     mgr.run()
 
 

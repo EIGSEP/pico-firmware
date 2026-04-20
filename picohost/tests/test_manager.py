@@ -2,24 +2,29 @@
 Tests for picohost.manager.PicoManager.
 
 Uses the existing emulator-backed Dummy* devices from picohost.testing
-plus a small in-test MockRedis stub. We deliberately don't pull in
-fakeredis here — once the eigsep_redis package lands (Phase 2), tests
-can switch to its fakeredis-backed DummyEigsepRedisBase.
+plus ``eigsep_redis.testing.DummyTransport`` (fakeredis-backed) so the
+manager talks to a real in-process Redis without a live server.
 """
 
 import json
 
 import pytest
+from eigsep_redis import HeartbeatReader
+from eigsep_redis.testing import DummyTransport
 
+from picohost.buses import PicoConfigStore
+from picohost.keys import (
+    PICO_CMD_STREAM,
+    PICO_CONFIG_KEY,
+    PICO_RESP_STREAM,
+    pico_claim_key,
+    pico_heartbeat_name,
+)
 from picohost.manager import (
     APP_IDS,
     APP_NAMES,
-    CMD_STREAM,
-    CONFIG_HASH,
-    HEALTH_HASH,
+    HEARTBEAT_TTL,
     PICO_CLASSES,
-    PICOS_SET,
-    RESP_STREAM,
     PicoManager,
     _BLOCKED_ACTIONS,
 )
@@ -30,99 +35,46 @@ from picohost.testing import (
 )
 
 
-class MockRedis:
-    """
-    Minimal in-process Redis substitute that implements only the calls
-    PicoManager makes plus ``add_metadata`` so the picohost reader
-    thread doesn't blow up when it tries to publish status.
-    """
-
-    def __init__(self):
-        self._sets = {}
-        self._hashes = {}
-        self._keys = {}
-        self._streams = {}
-        # PicoManager._redis() returns self.r if it exists, else self.
-        self.r = self
-
-    # -- the picohost.base.redis_handler entry point --
-
-    def add_metadata(self, name, data):
-        pass
-
-    # -- sets --
-
-    def sadd(self, key, *values):
-        self._sets.setdefault(key, set()).update(values)
-
-    def srem(self, key, *values):
-        if key in self._sets:
-            self._sets[key] -= set(values)
-
-    def smembers(self, key):
-        return set(self._sets.get(key, set()))
-
-    # -- hashes --
-
-    def hset(self, name, key=None, value=None, mapping=None):
-        self._hashes.setdefault(name, {})
-        if key is not None:
-            self._hashes[name][key] = value
-        if mapping:
-            self._hashes[name].update(mapping)
-
-    def hget(self, name, key):
-        return self._hashes.get(name, {}).get(key)
-
-    def hgetall(self, name):
-        return dict(self._hashes.get(name, {}))
-
-    # -- keys --
-
-    def set(self, key, value, ex=None):
-        self._keys[key] = value
-
-    def get(self, key):
-        return self._keys.get(key)
-
-    def delete(self, *keys):
-        for key in keys:
-            self._keys.pop(key, None)
-
-    # -- streams --
-
-    def xadd(self, stream, fields, maxlen=None):
-        msgs = self._streams.setdefault(stream, [])
-        msg_id = f"{len(msgs)}-0"
-        msgs.append((msg_id, fields))
-        return msg_id
-
-    def xread(self, streams, block=None, count=None):
-        # The cmd_loop only uses xread for live polling — tests drive
-        # _process_command directly, so an empty result is correct.
-        return []
-
-
 # --- helpers --------------------------------------------------------------
 
 
 def _attach(mgr, name, dummy_cls):
-    """
-    Build a Dummy* device, register it under ``name`` in the manager's
-    dict, and mark it as published in the manager's Redis state — the
-    same effect ``discover()`` would have.
-    """
-    pico = dummy_cls("/dev/dummy", eig_redis=mgr.eig_redis, name=name)
+    """Build a Dummy device and register it the way ``discover()`` would."""
+    from eigsep_redis import HeartbeatWriter
+
+    pico = dummy_cls(
+        "/dev/dummy",
+        metadata_writer=mgr._metadata_writer,
+        name=name,
+    )
     mgr.picos[name] = pico
-    r = mgr._redis()
-    r.sadd(PICOS_SET, name)
+    mgr._heartbeats[name] = HeartbeatWriter(
+        mgr.transport, name=pico_heartbeat_name(name)
+    )
+    mgr._heartbeats[name].set(ex=HEARTBEAT_TTL, alive=True)
     return pico
+
+
+def _last_response(transport):
+    """Return the most recent response dict written to ``PICO_RESP_STREAM``."""
+    entries = transport.r.xrange(PICO_RESP_STREAM)
+    assert entries, "expected at least one response entry"
+    _, fields = entries[-1]
+    return {k.decode(): v.decode() for k, v in fields.items()}
+
+
+def _all_responses(transport):
+    """Return every response dict written to ``PICO_RESP_STREAM``."""
+    return [
+        {k.decode(): v.decode() for k, v in fields.items()}
+        for _, fields in transport.r.xrange(PICO_RESP_STREAM)
+    ]
 
 
 @pytest.fixture
 def mgr():
-    """A bare PicoManager wired to a fresh MockRedis."""
-    m = PicoManager(MockRedis())
+    """A bare PicoManager wired to a fresh in-memory transport."""
+    m = PicoManager(DummyTransport())
     yield m
     for pico in list(m.picos.values()):
         try:
@@ -211,9 +163,7 @@ class TestRouteCommand:
 class TestProcessCommand:
     def test_valid_command_publishes_ok_response(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -221,15 +171,12 @@ class TestProcessCommand:
                 "source": "test",
             },
         )
-        assert len(r._streams[RESP_STREAM]) == 1
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
         assert resp["source"] == "test"
 
     def test_unknown_target_publishes_error(self, mgr):
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "ghost",
@@ -237,15 +184,13 @@ class TestProcessCommand:
                 "source": "test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "error"
         assert "unknown target" in json.loads(resp["data"])["error"]
 
     def test_invalid_json_publishes_error(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -253,18 +198,14 @@ class TestProcessCommand:
                 "source": "test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "error"
 
     def test_bytes_fields_decoded(self, mgr):
-        """
-        Real Redis returns bytes; the manager must decode both keys and
-        values before parsing.
-        """
+        """Real Redis returns bytes; the manager must decode both keys
+        and values before parsing."""
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
         mgr._process_command(
-            r,
             b"1-0",
             {
                 b"target": b"rfswitch",
@@ -274,7 +215,7 @@ class TestProcessCommand:
                 b"source": b"test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
 
 
@@ -284,9 +225,7 @@ class TestProcessCommand:
 class TestClaims:
     def test_claim_sets_owner(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -294,14 +233,15 @@ class TestClaims:
                 "source": "switch_loop",
             },
         )
-        assert r.get("pico_claim:rfswitch") == "switch_loop"
+        assert (
+            mgr.transport.r.get(pico_claim_key("rfswitch")).decode()
+            == "switch_loop"
+        )
 
     def test_release_clears_owner(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
-        r.set("pico_claim:rfswitch", "switch_loop")
+        mgr.transport.r.set(pico_claim_key("rfswitch"), "switch_loop")
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -309,14 +249,12 @@ class TestClaims:
                 "source": "switch_loop",
             },
         )
-        assert r.get("pico_claim:rfswitch") is None
+        assert mgr.transport.r.get(pico_claim_key("rfswitch")) is None
 
     def test_override_warns_but_allows(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
-        r.set("pico_claim:rfswitch", "switch_loop")
+        mgr.transport.r.set(pico_claim_key("rfswitch"), "switch_loop")
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -324,16 +262,14 @@ class TestClaims:
                 "source": "interactive",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
         assert "switch_loop" in resp["warning"]
 
     def test_owner_no_warning(self, mgr):
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
-        r = mgr._redis()
-        r.set("pico_claim:rfswitch", "switch_loop")
+        mgr.transport.r.set(pico_claim_key("rfswitch"), "switch_loop")
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "rfswitch",
@@ -341,7 +277,7 @@ class TestClaims:
                 "source": "switch_loop",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert "warning" not in resp
 
 
@@ -364,29 +300,62 @@ class TestLifecycle:
         assert switch.ser is None
         assert motor.ser is None
 
+    def test_stop_marks_heartbeats_dead(self, mgr):
+        _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        mgr.stop()
+        hb_reader = HeartbeatReader(
+            mgr.transport, name=pico_heartbeat_name("rfswitch")
+        )
+        assert hb_reader.check() is False
+
 
 # --- discovery ------------------------------------------------------------
 
 
 class TestDiscover:
-    def test_missing_config_is_a_noop(self, mgr, tmp_path):
-        mgr.config_file = tmp_path / "does-not-exist.json"
+    def test_empty_redis_is_a_noop_without_uf2(self, mgr, tmp_path):
+        """discover() with empty Redis and no UF2 just produces zero picos."""
+        mgr.uf2_path = tmp_path / "nonexistent.uf2"
         mgr.discover()
         assert mgr.picos == {}
 
-    def test_invalid_json_config_is_a_noop(self, mgr, tmp_path):
-        cfg = tmp_path / "bad.json"
-        cfg.write_text("{not valid json!!")
-        mgr.config_file = cfg
-        mgr.discover()  # must not raise
-        assert mgr.picos == {}
-
-    def test_flash_fallback_on_missing_config(
-        self, mgr, monkeypatch, tmp_path
-    ):
-        """discover() cascades to flash when Redis + file are empty."""
+    def test_redis_config_instantiates_devices(self, mgr, monkeypatch):
+        """discover() reads the PicoConfigStore and builds devices."""
         import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        PicoConfigStore(mgr.transport).upload(
+            [
+                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"},
+            ]
+        )
+        mgr.discover()
+        assert "rfswitch" in mgr.picos
+
+    def test_discover_emits_initial_heartbeat(self, mgr, monkeypatch):
+        """Each registered device gets an alive heartbeat as soon as it lands."""
+        import picohost.manager as mgr_mod
+
+        monkeypatch.setitem(
+            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
+        )
+        PicoConfigStore(mgr.transport).upload(
+            [
+                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"},
+            ]
+        )
+        mgr.discover()
+        hb_reader = HeartbeatReader(
+            mgr.transport, name=pico_heartbeat_name("rfswitch")
+        )
+        assert hb_reader.check() is True
+
+    def test_flash_fallback_on_empty_redis(self, mgr, monkeypatch):
+        """discover() falls through to flash when Redis is empty."""
         import picohost.flash_picos as fp_mod
+        import picohost.manager as mgr_mod
 
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
@@ -398,194 +367,41 @@ class TestDiscover:
                 {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
             ],
         )
-
-        mgr.config_file = tmp_path / "does-not-exist.json"
         mgr.discover()
         assert "rfswitch" in mgr.picos
+        # Result is persisted back into Redis
+        stored = PicoConfigStore(mgr.transport).get()
+        assert stored == [
+            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
+        ]
 
     def test_flash_fallback_uf2_missing_is_noop(self, mgr, tmp_path):
-        mgr.config_file = tmp_path / "does-not-exist.json"
         mgr.uf2_path = tmp_path / "nonexistent.uf2"
         mgr._try_flash_discover()
         assert mgr.picos == {}
-
-    def test_publishes_devices_to_redis(self, mgr, monkeypatch, tmp_path):
-        # Stand the manager up against a config that points "rfswitch"
-        # at /dev/dummy, then patch PICO_CLASSES so discover()
-        # instantiates the dummy class instead of the real one.
-        import picohost.manager as mgr_mod
-
-        cfg = tmp_path / "pico_config.json"
-        cfg.write_text(
-            json.dumps(
-                [
-                    {
-                        "app_id": 5,
-                        "port": "/dev/dummy",
-                        "usb_serial": "ABC123",
-                    },
-                ]
-            )
-        )
-        mgr.config_file = cfg
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        mgr.discover()
-        assert "rfswitch" in mgr.picos
-        r = mgr._redis()
-        assert "rfswitch" in r.smembers(PICOS_SET)
-        health = json.loads(r.hget(HEALTH_HASH, "rfswitch"))
-        assert health["app_id"] == 5
-        assert health["connected"] is True
-
-
-# --- Redis config store ---------------------------------------------------
-
-
-class TestRedisConfig:
-    def test_discover_from_redis(self, mgr, monkeypatch):
-        """When Redis has config, discover() uses it without touching file."""
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        r = mgr._redis()
-        r.hset(
-            CONFIG_HASH,
-            "rfswitch",
-            json.dumps(
-                {
-                    "app_id": 5,
-                    "port": "/dev/dummy",
-                    "usb_serial": "ABC",
-                }
-            ),
-        )
-        mgr.config_file = "/nonexistent/path.json"  # shouldn't be read
-        mgr.discover()
-        assert "rfswitch" in mgr.picos
-
-    def test_discover_skips_redis_when_disabled(
-        self, mgr, monkeypatch, tmp_path
-    ):
-        """--no-redis-config makes discover() skip Redis."""
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        # Populate Redis — should be ignored
-        r = mgr._redis()
-        r.hset(
-            CONFIG_HASH,
-            "motor",
-            json.dumps(
-                {
-                    "app_id": 0,
-                    "port": "/dev/dummy",
-                    "usb_serial": "OLD",
-                }
-            ),
-        )
-        # Provide a file with rfswitch instead
-        cfg = tmp_path / "pico_config.json"
-        cfg.write_text(
-            json.dumps(
-                [
-                    {"app_id": 5, "port": "/dev/dummy", "usb_serial": "NEW"},
-                ]
-            )
-        )
-        mgr.config_file = cfg
-        mgr.use_redis_config = False
-        mgr.discover()
-        assert "rfswitch" in mgr.picos
-        assert "motor" not in mgr.picos
-
-    def test_discover_writes_back_to_file(self, mgr, monkeypatch, tmp_path):
-        """After discovering from Redis, config is written back to file."""
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        r = mgr._redis()
-        r.hset(
-            CONFIG_HASH,
-            "rfswitch",
-            json.dumps(
-                {
-                    "app_id": 5,
-                    "port": "/dev/dummy",
-                    "usb_serial": "ABC",
-                }
-            ),
-        )
-        cfg = tmp_path / "pico_config.json"
-        mgr.config_file = cfg
-        mgr.discover()
-        assert cfg.exists()
-        written = json.loads(cfg.read_text())
-        assert len(written) == 1
-        assert written[0]["app_id"] == 5
-
-    def test_file_fallback_when_redis_empty(self, mgr, monkeypatch, tmp_path):
-        """When Redis is empty, discover() falls through to file."""
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        cfg = tmp_path / "pico_config.json"
-        cfg.write_text(
-            json.dumps(
-                [
-                    {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
-                ]
-            )
-        )
-        mgr.config_file = cfg
-        mgr.discover()
-        assert "rfswitch" in mgr.picos
-        # Verify config was also published to Redis
-        stored = json.loads(mgr._redis().hget(CONFIG_HASH, "rfswitch"))
-        assert stored["app_id"] == 5
 
 
 # --- manager commands -----------------------------------------------------
 
 
 class TestManagerCommand:
-    def test_rediscover_clears_and_reloads(self, mgr, monkeypatch, tmp_path):
+    def test_rediscover_clears_and_reloads(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
 
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
         )
-        # Start with a device
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         assert "rfswitch" in mgr.picos
 
-        # Set up Redis config for rediscover to find
-        r = mgr._redis()
-        r.hset(
-            CONFIG_HASH,
-            "rfswitch",
-            json.dumps(
-                {
-                    "app_id": 5,
-                    "port": "/dev/dummy",
-                    "usb_serial": "X",
-                }
-            ),
+        # Stage Redis config for the rediscover path to pick up
+        PicoConfigStore(mgr.transport).upload(
+            [
+                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
+            ]
         )
-        cfg = tmp_path / "pico_config.json"
-        mgr.config_file = cfg
 
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "manager",
@@ -593,16 +409,14 @@ class TestManagerCommand:
                 "source": "test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "ok"
         data = json.loads(resp["data"])
         assert "rfswitch" in data["devices"]
         assert data["count"] == 1
 
     def test_unknown_manager_action_returns_error(self, mgr):
-        r = mgr._redis()
         mgr._process_command(
-            r,
             "1-0",
             {
                 "target": "manager",
@@ -610,7 +424,7 @@ class TestManagerCommand:
                 "source": "test",
             },
         )
-        _, resp = r._streams[RESP_STREAM][0]
+        resp = _last_response(mgr.transport)
         assert resp["status"] == "error"
         assert "unknown manager action" in json.loads(resp["data"])["error"]
 
@@ -621,7 +435,6 @@ class TestManagerCommand:
 class TestReconnectHook:
     def test_motor_on_reconnect_replays_delay(self, mgr):
         motor = _attach(mgr, "motor", DummyPicoMotor)
-        # Sanity: ctor stored the delay kwargs
         assert motor._delay_kwargs is not None
 
         calls = []
@@ -649,7 +462,6 @@ class TestReconnectHook:
             "find_pico_ports",
             lambda: {"/dev/ttyACM5": "SER_ABC"},
         )
-        # _rediscover_port should update port
         switch._rediscover_port()
         assert switch.port == "/dev/ttyACM5"
         assert switch.port != old_port
@@ -687,5 +499,6 @@ def test_blocked_actions_includes_lifecycle():
 
 def test_cmd_stream_constant_unchanged():
     # Other consumers (eigsep_observing) read from this stream by name.
-    assert CMD_STREAM == "stream:pico_cmd"
-    assert RESP_STREAM == "stream:pico_resp"
+    assert PICO_CMD_STREAM == "stream:pico_cmd"
+    assert PICO_RESP_STREAM == "stream:pico_resp"
+    assert PICO_CONFIG_KEY == "pico_config"

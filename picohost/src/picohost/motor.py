@@ -23,7 +23,7 @@ class PicoMotor(PicoDevice):
         verbose=False,
         timeout=5.0,
         name=None,
-        eig_redis=None,
+        metadata_writer=None,
         usb_serial="",
     ):
         self.step_angle_deg = step_angle_deg
@@ -45,7 +45,7 @@ class PicoMotor(PicoDevice):
             port,
             timeout=timeout,
             name=name,
-            eig_redis=eig_redis,
+            metadata_writer=metadata_writer,
             usb_serial=usb_serial,
             verbose=verbose,
         )

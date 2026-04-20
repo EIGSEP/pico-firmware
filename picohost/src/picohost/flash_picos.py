@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import logging
 import subprocess
-import time
 import sys
-import json
+import time
 from pathlib import Path
+
+from eigsep_redis import Transport
 from serial import Serial
 from serial.tools import list_ports
+
+from .buses import PicoConfigStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +36,7 @@ def find_pico_ports():
 def flash_uf2(uf2_path, serial):
     """
     Flash the UF2 onto the Pico whose USB serial number is `serial`,
-    using picotool’s --ser selector.
+    using picotool's --ser selector.
     """
     cmd = f"picotool load -f --ser {serial} -x {uf2_path}".split()
     print(f"Flashing {uf2_path} → serial={serial}")
@@ -130,11 +134,24 @@ def flash_and_discover(
     return all_devices
 
 
+def _publish_to_redis(devices, host, port):
+    """Publish *devices* to Redis via :class:`PicoConfigStore`.
+
+    Returns the :class:`PicoConfigStore` on success. Raises on
+    connection failure so ``main`` can fall back to file output if the
+    user asked for that.
+    """
+    transport = Transport(host=host, port=port)
+    store = PicoConfigStore(transport)
+    store.upload(devices)
+    return store
+
+
 def main():
     p = argparse.ArgumentParser(
         description=(
-            "Flash all attached Picos, read JSON from each, save to single "
-            "file."
+            "Flash all attached Picos, read JSON from each, and publish "
+            "the device list to Redis (source of truth for PicoManager)."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -159,11 +176,38 @@ def main():
         help="Seconds to wait for each Pico's JSON",
     )
     p.add_argument(
-        "--output",
-        default="pico_config.json",
-        help="Output JSON file",
+        "--redis-host",
+        default="localhost",
+        help="Redis host for PicoConfigStore publication",
+    )
+    p.add_argument(
+        "--redis-port",
+        type=int,
+        default=6379,
+        help="Redis port for PicoConfigStore publication",
+    )
+    p.add_argument(
+        "--no-redis",
+        action="store_true",
+        help=(
+            "Skip Redis publication. Use with --output-file for offline "
+            "provisioning on a host without Redis."
+        ),
+    )
+    p.add_argument(
+        "--output-file",
+        default=None,
+        help=(
+            "Optional: also write the device list to this JSON file. "
+            "Not required — PicoManager reads from Redis directly."
+        ),
     )
     args = p.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
 
     try:
         all_devices = flash_and_discover(
@@ -180,12 +224,25 @@ def main():
         print("No devices discovered.", file=sys.stderr)
         sys.exit(1)
 
-    with open(args.output, "w") as f:
-        json.dump(all_devices, f, indent=2)
-    print(
-        f"Wrote all device information to {args.output} ({len(all_devices)} "
-        "devices)."
-    )
+    if not args.no_redis:
+        try:
+            _publish_to_redis(all_devices, args.redis_host, args.redis_port)
+            print(
+                f"Published {len(all_devices)} device(s) to Redis at "
+                f"{args.redis_host}:{args.redis_port} (key: pico_config)."
+            )
+        except Exception as e:
+            print(
+                f"Redis publication failed: {e}\n"
+                "Re-run with --no-redis (and optionally --output-file) if "
+                "Redis is not available.",
+                file=sys.stderr,
+            )
+
+    if args.output_file:
+        with open(args.output_file, "w") as f:
+            json.dump(all_devices, f, indent=2)
+        print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
 
 
 if __name__ == "__main__":
