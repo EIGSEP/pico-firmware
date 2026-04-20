@@ -710,11 +710,11 @@ def main():
     )
 
     try:
-        from eigsep_observing import EigsepRedis
+        from eigsep_redis import EigsepRedis
     except ImportError:
         print(
-            "eigsep_observing is required to run PicoManager.\n"
-            "Install it with: pip install eigsep_observing",
+            "eigsep_redis is required to run PicoManager.\n"
+            "Install it with: pip install eigsep_redis",
             file=sys.stderr,
         )
         sys.exit(1)

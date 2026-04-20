@@ -7,7 +7,7 @@ and an infinite scanning mode.
 import json
 import logging
 import numpy as np
-from eigsep_observing import EigsepRedis
+from eigsep_redis import EigsepRedis
 
 from picohost import PicoMotor
 
