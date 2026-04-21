@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.0.0](https://github.com/EIGSEP/pico-firmware/compare/v2.2.1...v3.0.0) (2026-04-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **picohost:** Redis schema rework. ``pico_config`` / ``pico_health`` / ``picos`` keys are replaced by the new config-store blob and per-device ``heartbeat:pico:{name}`` keys. ``flash-picos`` now publishes to Redis by default (``--output-file`` is an opt-in for offline provisioning). ``PicoDevice`` / ``PicoMotor`` / ``PicoPeltier`` / ``PicoPotentiometer`` constructors take ``metadata_writer=`` instead of ``eig_redis=``. ``PicoProxy`` takes a ``Transport`` instead of a raw redis client.
+* **picohost:** picohost now requires `eigsep_redis` in addition to (or instead of) `eigsep_observing`.
+
+### Features
+
+* **picohost:** depend on eigsep_redis directly, not eigsep_observing ([bc6a913](https://github.com/EIGSEP/pico-firmware/commit/bc6a913d27126e765c9317c8555673c8a8165622))
+* **picohost:** make Redis the canonical pot calibration store ([d07674d](https://github.com/EIGSEP/pico-firmware/commit/d07674d405d870d65c422e476493db66d5d897e4))
+* **picohost:** publish human-readable RfSwitch state to Redis ([c40dc2b](https://github.com/EIGSEP/pico-firmware/commit/c40dc2b626d03b43f370f3c127fa9afea2487c4f))
+* **picohost:** rebuild Redis surface on eigsep_redis writer/reader classes ([8e4b8ff](https://github.com/EIGSEP/pico-firmware/commit/8e4b8ffec6dfaf93af178a37dc4534a1a378f013))
+
+
+### Performance Improvements
+
+* **picohost:** interrupt manager shutdown instead of waiting for blocking I/O ([54f19ca](https://github.com/EIGSEP/pico-firmware/commit/54f19ca64fc776c5648509ef51c67d6771fe81ba))
+
 ## [2.2.1](https://github.com/EIGSEP/pico-firmware/compare/v2.2.0...v2.2.1) (2026-04-17)
 
 
