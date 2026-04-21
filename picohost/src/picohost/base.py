@@ -423,6 +423,11 @@ class PicoDevice:
 class PicoRFSwitch(PicoDevice):
     """Specialized class for RF switch control Pico devices."""
 
+    # Sentinel sw_state value the firmware emits while the RF switch is
+    # settling. Mirrors SW_STATE_UNKNOWN in src/rfswitch.h.
+    SW_STATE_UNKNOWN = -1
+    SW_STATE_UNKNOWN_NAME = "UNKNOWN"
+
     path_str = {
         "VNAO": "10000000",  # checked 7/7/25
         "VNAS": "11000000",  # checked 7/7/25
@@ -468,20 +473,35 @@ class PicoRFSwitch(PicoDevice):
     def _rfswitch_redis_handler(self, data):
         """Add the human-readable switch name before uploading to Redis.
 
-        Firmware reports ``sw_state`` as a raw 8-bit integer. Downstream
-        consumers should see a named state (``"VNAO"``, ``"RFANT"``, etc.)
-        alongside the raw integer, so the encoding lives in one place.
-        ``sw_state_name`` is ``None`` when the integer does not match any
-        entry in :attr:`path_str` (mid-switch, manual override, firmware
-        bug); the shape stays stable regardless.
+        Firmware reports ``sw_state`` as a raw 8-bit integer, or
+        :attr:`SW_STATE_UNKNOWN` (-1) while the physical switch is
+        settling after a command. Downstream consumers see a named
+        state (``"VNAO"``, ``"RFANT"``, ...) alongside the raw integer:
+
+        * ``SW_STATE_UNKNOWN`` maps to ``"UNKNOWN"`` — switch is mid-transition.
+        * A known state integer maps to its path name.
+        * Any other integer maps to ``None`` (manual override, firmware bug).
+
+        The published shape stays stable regardless.
         """
         data = data.copy()
-        data["sw_state_name"] = self._name_by_state.get(data.get("sw_state"))
+        sw_state = data.get("sw_state")
+        if sw_state == self.SW_STATE_UNKNOWN:
+            data["sw_state_name"] = self.SW_STATE_UNKNOWN_NAME
+        else:
+            data["sw_state_name"] = self._name_by_state.get(sw_state)
         self._base_redis_handler(data)
 
     def switch(self, state: str) -> None:
         """
         Set RF switch state.
+
+        The call returns as soon as the command has been delivered to
+        the firmware. The firmware holds its reported ``sw_state`` at
+        :attr:`SW_STATE_UNKNOWN` until the physical switch is trusted
+        to have settled, so callers that need closed-loop confirmation
+        should poll for the expected state name (e.g. via Redis) rather
+        than time.sleep here.
 
         Parameters
         ----------
@@ -504,7 +524,6 @@ class PicoRFSwitch(PicoDevice):
                 f"{list(self.paths.keys())}"
             ) from e
         self.send_command({"sw_state": s})
-        time.sleep(0.05)  # allow time for switch to settle
         self.logger.info(f"Switched to {state}.")
 
 

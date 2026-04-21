@@ -264,6 +264,24 @@ class TestRFSwitchRedisHandler:
         finally:
             switch.disconnect()
 
+    def test_transition_sentinel_maps_to_unknown(self):
+        """SW_STATE_UNKNOWN (-1) firmware sentinel publishes as "UNKNOWN"."""
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            published = self._capture(
+                switch,
+                {
+                    "sensor_name": "rfswitch",
+                    "sw_state": switch.SW_STATE_UNKNOWN,
+                },
+            )
+            assert published["sw_state"] == switch.SW_STATE_UNKNOWN
+            assert (
+                published["sw_state_name"] == switch.SW_STATE_UNKNOWN_NAME
+            )
+        finally:
+            switch.disconnect()
+
     def test_missing_sw_state_does_not_crash(self):
         """A status dict without sw_state still publishes (name=None)."""
         switch = DummyPicoRFSwitch("/dev/dummy")

@@ -403,17 +403,92 @@ class TestLidarEmulator:
 
 
 class TestRFSwitchEmulator:
-    def test_initial_state(self):
-        emu = RFSwitchEmulator()
+    def test_initial_state_settled_when_instant(self):
+        """settle_ms=0 skips the boot transition; first status is settled 0."""
+        emu = RFSwitchEmulator(settle_ms=0)
         status = emu.get_status()
         assert status["sensor_name"] == "rfswitch"
         assert status["sw_state"] == 0
 
     def test_status_fields(self):
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         status = emu.get_status()
         expected_keys = {"sensor_name", "status", "app_id", "sw_state"}
         assert set(status.keys()) == expected_keys
+
+    def test_boot_starts_in_transition(self):
+        """Default settle_ms > 0: boot reports UNKNOWN until settle."""
+        emu = RFSwitchEmulator(settle_ms=30)
+        assert emu.in_transition is True
+        assert emu.get_status()["sw_state"] == emu.SW_STATE_UNKNOWN
+        # After the settle window, op() clears the transition.
+        time.sleep(0.05)
+        emu.op()
+        assert emu.in_transition is False
+        assert emu.get_status()["sw_state"] == 0
+
+    def test_command_enters_transition(self):
+        """A state-change command re-enters the UNKNOWN transition window."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        assert emu.get_status()["sw_state"] == 0
+        emu.settle_ms = 30  # arm transition for this command
+        emu.server({"sw_state": 7})
+        assert emu.in_transition is True
+        assert emu.get_status()["sw_state"] == emu.SW_STATE_UNKNOWN
+        time.sleep(0.05)
+        emu.op()
+        assert emu.in_transition is False
+        assert emu.get_status()["sw_state"] == 7
+
+    def test_same_state_command_is_noop(self):
+        """Commanding the current state must not re-enter transition."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 5})
+        assert emu.get_status()["sw_state"] == 5
+        emu.settle_ms = 30  # would arm transition if a change actually occurred
+        emu.server({"sw_state": 5})
+        assert emu.in_transition is False
+        assert emu.get_status()["sw_state"] == 5
+
+    def test_reject_out_of_range(self):
+        """Values outside [0, 255] must be ignored (firmware parity)."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 5})
+        assert emu.commanded_state == 5
+        emu.server({"sw_state": 256})
+        assert emu.commanded_state == 5
+        emu.server({"sw_state": -2})
+        assert emu.commanded_state == 5
+
+    def test_reject_unknown_sentinel(self):
+        """SW_STATE_UNKNOWN (-1) must be rejected as a command value."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 3})
+        emu.server({"sw_state": emu.SW_STATE_UNKNOWN})
+        assert emu.commanded_state == 3
+
+    def test_reject_fractional_number(self):
+        """Numbers with a fractional part must be rejected."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 3.7})
+        assert emu.commanded_state == 0
+        # Exact-integer floats (e.g. 4.0) are still accepted.
+        emu.server({"sw_state": 4.0})
+        assert emu.commanded_state == 4
+
+    def test_reject_non_finite(self):
+        """NaN / inf must be rejected."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": float("nan")})
+        assert emu.commanded_state == 0
+        emu.server({"sw_state": float("inf")})
+        assert emu.commanded_state == 0
+
+    def test_reject_bool(self):
+        """Bools are not JSON numbers; cJSON_IsNumber rejects them."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": True})
+        assert emu.commanded_state == 0
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +565,7 @@ class TestLidarStatusTypes:
 
 class TestRFSwitchStatusTypes:
     def test_status_field_types(self):
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         status = emu.get_status()
         assert isinstance(status["sensor_name"], str)
         assert isinstance(status["status"], str)
@@ -533,14 +608,17 @@ class TestMalformedInput:
         assert emu.azimuth.position == 100
 
     def test_rfswitch_invalid_type(self):
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         emu.server({"sw_state": "abc"})
-        assert emu.sw_state == 0  # unchanged
+        # commanded_state must be untouched by a non-numeric payload.
+        assert emu.commanded_state == 0
+        assert emu.get_status()["sw_state"] == 0
 
     def test_rfswitch_null_value(self):
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         emu.server({"sw_state": None})
-        assert emu.sw_state == 0
+        assert emu.commanded_state == 0
+        assert emu.get_status()["sw_state"] == 0
 
     def test_tempctrl_invalid_type(self):
         emu = TempCtrlEmulator()

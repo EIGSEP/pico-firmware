@@ -30,6 +30,13 @@ class DummyPicoDevice(PicoDevice):
     EMULATOR_CLASS = None
     EMULATOR_CADENCE_MS = 200.0
 
+    def _make_emulator(self):
+        if self.EMULATOR_CLASS is None:
+            return None
+        return self.EMULATOR_CLASS(
+            status_cadence_ms=self.EMULATOR_CADENCE_MS,
+        )
+
     def connect(self):
         self.ser = mockserial.MockSerial(timeout=0.5)
         self._peer = mockserial.MockSerial(timeout=0.01)
@@ -40,12 +47,8 @@ class DummyPicoDevice(PicoDevice):
         # loop gives us a HEALTH_TIMEOUT grace window before declaring
         # the device stale and triggering a reconnect.
         self.last_status_time = time.time()
-        # Create and start emulator if a class is configured
-        self._emulator = None
-        if self.EMULATOR_CLASS is not None:
-            self._emulator = self.EMULATOR_CLASS(
-                status_cadence_ms=self.EMULATOR_CADENCE_MS
-            )
+        self._emulator = self._make_emulator()
+        if self._emulator is not None:
             self._emulator.attach(self._peer)
             self._emulator.start()
         self._start_reader()
@@ -66,6 +69,15 @@ class DummyPicoMotor(DummyPicoDevice, PicoMotor):
 class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
     EMULATOR_CLASS = RFSwitchEmulator
     EMULATOR_CADENCE_MS = 50.0
+    # Firmware default is 200 ms; tests use a short settle so integration
+    # tests do not spend seconds waiting for the emulator to "settle."
+    EMULATOR_SETTLE_MS = 20
+
+    def _make_emulator(self):
+        return RFSwitchEmulator(
+            status_cadence_ms=self.EMULATOR_CADENCE_MS,
+            settle_ms=self.EMULATOR_SETTLE_MS,
+        )
 
 
 class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
