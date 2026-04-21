@@ -73,7 +73,8 @@ class TestBaseProtocol:
             LidarEmulator,
             RFSwitchEmulator,
         ):
-            emu = Cls()
+            kwargs = {"settle_ms": 0} if Cls is RFSwitchEmulator else {}
+            emu = Cls(**kwargs)
             result = emu.server({})
             assert result is None
 
@@ -92,7 +93,7 @@ class TestBaseProtocol:
             TempMonEmulator(),
             ImuEmulator(),
             LidarEmulator(),
-            RFSwitchEmulator(),
+            RFSwitchEmulator(settle_ms=0),
         ]
         for emu in emulators:
             before = emu.get_status()
@@ -357,23 +358,36 @@ class TestLidarProtocol:
 
 
 class TestRFSwitchProtocol:
-    """Protocol conformance tests for APP_RFSWITCH (app_id=5)."""
+    """Protocol conformance tests for APP_RFSWITCH (app_id=5).
+
+    These tests pass ``settle_ms=0`` to exercise command/state logic
+    without waiting on the transition timer; the settle behavior is
+    covered by :class:`TestRFSwitchEmulator` in test_emulators.py.
+    """
 
     def test_sensor_name(self):
-        assert RFSwitchEmulator().get_status()["sensor_name"] == "rfswitch"
+        emu = RFSwitchEmulator(settle_ms=0)
+        assert emu.get_status()["sensor_name"] == "rfswitch"
 
     def test_initial_state_zero(self):
-        """rfswitch_init() sets sw_state = 0."""
-        assert RFSwitchEmulator().get_status()["sw_state"] == 0
+        """rfswitch_init() sets sw_state = 0 once settled."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        assert emu.get_status()["sw_state"] == 0
 
     def test_set_state(self):
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         emu.server({"sw_state": 42})
         assert emu.get_status()["sw_state"] == 42
 
     def test_8bit_bitmask_range(self):
         """rfswitch_op() iterates bits 0-7."""
-        emu = RFSwitchEmulator()
+        emu = RFSwitchEmulator(settle_ms=0)
         for val in (0, 1, 128, 255):
             emu.server({"sw_state": val})
             assert emu.get_status()["sw_state"] == val
+
+    def test_transition_sentinel_during_settle(self):
+        """sw_state reports SW_STATE_UNKNOWN (-1) while settling."""
+        emu = RFSwitchEmulator(settle_ms=30)
+        emu.server({"sw_state": 7})
+        assert emu.get_status()["sw_state"] == emu.SW_STATE_UNKNOWN
