@@ -21,10 +21,8 @@
 // settling. Downstream consumers treat this as "state unknown".
 #define SW_STATE_UNKNOWN (-1)
 
-// Time the firmware waits after driving new GPIO levels before it
-// trusts the physical RF switch to have settled. Measured estimate is
-// ~200 ms; revise once a bench measurement tightens the number.
-#define SWITCH_SETTLE_MS 200
+// datasheet reference
+#define SWITCH_SETTLE_MS 20
 
 
 typedef struct {
