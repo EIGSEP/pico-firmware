@@ -1,6 +1,7 @@
 #include "rfswitch.h"
 #include "pico/stdlib.h"
 #include "cJSON.h"
+#include <math.h>
 #include <stdlib.h>
 
 static RFSwitch rfswitch;
@@ -36,21 +37,28 @@ void rfswitch_server(uint8_t app_id, const char *json_str) {
     }
     cJSON *sw_state_json = cJSON_GetObjectItem(root, "sw_state");
     if (sw_state_json && cJSON_IsNumber(sw_state_json)) {
-        int new_state = sw_state_json->valueint;
-        bool is_exact_int = sw_state_json->valuedouble == (double)new_state;
+        double new_state_value = cJSON_GetNumberValue(sw_state_json);
+        double integral_part = 0.0;
+        bool is_exact_int = (
+            isfinite(new_state_value) &&
+            modf(new_state_value, &integral_part) == 0.0
+        );
         bool is_valid_state = (
             is_exact_int &&
-            new_state >= 0 &&
-            new_state <= 255 &&
-            new_state != SW_STATE_UNKNOWN
+            new_state_value >= 0 &&
+            new_state_value <= 255 &&
+            new_state_value != SW_STATE_UNKNOWN
         );
         // Only re-enter a transition when the commanded state actually
         // changes; repeated commands at the current state are no-ops
         // so we don't smear a settled position into UNKNOWN.
-        if (is_valid_state && new_state != rfswitch.commanded_state) {
-            rfswitch.commanded_state = new_state;
-            rfswitch.transition_end = make_timeout_time_ms(SWITCH_SETTLE_MS);
-            rfswitch.in_transition = true;
+        if (is_valid_state) {
+            int new_state = (int)new_state_value;
+            if (new_state != rfswitch.commanded_state) {
+                rfswitch.commanded_state = new_state;
+                rfswitch.transition_end = make_timeout_time_ms(SWITCH_SETTLE_MS);
+                rfswitch.in_transition = true;
+            }
         }
     }
     cJSON_Delete(root);
