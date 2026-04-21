@@ -450,6 +450,46 @@ class TestRFSwitchEmulator:
         assert emu.in_transition is False
         assert emu.get_status()["sw_state"] == 5
 
+    def test_reject_out_of_range(self):
+        """Values outside [0, 255] must be ignored (firmware parity)."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 5})
+        assert emu.commanded_state == 5
+        emu.server({"sw_state": 256})
+        assert emu.commanded_state == 5
+        emu.server({"sw_state": -2})
+        assert emu.commanded_state == 5
+
+    def test_reject_unknown_sentinel(self):
+        """SW_STATE_UNKNOWN (-1) must be rejected as a command value."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 3})
+        emu.server({"sw_state": emu.SW_STATE_UNKNOWN})
+        assert emu.commanded_state == 3
+
+    def test_reject_fractional_number(self):
+        """Numbers with a fractional part must be rejected."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 3.7})
+        assert emu.commanded_state == 0
+        # Exact-integer floats (e.g. 4.0) are still accepted.
+        emu.server({"sw_state": 4.0})
+        assert emu.commanded_state == 4
+
+    def test_reject_non_finite(self):
+        """NaN / inf must be rejected."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": float("nan")})
+        assert emu.commanded_state == 0
+        emu.server({"sw_state": float("inf")})
+        assert emu.commanded_state == 0
+
+    def test_reject_bool(self):
+        """Bools are not JSON numbers; cJSON_IsNumber rejects them."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": True})
+        assert emu.commanded_state == 0
+
 
 # ---------------------------------------------------------------------------
 # Status field TYPE verification

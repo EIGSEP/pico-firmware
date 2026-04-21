@@ -1,6 +1,7 @@
+import math
 import time
 
-from .base import PicoEmulator, _safe_int
+from .base import PicoEmulator
 
 
 class RFSwitchEmulator(PicoEmulator):
@@ -40,17 +41,31 @@ class RFSwitchEmulator(PicoEmulator):
             self._transition_end = time.monotonic()
 
     def server(self, cmd):
-        if "sw_state" in cmd:
-            new_state = _safe_int(cmd["sw_state"], self.commanded_state)
-            if new_state != self.commanded_state:
-                self.commanded_state = new_state
-                if self.settle_ms > 0:
-                    self._transition_end = (
-                        time.monotonic() + self.settle_ms / 1000.0
-                    )
-                    self.in_transition = True
-                else:
-                    self.reported_state = new_state
+        if "sw_state" not in cmd:
+            return
+        raw = cmd["sw_state"]
+        # cJSON_IsNumber matches only real JSON numbers; bools parse as
+        # cJSON_True/cJSON_False and must be rejected here too.
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return
+        if not math.isfinite(raw) or raw != int(raw):
+            return
+        new_state = int(raw)
+        if (
+            new_state < 0
+            or new_state > 255
+            or new_state == self.SW_STATE_UNKNOWN
+        ):
+            return
+        if new_state != self.commanded_state:
+            self.commanded_state = new_state
+            if self.settle_ms > 0:
+                self._transition_end = (
+                    time.monotonic() + self.settle_ms / 1000.0
+                )
+                self.in_transition = True
+            else:
+                self.reported_state = new_state
 
     def op(self):
         if self.in_transition and time.monotonic() >= self._transition_end:
