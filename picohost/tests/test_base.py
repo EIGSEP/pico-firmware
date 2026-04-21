@@ -299,6 +299,33 @@ class TestRFSwitchRedisHandler:
         finally:
             switch.disconnect()
 
+    def test_published_shape_stable_across_state(self):
+        """Field set is identical whether sw_state is known or unknown.
+
+        Mirrors ``test_published_shape_stable_across_calibration_state``
+        on the pot handler: the added key set must not depend on the
+        value of the raw field, so downstream schemas can validate a
+        single stable shape regardless of switch position.
+        """
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            known = set(
+                self._capture(
+                    switch, {"sensor_name": "rfswitch", "sw_state": 0}
+                )
+            )
+            unknown_int = max(switch.paths.values()) + 1
+            unknown = set(
+                self._capture(
+                    switch,
+                    {"sensor_name": "rfswitch", "sw_state": unknown_int},
+                )
+            )
+            assert known == unknown
+            assert "sw_state_name" in known
+        finally:
+            switch.disconnect()
+
 
 class TestPicoPeltier:
     """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
