@@ -19,7 +19,7 @@ class RFSwitchEmulator(PicoEmulator):
     """
 
     SW_STATE_UNKNOWN = -1
-    DEFAULT_SETTLE_MS = 200
+    DEFAULT_SETTLE_MS = 20
 
     def __init__(self, app_id=5, settle_ms=None, **kwargs):
         self.settle_ms = (
