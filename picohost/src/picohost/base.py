@@ -253,9 +253,7 @@ class PicoDevice:
             self.ser.write((json_str + "\n").encode("utf-8"))
             self.ser.flush()
         except Exception as e:
-            raise ConnectionError(
-                f"{self.name} write failed: {e}"
-            ) from e
+            raise ConnectionError(f"{self.name} write failed: {e}") from e
 
     def read_line(self) -> Optional[str]:
         """
@@ -322,9 +320,7 @@ class PicoDevice:
                     self.last_status = data
                     self.last_status_time = time.time()
                     if self.verbose:
-                        self.logger.debug(
-                            json.dumps(data, sort_keys=True)
-                        )
+                        self.logger.debug(json.dumps(data, sort_keys=True))
                     # upload to redis
                     if self.redis_handler:
                         try:
@@ -531,7 +527,10 @@ class PicoPeltier(PicoDevice):
     """Specialized class for Peltier temperature control Pico devices.
 
     Sends periodic keepalive commands to prevent the firmware communication
-    watchdog from tripping and disabling the peltiers.
+    watchdog from tripping and disabling the peltiers. Caches the last
+    config pushed by each setter and replays it in :meth:`on_reconnect`
+    so a pico reboot (brownout, firmware watchdog, picotool re-flash)
+    doesn't leave the firmware running on defaults.
     """
 
     def __init__(
@@ -565,6 +564,10 @@ class PicoPeltier(PicoDevice):
         self._keepalive_running = False
         self._keepalive_thread = None
         self._keepalive_interval = keepalive_interval
+        self._last_watchdog_timeout_ms = None
+        self._last_clamp = {}
+        self._last_temperature = {}
+        self._last_enable = None
         super().__init__(
             port,
             timeout=timeout,
@@ -607,8 +610,27 @@ class PicoPeltier(PicoDevice):
         super().disconnect()
 
     def on_reconnect(self):
-        """Restart the keepalive thread after a reconnect."""
+        """Restart keepalive and replay the last-applied config.
+
+        A serial-link recovery is the host's proxy for "the pico may
+        have rebooted" — on EIGSEP hardware every firmware reset path
+        (hard watchdog, brownout, picotool re-flash via BOOTSEL) drops
+        USB CDC, so reader-thread reconnect coincides with the firmware
+        coming up at defaults. Replay whatever the host most recently
+        pushed, in the same safe order the panda-side ``apply_settings``
+        uses: watchdog → clamp → temperature → enable.
+        """
         self._start_keepalive()
+        if self._last_watchdog_timeout_ms is not None:
+            self.send_command(
+                {"watchdog_timeout_ms": self._last_watchdog_timeout_ms}
+            )
+        if self._last_clamp:
+            self.send_command(dict(self._last_clamp))
+        if self._last_temperature:
+            self.send_command(dict(self._last_temperature))
+        if self._last_enable is not None:
+            self.send_command(dict(self._last_enable))
 
     @property
     def watchdog_tripped(self):
@@ -629,7 +651,9 @@ class PicoPeltier(PicoDevice):
         ConnectionError
             If the device is not connected or the write failed.
         """
-        self.send_command({"watchdog_timeout_ms": int(timeout_ms)})
+        timeout_ms = int(timeout_ms)
+        self._last_watchdog_timeout_ms = timeout_ms
+        self.send_command({"watchdog_timeout_ms": timeout_ms})
 
     def set_temperature(
         self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5
@@ -642,11 +666,15 @@ class PicoPeltier(PicoDevice):
         if T_LOAD is not None:
             cmd["LOAD_temp_target"] = T_LOAD
             cmd["LOAD_hysteresis"] = LOAD_hyst
+        if cmd:
+            self._last_temperature.update(cmd)
         self.send_command(cmd)
 
     def set_enable(self, LNA=True, LOAD=True):
         """Enable temperature control."""
-        self.send_command({"LNA_enable": LNA, "LOAD_enable": LOAD})
+        cmd = {"LNA_enable": LNA, "LOAD_enable": LOAD}
+        self._last_enable = dict(cmd)
+        self.send_command(cmd)
 
     def set_clamp(self, LNA=None, LOAD=None):
         """Set maximum drive level [0.0, 1.0], 0.6 default."""
@@ -655,6 +683,8 @@ class PicoPeltier(PicoDevice):
             cmd["LNA_clamp"] = LNA
         if LOAD is not None:
             cmd["LOAD_clamp"] = LOAD
+        if cmd:
+            self._last_clamp.update(cmd)
         self.send_command(cmd)
 
 

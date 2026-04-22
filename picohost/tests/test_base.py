@@ -276,9 +276,7 @@ class TestRFSwitchRedisHandler:
                 },
             )
             assert published["sw_state"] == switch.SW_STATE_UNKNOWN
-            assert (
-                published["sw_state_name"] == switch.SW_STATE_UNKNOWN_NAME
-            )
+            assert published["sw_state_name"] == switch.SW_STATE_UNKNOWN_NAME
         finally:
             switch.disconnect()
 
@@ -434,3 +432,143 @@ class TestPicoPeltier:
         ):
             assert key in peltier.last_status, f"Missing key: {key}"
         peltier.disconnect()
+
+
+class TestPicoPeltierReconnectReplay:
+    """Cache last-applied config in setters; replay in on_reconnect.
+
+    A serial-link drop on EIGSEP picos is our proxy for "firmware may
+    have rebooted" (hard watchdog, brownout, picotool re-flash all drop
+    USB CDC). ``on_reconnect`` replays cached setpoints/clamps/enable
+    flags so the firmware doesn't silently resume at defaults.
+    """
+
+    def test_fresh_instance_has_empty_cache(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            assert peltier._last_watchdog_timeout_ms is None
+            assert peltier._last_clamp == {}
+            assert peltier._last_temperature == {}
+            assert peltier._last_enable is None
+        finally:
+            peltier.disconnect()
+
+    def test_setters_populate_cache(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            peltier.set_watchdog_timeout(15000)
+            peltier.set_clamp(LNA=0.5, LOAD=0.6)
+            peltier.set_temperature(T_LNA=25.0, LNA_hyst=0.3)
+            peltier.set_enable(LNA=True, LOAD=False)
+            assert peltier._last_watchdog_timeout_ms == 15000
+            assert peltier._last_clamp == {
+                "LNA_clamp": 0.5,
+                "LOAD_clamp": 0.6,
+            }
+            assert peltier._last_temperature == {
+                "LNA_temp_target": 25.0,
+                "LNA_hysteresis": 0.3,
+            }
+            assert peltier._last_enable == {
+                "LNA_enable": True,
+                "LOAD_enable": False,
+            }
+        finally:
+            peltier.disconnect()
+
+    def test_partial_updates_merge_across_channels(self):
+        """Setting one channel, then the other, keeps both in the cache.
+
+        Firmware holds per-channel state independently, so a replay must
+        restore both channels even if the host only ever set them in
+        separate calls.
+        """
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            peltier.set_clamp(LNA=0.4)
+            peltier.set_clamp(LOAD=0.7)
+            assert peltier._last_clamp == {
+                "LNA_clamp": 0.4,
+                "LOAD_clamp": 0.7,
+            }
+            peltier.set_temperature(T_LNA=20.0, LNA_hyst=0.2)
+            peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=0.5)
+            assert peltier._last_temperature == {
+                "LNA_temp_target": 20.0,
+                "LNA_hysteresis": 0.2,
+                "LOAD_temp_target": 30.0,
+                "LOAD_hysteresis": 0.5,
+            }
+        finally:
+            peltier.disconnect()
+
+    def test_on_reconnect_replays_in_safe_order(self):
+        """watchdog → clamp → temperature → enable, matching apply_settings.
+
+        Disables keepalive so the spy only sees replay traffic — the
+        background ``{}`` keepalive is tested independently.
+        """
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            peltier.set_watchdog_timeout(15000)
+            peltier.set_clamp(LNA=0.5, LOAD=0.6)
+            peltier.set_temperature(
+                T_LNA=25.0, LNA_hyst=0.3, T_LOAD=28.0, LOAD_hyst=0.4
+            )
+            peltier.set_enable(LNA=True, LOAD=False)
+
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier.on_reconnect()
+
+            assert sent == [
+                {"watchdog_timeout_ms": 15000},
+                {"LNA_clamp": 0.5, "LOAD_clamp": 0.6},
+                {
+                    "LNA_temp_target": 25.0,
+                    "LNA_hysteresis": 0.3,
+                    "LOAD_temp_target": 28.0,
+                    "LOAD_hysteresis": 0.4,
+                },
+                {"LNA_enable": True, "LOAD_enable": False},
+            ]
+        finally:
+            peltier.disconnect()
+
+    def test_on_reconnect_skips_unset_groups(self):
+        """Groups never configured by the host aren't replayed."""
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            peltier.set_clamp(LNA=0.5)
+
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier.on_reconnect()
+
+            assert sent == [{"LNA_clamp": 0.5}]
+        finally:
+            peltier.disconnect()
+
+    def test_on_reconnect_restarts_keepalive(self):
+        """Keepalive thread is re-armed even if no config was ever set."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            peltier._keepalive_running = False
+            peltier._keepalive_thread = None
+            peltier.on_reconnect()
+            assert peltier._keepalive_running is True
+            assert peltier._keepalive_thread is not None
+        finally:
+            peltier.disconnect()
