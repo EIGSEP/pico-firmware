@@ -204,12 +204,28 @@ class PicoDevice:
             True if reconnection succeeded, False otherwise.
         """
         self.disconnect()
+        if not self._attempt_reopen():
+            return False
+        self._start_reader()
+        return True
+
+    def _attempt_reopen(self) -> bool:
+        """
+        Shared post-open sequence: rediscover the USB port (if tracked),
+        reopen the serial handle, and fire ``on_reconnect()`` on success.
+
+        Does not touch the reader-thread lifecycle — callers decide
+        whether to start/stop the reader around this call. Both the
+        public :meth:`reconnect` and the reader thread's in-thread
+        self-heal route through here so they share one post-open
+        contract.
+        """
         if self.usb_serial:
             self._rediscover_port()
-        if self.connect():
-            self.on_reconnect()
-            return True
-        return False
+        if not self._open_serial():
+            return False
+        self.on_reconnect()
+        return True
 
     def _rediscover_port(self):
         """Update ``self.port`` if the USB serial maps to a new device."""
@@ -228,10 +244,13 @@ class PicoDevice:
 
     def on_reconnect(self):
         """
-        Hook invoked after a successful ``reconnect()``.
+        Hook invoked after the serial port is reopened.
 
-        Default is a no-op; subclasses override to re-apply firmware
-        state that doesn't persist across a USB serial drop.
+        Fires from both reconnect paths: the public :meth:`reconnect`
+        (e.g. ``PicoManager._check_health``) and the reader thread's
+        in-thread self-heal after a transient serial drop. Default is
+        a no-op; subclasses override to re-apply firmware state that
+        doesn't persist across a USB serial drop.
         """
         pass
 
@@ -306,10 +325,10 @@ class PicoDevice:
         """Background thread function for reading serial data."""
         while self._running:
             if not self.is_connected:
-                # Try to reopen the serial port (don't call connect() which
-                # would spawn a second reader thread).
+                # Reopen in-thread — we can't call the public reconnect()
+                # because it joins this thread and would deadlock.
                 self.logger.info(f"Attempting to reconnect to {self.port}...")
-                if self._open_serial():
+                if self._attempt_reopen():
                     self.logger.info(f"Reconnected to {self.port}")
                 else:
                     time.sleep(self._RECONNECT_INTERVAL)
