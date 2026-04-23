@@ -301,7 +301,9 @@ def main():
             # Keep going so the JSON artifact still lands on disk.
 
     # JSON artifact (audit / bench fallback)
-    output_path = Path(args.output) if args.output else Path(_default_output_path())
+    output_path = (
+        Path(args.output) if args.output else Path(_default_output_path())
+    )
     with open(output_path, "w") as f:
         json.dump(cal_data, f, indent=2)
     print(f"\nCalibration saved to {output_path}")

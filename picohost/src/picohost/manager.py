@@ -187,7 +187,9 @@ class PicoManager:
         self.logger.log(level, msg)
         try:
             self._status_writer.send(msg, level=level)
-        except Exception as e:  # pragma: no cover - don't mask bugs behind status
+        except (
+            Exception
+        ) as e:  # pragma: no cover - don't mask bugs behind status
             self.logger.warning(f"Failed to publish status: {e}")
 
     # --- Discovery & Config ---
@@ -262,9 +264,7 @@ class PicoManager:
                     self.transport, name=pico_heartbeat_name(name)
                 )
                 self._heartbeats[name].set(ex=HEARTBEAT_TTL, alive=True)
-                self._status(
-                    f"Discovered {name} (app_id={app_id}) on {port}"
-                )
+                self._status(f"Discovered {name} (app_id={app_id}) on {port}")
             except Exception as e:
                 self._status(
                     f"Failed to init {name} on {port}: {e}",

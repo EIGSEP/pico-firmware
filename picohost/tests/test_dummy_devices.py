@@ -148,7 +148,8 @@ class TestDummyPicoMotor:
         motor.halt()
         wait_for_condition(
             lambda: (
-                motor.last_status.get("az_target_pos") == motor.last_status.get("az_pos")
+                motor.last_status.get("az_target_pos")
+                == motor.last_status.get("az_pos")
             ),
             cadence_ms=cadence,
         )
@@ -218,8 +219,12 @@ class TestDummyPicoMotor:
                 el_range_deg=np.array([-10.0, 0.0, 10.0]),
             )
         # halt was called, but post-scan homing did not run
-        assert motor.last_status["az_target_pos"] == motor.last_status["az_pos"]
-        assert motor.last_status["el_target_pos"] == motor.last_status["el_pos"]
+        assert (
+            motor.last_status["az_target_pos"] == motor.last_status["az_pos"]
+        )
+        assert (
+            motor.last_status["el_target_pos"] == motor.last_status["el_pos"]
+        )
         motor.disconnect()
 
 

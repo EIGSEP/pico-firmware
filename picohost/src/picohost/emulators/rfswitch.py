@@ -33,9 +33,7 @@ class RFSwitchEmulator(PicoEmulator):
         self.reported_state = 0
         if self.settle_ms > 0:
             self.in_transition = True
-            self._transition_end = (
-                time.monotonic() + self.settle_ms / 1000.0
-            )
+            self._transition_end = time.monotonic() + self.settle_ms / 1000.0
         else:
             self.in_transition = False
             self._transition_end = time.monotonic()

@@ -104,9 +104,7 @@ class PicoProxy:
             If PicoManager returns an error status.
         """
         if not self.is_available:
-            self.logger.warning(
-                f"{self.name} not available, skipping command"
-            )
+            self.logger.warning(f"{self.name} not available, skipping command")
             return None
 
         request_id = str(uuid.uuid4())
@@ -158,9 +156,7 @@ class PicoProxy:
             for _stream, messages in result:
                 for msg_id, fields in messages:
                     last_id = msg_id
-                    rid = fields.get(b"request_id") or fields.get(
-                        "request_id"
-                    )
+                    rid = fields.get(b"request_id") or fields.get("request_id")
                     if isinstance(rid, bytes):
                         rid = rid.decode()
                     if rid != request_id:
@@ -168,9 +164,7 @@ class PicoProxy:
                     status = fields.get(b"status") or fields.get("status")
                     if isinstance(status, bytes):
                         status = status.decode()
-                    data_raw = fields.get(b"data") or fields.get(
-                        "data", b"{}"
-                    )
+                    data_raw = fields.get(b"data") or fields.get("data", b"{}")
                     if isinstance(data_raw, bytes):
                         data_raw = data_raw.decode()
                     data = json.loads(data_raw)

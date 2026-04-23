@@ -445,7 +445,9 @@ class TestRFSwitchEmulator:
         emu = RFSwitchEmulator(settle_ms=0)
         emu.server({"sw_state": 5})
         assert emu.get_status()["sw_state"] == 5
-        emu.settle_ms = 30  # would arm transition if a change actually occurred
+        emu.settle_ms = (
+            30  # would arm transition if a change actually occurred
+        )
         emu.server({"sw_state": 5})
         assert emu.in_transition is False
         assert emu.get_status()["sw_state"] == 5

@@ -54,7 +54,6 @@ def sw(transport, mgr):
 
 
 class TestPicoProxy:
-
     def test_send_command_round_trip(self, sw):
         """send_command routes through PicoManager and returns device result."""
         result = sw.send_command("switch", state="RFANT")
@@ -74,18 +73,16 @@ class TestPicoProxy:
     def test_send_command_timeout(self, transport):
         """If manager never responds, proxy raises TimeoutError."""
         # Fake an "alive" device with no manager to route commands
-        HeartbeatWriter(
-            transport, name=pico_heartbeat_name("orphan")
-        ).set(ex=60, alive=True)
+        HeartbeatWriter(transport, name=pico_heartbeat_name("orphan")).set(
+            ex=60, alive=True
+        )
         proxy = PicoProxy("orphan", transport, timeout=0.2)
         with pytest.raises(TimeoutError, match="No response"):
             proxy.send_command("switch", state="RFANT")
 
     def test_send_command_error_raises_runtime(self, transport, mgr):
         """If manager returns an error, proxy raises RuntimeError."""
-        proxy = PicoProxy(
-            "rfswitch", transport, source="test", timeout=5.0
-        )
+        proxy = PicoProxy("rfswitch", transport, source="test", timeout=5.0)
         with pytest.raises(RuntimeError, match="not allowed"):
             proxy.send_command("disconnect")
 
@@ -101,7 +98,6 @@ class TestPicoProxy:
 
 
 class TestRequestId:
-
     def test_response_contains_request_id(self, sw, transport):
         """The manager echoes request_id in the response."""
         sw.send_command("switch", state="RFANT")
