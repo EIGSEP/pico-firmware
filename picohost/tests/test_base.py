@@ -88,6 +88,36 @@ class TestPicoDevice:
         assert device.last_status.get("value") == 99
         device.disconnect()
 
+    def test_attempt_reopen_fires_on_reconnect_on_success(self):
+        """_attempt_reopen() runs the on_reconnect hook after a successful reopen.
+
+        Both the public reconnect() and the reader thread's in-thread
+        self-heal route through _attempt_reopen, so this is the choke
+        point that keeps the post-open contract consistent between
+        them.
+        """
+        device = DummyPicoDevice("/dev/dummy")
+        try:
+            calls = []
+            device.on_reconnect = lambda: calls.append("hook")  # type: ignore[method-assign]
+            device._open_serial = lambda: True  # type: ignore[method-assign]
+            assert device._attempt_reopen() is True
+            assert calls == ["hook"]
+        finally:
+            device.disconnect()
+
+    def test_attempt_reopen_skips_on_reconnect_on_failure(self):
+        """A failed reopen must not fire on_reconnect — there's no port yet."""
+        device = DummyPicoDevice("/dev/dummy")
+        try:
+            calls = []
+            device.on_reconnect = lambda: calls.append("hook")  # type: ignore[method-assign]
+            device._open_serial = lambda: False  # type: ignore[method-assign]
+            assert device._attempt_reopen() is False
+            assert calls == []
+        finally:
+            device.disconnect()
+
     def test_redis_handler_is_bound_before_connect(self):
         """__init__ binds redis_handler before connect() is invoked."""
 
@@ -570,5 +600,40 @@ class TestPicoPeltierReconnectReplay:
             peltier.on_reconnect()
             assert peltier._keepalive_running is True
             assert peltier._keepalive_thread is not None
+        finally:
+            peltier.disconnect()
+
+    def test_reader_thread_self_heal_replays_config(self):
+        """Reader-thread reconnect replays cached config, not just reopen.
+
+        Regression guard: before _attempt_reopen existed, the reader
+        thread's self-heal called _open_serial directly and skipped
+        on_reconnect. A Pico that rebooted and re-enumerated faster
+        than PicoManager's health check was silently left at firmware
+        defaults.
+        """
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            peltier.set_watchdog_timeout(15000)
+            peltier.set_clamp(LNA=0.5, LOAD=0.6)
+            peltier.set_enable(LNA=True, LOAD=False)
+
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier._open_serial = lambda: True  # type: ignore[method-assign]
+
+            # _attempt_reopen is exactly what the reader thread calls on
+            # a drop (see base.py::_reader_thread_func).
+            assert peltier._attempt_reopen() is True
+
+            assert {"watchdog_timeout_ms": 15000} in sent
+            assert {"LNA_clamp": 0.5, "LOAD_clamp": 0.6} in sent
+            assert {"LNA_enable": True, "LOAD_enable": False} in sent
         finally:
             peltier.disconnect()
