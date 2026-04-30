@@ -373,6 +373,130 @@ class TestRFSwitchRedisHandler:
             switch.disconnect()
 
 
+class TestMotorRedisHandler:
+    """Verify _motor_redis_handler coerces position fields to float.
+
+    The C firmware emits ``az_pos``/``el_pos``/``az_target_pos``/
+    ``el_target_pos`` with ``KV_INT``, which the JSON parser surfaces
+    as Python ``int``. The downstream consumer schema declares these
+    as ``float`` so the per-integration reduction picks the
+    float→mean policy (positions legitimately change within an
+    integration during a scan). Coercing here at the publish boundary
+    is what makes the producer satisfy that contract.
+    """
+
+    _POSITION_KEYS = ("az_pos", "az_target_pos", "el_pos", "el_target_pos")
+
+    def _capture(self, motor, data):
+        captured = {}
+        motor._base_redis_handler = lambda d: captured.update(d)
+        motor._motor_redis_handler(data)
+        return captured
+
+    def test_int_positions_are_published_as_float(self):
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            published = self._capture(
+                motor,
+                {
+                    "sensor_name": "motor",
+                    "status": "update",
+                    "app_id": 0,
+                    "az_pos": 100,
+                    "az_target_pos": 200,
+                    "el_pos": -50,
+                    "el_target_pos": 0,
+                },
+            )
+            for key in self._POSITION_KEYS:
+                assert isinstance(published[key], float), (
+                    f"{key} published as {type(published[key]).__name__}"
+                )
+            assert published["az_pos"] == 100.0
+            assert published["el_pos"] == -50.0
+        finally:
+            motor.disconnect()
+
+    def test_float_positions_pass_through(self):
+        """Already-float values are not double-cast or otherwise mangled."""
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            published = self._capture(
+                motor,
+                {
+                    "sensor_name": "motor",
+                    "az_pos": 1.5,
+                    "az_target_pos": 2.5,
+                    "el_pos": 3.5,
+                    "el_target_pos": 4.5,
+                },
+            )
+            assert published["az_pos"] == 1.5
+            assert published["el_pos"] == 3.5
+        finally:
+            motor.disconnect()
+
+    def test_missing_position_keys_do_not_crash(self):
+        """A partial payload (e.g. early status before all fields are
+        populated) still publishes; absent keys stay absent."""
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            published = self._capture(
+                motor, {"sensor_name": "motor", "az_pos": 0}
+            )
+            assert published["az_pos"] == 0.0
+            assert "el_pos" not in published
+        finally:
+            motor.disconnect()
+
+    def test_none_positions_pass_through(self):
+        """None gap-fill values are preserved (not coerced to 0.0)."""
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            published = self._capture(
+                motor,
+                {
+                    "sensor_name": "motor",
+                    "az_pos": None,
+                    "az_target_pos": None,
+                    "el_pos": None,
+                    "el_target_pos": None,
+                },
+            )
+            for key in self._POSITION_KEYS:
+                assert published[key] is None
+        finally:
+            motor.disconnect()
+
+    def test_handler_does_not_mutate_input(self):
+        """The caller's dict is untouched by the handler."""
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            data = {"sensor_name": "motor", "az_pos": 7, "el_pos": 9}
+            self._capture(motor, data)
+            assert data == {"sensor_name": "motor", "az_pos": 7, "el_pos": 9}
+            assert isinstance(data["az_pos"], int)
+        finally:
+            motor.disconnect()
+
+    def test_emulator_payload_publishes_float_positions(self):
+        """End-to-end: a fresh MotorEmulator status, run through the
+        handler, must publish all position fields as floats. Catches
+        regressions where the C firmware adds a new position field that
+        bypasses the cast."""
+        from picohost.emulators import MotorEmulator
+
+        motor = DummyPicoMotor("/dev/dummy")
+        try:
+            published = self._capture(motor, MotorEmulator().get_status())
+            for key in self._POSITION_KEYS:
+                assert isinstance(published[key], float), (
+                    f"{key} published as {type(published[key]).__name__}"
+                )
+        finally:
+            motor.disconnect()
+
+
 class TestPicoPeltier:
     """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
 

@@ -50,6 +50,43 @@ class PicoMotor(PicoDevice):
             verbose=verbose,
         )
         self.set_delay()
+        # Wrap the base redis handler to publish position fields as
+        # floats. See _motor_redis_handler.
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._motor_redis_handler
+
+    _POSITION_FIELDS = (
+        "az_pos",
+        "az_target_pos",
+        "el_pos",
+        "el_target_pos",
+    )
+
+    def _motor_redis_handler(self, data):
+        """Cast position fields to float before uploading to Redis.
+
+        The C firmware emits position fields with ``KV_INT`` (raw step
+        counts), which the JSON parser surfaces as Python ``int``.
+        Position values legitimately change within a single consumer
+        integration window during a scan, so the consumer-side
+        per-integration reduction needs the float→mean policy rather
+        than the int→min "invariant" policy. Coercing here at the
+        publish boundary keeps the consumer schema clean (positions
+        declared as ``float``, mean reduction) without requiring a
+        firmware reflash.
+
+        Mirrors :meth:`PicoPotentiometer._pot_redis_handler` and
+        :meth:`PicoRFSwitch._rfswitch_redis_handler`: both adapt the
+        raw firmware payload to the published Redis shape at the same
+        boundary.
+        """
+        data = data.copy()
+        for key in self._POSITION_FIELDS:
+            v = data.get(key)
+            if v is not None:
+                data[key] = float(v)
+        self._base_redis_handler(data)
 
     def on_reconnect(self):
         """Re-apply delay configuration after a serial reconnect."""
