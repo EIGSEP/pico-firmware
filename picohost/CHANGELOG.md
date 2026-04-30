@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.1.0](https://github.com/EIGSEP/pico-firmware/compare/v3.0.0...v3.1.0) (2026-04-30)
+
+
+### Features
+
+* **peltier:** replay last-applied config on reconnect ([fbb77cc](https://github.com/EIGSEP/pico-firmware/commit/fbb77cc01641db30cf54afeabb8d6bd6cbfd853f))
+* **rfswitch:** report UNKNOWN sentinel while switch is settling ([15c4a0f](https://github.com/EIGSEP/pico-firmware/commit/15c4a0f5076fd4867e542b995f0cc03998f16d51))
+
+
+### Bug Fixes
+
+* make keepalive idempotent, add serial write lock, only set last properties after succesfull command send ([6507163](https://github.com/EIGSEP/pico-firmware/commit/65071634793c7277951b81a45c6ce653978d1374))
+* **motor:** publish position fields as float, not int ([#63](https://github.com/EIGSEP/pico-firmware/issues/63)) ([31ffc73](https://github.com/EIGSEP/pico-firmware/commit/31ffc7316c0ff653fd5d53041a4e5c8cdeb977e3))
+* **picohost:** fire on_reconnect from reader-thread self-heal ([6ac65fb](https://github.com/EIGSEP/pico-firmware/commit/6ac65fb3ed046922695fea0b47359203a46ff135))
+
+
+### Documentation
+
+* add imu sim analysis notebook ([64f2efa](https://github.com/EIGSEP/pico-firmware/commit/64f2efa42046d0e8192fe104d72372829536c334))
+
 ## [3.0.0](https://github.com/EIGSEP/pico-firmware/compare/v2.2.1...v3.0.0) (2026-04-21)
 
 
