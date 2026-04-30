@@ -49,12 +49,14 @@ class PicoMotor(PicoDevice):
             usb_serial=usb_serial,
             verbose=verbose,
         )
-        self.set_delay()
         # Wrap the base redis handler to publish position fields as
-        # floats. See _motor_redis_handler.
+        # floats. See _motor_redis_handler. Install this immediately
+        # after super().__init__ because the base class may already
+        # have started the reader thread.
         if self.redis_handler is not None:
             self._base_redis_handler = self.redis_handler
             self.redis_handler = self._motor_redis_handler
+        self.set_delay()
 
     _POSITION_FIELDS = (
         "az_pos",
