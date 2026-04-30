@@ -9,6 +9,9 @@ build/*
 
 .venv/
 
+# notebook checkpoints
+*.ipynb_checkpoints
+
 # data files
 *.npz
 
