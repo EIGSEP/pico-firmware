@@ -42,3 +42,29 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: picohost/dist/
+
+  firmware-publish:
+    # Build pico_multi.uf2 from the freshly-tagged source tree and attach
+    # it to the GitHub Release so downstream consumers (notably the
+    # eigsep-field image build) can pull a versioned, immutable artifact
+    # via `gh release download <tag> --pattern pico_multi.uf2` instead of
+    # rebuilding from source themselves.
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Build firmware
+        run: ./build.sh
+      - name: Attach pico_multi.uf2 to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload --clobber "${{ needs.release-please.outputs.tag_name }}" build/pico_multi.uf2
