@@ -43,7 +43,32 @@ pip3 install pyserial
 ```
 ---
 
-## 2. Clone and Build Firmware
+## 2. Get the Firmware
+
+You have two options: download a prebuilt `pico_multi.uf2` from a GitHub Release, or build it yourself from source. Most users only need the prebuilt artifact.
+
+### Option A: Download prebuilt firmware (recommended)
+
+Each tagged release has `pico_multi.uf2` attached as an asset, built from the matching source tree by CI.
+
+- **Browser:** open <https://github.com/EIGSEP/pico-firmware/releases>, pick a release (e.g. `picohost-v3.1.0`), and download `pico_multi.uf2` from the **Assets** section.
+- **Command line (pinned, reproducible):**
+  ```bash
+  gh release download picohost-v3.1.0 --pattern pico_multi.uf2 --repo EIGSEP/pico-firmware
+  # or without gh:
+  curl -L -o pico_multi.uf2 \
+    https://github.com/EIGSEP/pico-firmware/releases/download/picohost-v3.1.0/pico_multi.uf2
+  ```
+- **Latest non-prerelease:**
+  ```bash
+  curl -L -o pico_multi.uf2 \
+    https://github.com/EIGSEP/pico-firmware/releases/latest/download/pico_multi.uf2
+  ```
+
+Skip ahead to [Flash Pico Devices](#5-flash-pico-devices) once you have the `.uf2`.
+
+### Option B: Build from source
+
 Clone with all submodules: `git clone --recurse-submodules git@github.com:EIGSEP/pico-firmware.git`
 
 
@@ -96,20 +121,22 @@ The build produces `build/pico_multi.uf2` ready for flashing.
 
 ## 5. Flash Pico Devices
 
+In the examples below, `pico_multi.uf2` is either the file you downloaded from a release or the one produced at `build/pico_multi.uf2` by `./build.sh`.
+
 ### Single Device (Manual)
 1. Hold BOOTSEL button while connecting Pico via USB
-2. Copy `build/pico_multi.uf2` to the mounted RPI-RP2 drive
+2. Copy `pico_multi.uf2` to the mounted RPI-RP2 drive
 3. Device will reboot automatically
 
 ### Multiple Devices (Automated)
-Use the provided `flash_picos.py` script:
+Use the `flash-picos` CLI (installed with the `picohost` package):
 
 ```bash
 # Flash all connected Picos
-python3 flash_picos.py --uf2 build/pico_multi.uf2
+flash-picos --uf2 pico_multi.uf2
 
 # Flash with custom parameters
-python3 flash_picos.py --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
+flash-picos --uf2 pico_multi.uf2 --baud 115200 --timeout 10
 ```
 
 The script will:
@@ -198,7 +225,7 @@ python3 picohost/scripts/monitor_picos.py
 - `lib/` - Libraries (cJSON, BNO08x, eigsep_command, onewire)
 - `picohost/` - Python host control library and test scripts
 - `build.sh` - Build script for firmware
-- `flash_picos.py` - Multi-device flashing tool
+- `flash-picos` - Multi-device flashing CLI (installed with `picohost`)
 - `devices_info.json` - Device configuration database
 
 ## Contributing
