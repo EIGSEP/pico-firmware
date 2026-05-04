@@ -12,6 +12,7 @@ from serial import Serial
 from serial.tools import list_ports
 
 from .buses import PicoConfigStore
+from .keys import PICO_CONFIG_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,8 @@ def main():
             _publish_to_redis(all_devices, args.redis_host, args.redis_port)
             print(
                 f"Published {len(all_devices)} device(s) to Redis at "
-                f"{args.redis_host}:{args.redis_port} (key: pico_config)."
+                f"{args.redis_host}:{args.redis_port} "
+                f"(key: {PICO_CONFIG_KEY})."
             )
         except Exception as e:
             print(
