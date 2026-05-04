@@ -51,13 +51,13 @@ You have two options: download a prebuilt `pico_multi.uf2` from a GitHub Release
 
 Each tagged release has `pico_multi.uf2` attached as an asset, built from the matching source tree by CI.
 
-- **Browser:** open <https://github.com/EIGSEP/pico-firmware/releases>, pick a release (e.g. `picohost-v3.1.0`), and download `pico_multi.uf2` from the **Assets** section.
+- **Browser:** open <https://github.com/EIGSEP/pico-firmware/releases>, pick a release (e.g. `v3.1.0`), and download `pico_multi.uf2` from the **Assets** section.
 - **Command line (pinned, reproducible):**
   ```bash
-  gh release download picohost-v3.1.0 --pattern pico_multi.uf2 --repo EIGSEP/pico-firmware
+  gh release download v3.1.0 --pattern pico_multi.uf2 --repo EIGSEP/pico-firmware
   # or without gh:
   curl -L -o pico_multi.uf2 \
-    https://github.com/EIGSEP/pico-firmware/releases/download/picohost-v3.1.0/pico_multi.uf2
+    https://github.com/EIGSEP/pico-firmware/releases/download/v3.1.0/pico_multi.uf2
   ```
 - **Latest non-prerelease:**
   ```bash
