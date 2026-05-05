@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/EIGSEP/pico-firmware/compare/v3.1.0...v3.1.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* **flash-picos:** use PICO_CONFIG_KEY constant in confirmation message ([c414935](https://github.com/EIGSEP/pico-firmware/commit/c41493595cea85943160c05e711d3eb7afa2f900))
+
 ## [3.1.0](https://github.com/EIGSEP/pico-firmware/compare/v3.0.0...v3.1.0) (2026-04-30)
 
 
