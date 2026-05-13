@@ -52,13 +52,18 @@ def flash_test_image(uf2_path, bus=None, address=None):
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
-    print(res.stdout, end="")
+    output = res.stdout or ""
     if res.returncode != 0:
+        if output:
+            print(output, end="", file=sys.stderr)
         raise RuntimeError(
             f"picotool failed (exit {res.returncode}). "
             "If multiple BOOTSEL Picos are connected, pass "
             "--bus and --address from `picotool info -ab`."
+            + (f"\npicotool output:\n{output}" if output else "")
         )
+    if output:
+        print(output, end="")
 
 
 def main():

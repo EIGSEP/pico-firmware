@@ -86,6 +86,7 @@ add_executable(pico_test_blink
 target_link_libraries(pico_test_blink
     pico_stdlib
     hardware_gpio
+    pico_unique_id
 )
 pico_enable_stdio_usb(pico_test_blink 1)
 pico_enable_stdio_uart(pico_test_blink 0)
