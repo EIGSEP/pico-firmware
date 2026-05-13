@@ -21,10 +21,7 @@ jobs:
         with:
           submodules: recursive
       - name: Install ARM toolchain
-        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17
-        with:
-          packages: cmake gcc-arm-none-eabi libnewlib-arm-none-eabi
-          version: 1.0
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi
       - name: Build firmware
         run: ./build.sh
 
