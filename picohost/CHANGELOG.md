@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.0](https://github.com/EIGSEP/pico-firmware/compare/v3.1.1...v3.2.0) (2026-05-13)
+
+
+### Features
+
+* add flash-test CLI and BOOTSEL test firmware ([#71](https://github.com/EIGSEP/pico-firmware/issues/71)) ([fad169f](https://github.com/EIGSEP/pico-firmware/commit/fad169f6271488ca8592a255600f73d7027f0f55))
+
+
+### Bug Fixes
+
+* **picohost:** drop --config flag from pico-manager.service ExecStart ([cfe4a98](https://github.com/EIGSEP/pico-firmware/commit/cfe4a98cd1b6af54dfc0110255990abb751cc978))
+
 ## [3.1.1](https://github.com/EIGSEP/pico-firmware/compare/v3.1.0...v3.1.1) (2026-05-05)
 
 
