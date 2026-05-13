@@ -49,6 +49,25 @@ PICO_BOARD=pico2 cmake ..
 echo "Building project..."
 PICO_BOARD=pico2 make -j$(nproc)
 
+require_usb_stdio() {
+    local target="$1"
+    local key="${target}_PICO_STDIO_USB"
+    local value
+
+    value="$(awk -F= -v key="$key" '$1 ~ "^" key ":" { print $2; exit }' CMakeCache.txt)"
+    if [ "$value" != "1" ]; then
+        echo "ERROR: ${target} built without USB stdio — would brick remote reflash"
+        echo "  Restore \`pico_enable_stdio_usb(${target} 1)\` in CMakeLists.txt"
+        exit 1
+    fi
+}
+
+# Confirm USB stdio survived into each recovery-critical target. Without
+# this, flash-picos cannot trigger BOOTSEL for the next remote reflash.
+for target in pico_multi pico_test_blink; do
+    require_usb_stdio "$target"
+done
+
 # Check if the output file was created
 if [ -f "pico_multi.uf2" ]; then
     echo "==================================="
