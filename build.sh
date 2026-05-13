@@ -59,15 +59,24 @@ if [ -f "pico_multi.uf2" ]; then
     echo "DIP switch combinations:"
     echo "  000 - Motor app (APP_MOTOR)"
     echo "  001 - Temperature controller (APP_TEMPCTRL)"
-    echo "  010 - Temperature monitor (APP_TEMPMON)" 
+    echo "  010 - Temperature monitor (APP_TEMPMON)"
     echo "  011 - IMU sensor, elevation (APP_IMU_EL)"
     echo "  100 - Lidar sensor (APP_LIDAR)"
     echo "  101 - RF switch control (APP_RFSWITCH)"
     echo "  110 - IMU sensor, azimuth (APP_IMU_AZ)"
     echo "==================================="
-    
+
     # Show file size
     ls -lh pico_multi.uf2
+
+    if [ -f "pico_test_blink.uf2" ]; then
+        echo ""
+        echo "Also built: build/pico_test_blink.uf2"
+        echo "  Heartbeat LED test image — flash onto BOOTSEL-mode Picos"
+        echo "  via \`flash-test\` to bring up USB-CDC before running"
+        echo "  \`flash-picos\` with the production image."
+        ls -lh pico_test_blink.uf2
+    fi
 else
     echo "❌ Build failed - pico_multi.uf2 not found"
     exit 1

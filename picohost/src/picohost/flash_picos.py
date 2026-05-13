@@ -23,14 +23,18 @@ PICO_PID_CDC = 0x0009  # CDC serial mode PID
 
 def find_pico_ports():
     """
-    Return a dict of device: serial pairs for all ttyACM*/ttyUSB* ports
-    whose USB VID/PID matches the Pico in CDC mode.
+    Return a dict of ``device: serial`` pairs for all ttyACM*/ttyUSB*
+    ports whose USB VID/PID matches a Pico running CDC firmware
+    (VID 0x2E8A, PID 0x0009).
+
+    BOOTSEL-mode Picos (PID 0x0003) are mass-storage devices and do
+    not appear in ``list_ports.comports()`` at all — use ``flash-test``
+    to install a CDC-capable image first.
     """
     ports = {}
     for info in list_ports.comports():
-        if info.vid == PICO_VID:
-            if info.pid in (PICO_PID_BOOTSEL, PICO_PID_CDC):
-                ports[info.device] = info.serial_number
+        if info.vid == PICO_VID and info.pid == PICO_PID_CDC:
+            ports[info.device] = info.serial_number
     return ports
 
 

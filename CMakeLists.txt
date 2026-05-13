@@ -77,3 +77,19 @@ pico_add_extra_outputs(pico_multi)
 # set output name
 set_target_properties(pico_multi PROPERTIES OUTPUT_NAME "pico_multi")
 
+# Test image: blinks LED in a heartbeat pattern and exposes USB-CDC so
+# the Pico can subsequently be re-flashed with the production image via
+# `flash-picos`.
+add_executable(pico_test_blink
+    src/test_blink.c
+)
+target_link_libraries(pico_test_blink
+    pico_stdlib
+    hardware_gpio
+    pico_unique_id
+)
+pico_enable_stdio_usb(pico_test_blink 1)
+pico_enable_stdio_uart(pico_test_blink 0)
+pico_add_extra_outputs(pico_test_blink)
+set_target_properties(pico_test_blink PROPERTIES OUTPUT_NAME "pico_test_blink")
+
