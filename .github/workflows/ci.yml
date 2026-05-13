@@ -9,6 +9,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build-firmware:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
         with:
           submodules: recursive
       - name: Install ARM toolchain
-        uses: awalsh128/cache-apt-pkgs-action@v1
+        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17
         with:
           packages: cmake gcc-arm-none-eabi libnewlib-arm-none-eabi
           version: 1.0
