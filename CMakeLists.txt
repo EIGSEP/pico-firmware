@@ -93,3 +93,14 @@ pico_enable_stdio_uart(pico_test_blink 0)
 pico_add_extra_outputs(pico_test_blink)
 set_target_properties(pico_test_blink PROPERTIES OUTPUT_NAME "pico_test_blink")
 
+# Recovery targets must keep USB stdio: without it, flash-picos cannot
+# trigger BOOTSEL for the next remote reflash.
+foreach(_recovery_target pico_multi pico_test_blink)
+    get_target_property(_stdio_usb ${_recovery_target} PICO_TARGET_STDIO_USB)
+    if(NOT _stdio_usb)
+        message(FATAL_ERROR
+            "${_recovery_target} built without USB stdio — would brick remote reflash. "
+            "Restore `pico_enable_stdio_usb(${_recovery_target} 1)` in CMakeLists.txt.")
+    endif()
+endforeach()
+
