@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.1](https://github.com/EIGSEP/pico-firmware/compare/v3.2.0...v3.2.1) (2026-05-14)
+
+
+### Bug Fixes
+
+* emit status="error" per-cycle on firmware data-refresh failure ([3acdeff](https://github.com/EIGSEP/pico-firmware/commit/3acdeffe60616aa6a0aad13e19ae736082043350))
+
 ## [3.2.0](https://github.com/EIGSEP/pico-firmware/compare/v3.1.1...v3.2.0) (2026-05-13)
 
 
