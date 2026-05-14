@@ -86,7 +86,7 @@ void lidar_op(uint8_t app_id) {
     uint16_t dist_cm = (uint16_t)(buf[0] << 8) | buf[1];
     if (dist_cm == 0) {                  // still not ready – ignore
         lidar_reset(app_id);
-    //    return;
+        return;
     }
     lidar_data.distance = dist_cm / 100.0;
 }
