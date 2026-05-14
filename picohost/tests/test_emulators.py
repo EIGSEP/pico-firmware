@@ -401,6 +401,20 @@ class TestLidarEmulator:
         expected_keys = {"sensor_name", "status", "app_id", "distance_m"}
         assert set(status.keys()) == expected_keys
 
+    def test_failure_then_recovery_returns_to_update(self):
+        """One failed cycle reports "error"; the next good op() returns to "update"."""
+        emu = LidarEmulator()
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+
+        emu.simulate_sensor_failure()
+        emu.op()
+        assert emu.get_status()["status"] == "error"
+
+        emu.simulate_sensor_recovery()
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+
 
 class TestRFSwitchEmulator:
     def test_initial_state_settled_when_instant(self):
@@ -671,11 +685,22 @@ class TestTempMonErrorState:
 
 
 class TestImuErrorState:
-    def test_init_failure_reports_error(self):
-        """When not initialized, status reports error."""
+    def test_persistent_failure_then_recovery(self):
+        """Sustained sensor failure flips status="error"; recovery returns to "update"."""
+        import picohost.emulators.imu as imu_mod
+
         emu = ImuEmulator()
-        emu.inject_init_failure()
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+
+        emu.simulate_sensor_failure()
+        emu._last_event_time -= imu_mod.IMU_EVENT_TIMEOUT_S + 1
+        emu.op()
         assert emu.get_status()["status"] == "error"
+
+        emu.simulate_sensor_recovery()
+        emu.op()
+        assert emu.get_status()["status"] == "update"
 
 
 # ---------------------------------------------------------------------------

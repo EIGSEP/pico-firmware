@@ -44,6 +44,10 @@ typedef struct {
     RvcData   data;
     bool      is_initialized;
     uint32_t  last_event_time;    /* ms since boot of last valid packet */
+    /* Set on every valid packet, cleared by imu_status(); drives the
+       per-cycle "status" field while is_initialized continues to gate
+       the longer hardware-recovery timeout. */
+    bool      got_packet_this_cycle;
     /* Partial-packet receive buffer */
     uint8_t   rx_buf[RVC_PACKET_SIZE];
     uint8_t   rx_pos;

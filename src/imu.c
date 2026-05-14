@@ -140,13 +140,14 @@ void imu_op(uint8_t app_id) {
 
     if (got_packet) {
         imu.last_event_time = now;
+        imu.got_packet_this_cycle = true;
     } else if ((now - imu.last_event_time) > IMU_EVENT_TIMEOUT_MS) {
         imu.is_initialized = false;
     }
 }
 
 void imu_status(uint8_t app_id) {
-    const char *status = imu.is_initialized ? "update" : "error";
+    const char *status = imu.got_packet_this_cycle ? "update" : "error";
 
     send_json(9,
         KV_STR,   "sensor_name", imu.name,
@@ -159,4 +160,5 @@ void imu_status(uint8_t app_id) {
         KV_FLOAT, "accel_y",     imu.data.accel_y,
         KV_FLOAT, "accel_z",     imu.data.accel_z
     );
+    imu.got_packet_this_cycle = false;
 }

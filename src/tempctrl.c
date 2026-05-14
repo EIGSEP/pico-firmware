@@ -112,6 +112,10 @@ void tempctrl_status(uint8_t app_id) {
     const uint32_t time_lna = temp_sensor_get_conversion_time(&tempctrl_lna.temp_sensor);
     const uint32_t time_load = temp_sensor_get_conversion_time(&tempctrl_load.temp_sensor);
 
+    /* read_error is set/cleared on every temp_sensor_read() attempt, so
+       LNA_status / LOAD_status reflect the most recent attempt rather
+       than a stale timeout window. Matches the per-cycle status contract
+       enforced by eigsep_observing._avg_sensor_values. */
     const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
     const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
 
