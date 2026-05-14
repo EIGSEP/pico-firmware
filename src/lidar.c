@@ -13,6 +13,7 @@
 
 static struct {
     float distance;
+    bool last_op_ok;
 } lidar_data = {0};
 
 static void init_i2c() {
@@ -60,12 +61,14 @@ void lidar_server(uint8_t app_id, const char *json_str) {
 }
 
 void lidar_status(uint8_t app_id) {
+    const char *status = lidar_data.last_op_ok ? "update" : "error";
     send_json(4,
         KV_STR, "sensor_name", "lidar",
-        KV_STR, "status", "update",
+        KV_STR, "status", status,
         KV_INT, "app_id", app_id,
         KV_FLOAT, "distance_m", lidar_data.distance
     );
+    lidar_data.last_op_ok = false;
 }
 
 
@@ -89,6 +92,7 @@ void lidar_op(uint8_t app_id) {
         return;
     }
     lidar_data.distance = dist_cm / 100.0;
+    lidar_data.last_op_ok = true;
 }
 
 

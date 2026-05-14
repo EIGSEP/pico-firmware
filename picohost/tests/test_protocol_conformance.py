@@ -313,10 +313,15 @@ class TestImuProtocol:
         after = emu.get_status()
         assert before == after
 
-    def test_error_status_when_not_initialized(self):
-        """imu.c: status="error" if !is_initialized."""
+    def test_status_is_per_cycle(self):
+        """imu.c: status="update" iff a packet arrived since last get_status()."""
         emu = ImuEmulator()
-        emu.inject_init_failure()
+        # No op() yet: no packet this cycle → "error".
+        assert emu.get_status()["status"] == "error"
+        # op() simulates a fresh packet.
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+        # get_status() resets the flag; without another op() it's "error" again.
         assert emu.get_status()["status"] == "error"
 
     def test_euler_angles_are_degrees(self):
@@ -350,6 +355,30 @@ class TestLidarProtocol:
         emu = LidarEmulator()
         emu.op()
         assert isinstance(emu.get_status()["distance_m"], float)
+
+    def test_status_is_per_cycle(self):
+        """lidar.c: status="update" iff op() refreshed distance this cycle."""
+        emu = LidarEmulator()
+        # No op() yet: status defaults to "error".
+        assert emu.get_status()["status"] == "error"
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+        # get_status() resets the flag.
+        assert emu.get_status()["status"] == "error"
+
+    def test_simulated_failure_emits_error_with_stale_distance(self):
+        """Failure path: distance unchanged from previous good read, status="error"."""
+        emu = LidarEmulator()
+        emu.op()
+        good = emu.get_status()
+        assert good["status"] == "update"
+        prev_distance = good["distance_m"]
+
+        emu.simulate_sensor_failure()
+        emu.op()
+        bad = emu.get_status()
+        assert bad["status"] == "error"
+        assert bad["distance_m"] == prev_distance
 
 
 # ---------------------------------------------------------------------------

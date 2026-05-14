@@ -31,6 +31,9 @@ class ImuEmulator(PicoEmulator):
         self.is_initialized = True
         self._last_event_time = time.monotonic()
         self._sensor_failed = False  # set via simulate_sensor_failure()
+        # Per-cycle freshness flag: True iff a packet was produced since
+        # the last get_status() call. Drives the "status" field.
+        self.got_packet_this_cycle = False
         # Name depends on app_id: mirrors imu.cpp init_eigsep_imu()
         APP_IMU_EL, APP_IMU_AZ = 3, 6
         if app_id == APP_IMU_EL:
@@ -107,8 +110,11 @@ class ImuEmulator(PicoEmulator):
             9.81 * cp * cr + np.random.normal(0, NOISE_STDDEV)
         )
 
+        self.got_packet_this_cycle = True
+
     def get_status(self):
-        status = "update" if self.is_initialized else "error"
+        status = "update" if self.got_packet_this_cycle else "error"
+        self.got_packet_this_cycle = False
         return {
             "sensor_name": self.name,
             "status": status,
