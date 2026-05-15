@@ -761,3 +761,158 @@ class TestPicoPeltierReconnectReplay:
             assert {"LNA_enable": True, "LOAD_enable": False} in sent
         finally:
             peltier.disconnect()
+
+
+class TestPicoPeltierRedisHandler:
+    """Verify _peltier_redis_handler fans the firmware tick into two streams.
+
+    The firmware emits one combined dict per status tick (sensor_name
+    "tempctrl", flat LNA_*/LOAD_* fields, device-wide watchdog_*). The
+    handler must publish two streams ("tempctrl_lna" and "tempctrl_load"),
+    each carrying a top-level ``status`` derived from the matching
+    ``{channel}_status`` and the device-wide watchdog fields duplicated.
+    """
+
+    _SCALAR_TYPES = (str, int, float, bool, type(None))
+
+    _SAMPLE = {
+        "sensor_name": "tempctrl",
+        "app_id": 1,
+        "watchdog_tripped": False,
+        "watchdog_timeout_ms": 30000,
+        "LNA_status": "update",
+        "LNA_T_now": 25.4,
+        "LNA_timestamp": 750.0,
+        "LNA_T_target": 25.0,
+        "LNA_drive_level": 0.42,
+        "LNA_enabled": True,
+        "LNA_active": True,
+        "LNA_int_disabled": False,
+        "LNA_hysteresis": 0.5,
+        "LNA_clamp": 0.8,
+        "LOAD_status": "error",
+        "LOAD_T_now": None,
+        "LOAD_timestamp": 750.0,
+        "LOAD_T_target": 25.0,
+        "LOAD_drive_level": 0.0,
+        "LOAD_enabled": True,
+        "LOAD_active": False,
+        "LOAD_int_disabled": True,
+        "LOAD_hysteresis": 0.5,
+        "LOAD_clamp": 0.8,
+    }
+
+    _EXPECTED_KEYS = {
+        "sensor_name",
+        "app_id",
+        "status",
+        "watchdog_tripped",
+        "watchdog_timeout_ms",
+        "T_now",
+        "timestamp",
+        "T_target",
+        "drive_level",
+        "enabled",
+        "active",
+        "int_disabled",
+        "hysteresis",
+        "clamp",
+    }
+
+    def _capture_all(self, peltier, data):
+        captured = []
+        peltier._base_redis_handler = (
+            lambda d: captured.append(dict(d))  # type: ignore[method-assign]
+        )
+        peltier._peltier_redis_handler(data)
+        return captured
+
+    def test_publishes_two_streams_per_tick(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            published = self._capture_all(peltier, self._SAMPLE)
+            assert len(published) == 2
+            names = [p["sensor_name"] for p in published]
+            assert names == ["tempctrl_lna", "tempctrl_load"]
+        finally:
+            peltier.disconnect()
+
+    def test_channel_status_derived_from_prefixed_status(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            lna, load = self._capture_all(peltier, self._SAMPLE)
+            assert lna["status"] == "update"
+            assert load["status"] == "error"
+        finally:
+            peltier.disconnect()
+
+    def test_channel_fields_have_prefix_stripped(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            lna, load = self._capture_all(peltier, self._SAMPLE)
+            assert lna["T_now"] == pytest.approx(25.4)
+            assert lna["drive_level"] == pytest.approx(0.42)
+            assert lna["active"] is True
+            assert lna["int_disabled"] is False
+            assert load["T_now"] is None
+            assert load["active"] is False
+            assert load["int_disabled"] is True
+        finally:
+            peltier.disconnect()
+
+    def test_watchdog_fields_duplicated(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            lna, load = self._capture_all(peltier, self._SAMPLE)
+            for entry in (lna, load):
+                assert entry["watchdog_tripped"] is False
+                assert entry["watchdog_timeout_ms"] == 30000
+                assert entry["app_id"] == 1
+        finally:
+            peltier.disconnect()
+
+    def test_published_shape_stable_across_channel_state(self):
+        """Both streams expose the same key set regardless of values."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            lna, load = self._capture_all(peltier, self._SAMPLE)
+            assert set(lna) == self._EXPECTED_KEYS
+            assert set(load) == self._EXPECTED_KEYS
+        finally:
+            peltier.disconnect()
+
+    def test_published_dict_is_scalar_only(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            for entry in self._capture_all(peltier, self._SAMPLE):
+                for k, v in entry.items():
+                    assert isinstance(v, self._SCALAR_TYPES), (
+                        f"field {k!r} has non-scalar type "
+                        f"{type(v).__name__}"
+                    )
+        finally:
+            peltier.disconnect()
+
+    def test_handler_does_not_mutate_input(self):
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            data = dict(self._SAMPLE)
+            original = dict(self._SAMPLE)
+            self._capture_all(peltier, data)
+            assert data == original
+        finally:
+            peltier.disconnect()
+
+    def test_missing_fields_publish_none(self):
+        """Channel status absent from the source dict publishes None."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            partial = {"sensor_name": "tempctrl", "app_id": 1}
+            lna, load = self._capture_all(peltier, partial)
+            assert lna["status"] is None
+            assert load["status"] is None
+            assert lna["T_now"] is None
+            assert lna["watchdog_tripped"] is None
+            assert lna["watchdog_timeout_ms"] is None
+        finally:
+            peltier.disconnect()

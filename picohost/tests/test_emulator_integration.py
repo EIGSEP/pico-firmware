@@ -462,6 +462,42 @@ class TestRedisIntegration:
         names = [name for name, _ in received]
         assert "temp_mon" in names
 
+    def test_peltier_publishes_two_streams_per_tick(self):
+        """PicoPeltier splits its combined firmware tick into LNA and LOAD."""
+        received = []
+
+        class FakeMetadataWriter:
+            def add(self, name, data):
+                received.append((name, dict(data)))
+
+        peltier = DummyPicoPeltier(
+            "/dev/dummy", metadata_writer=FakeMetadataWriter()
+        )
+        cadence = peltier.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: any(n == "tempctrl_load" for n, _ in received),
+            cadence_ms=cadence,
+        )
+        peltier.disconnect()
+        names = [name for name, _ in received]
+        assert "tempctrl_lna" in names
+        assert "tempctrl_load" in names
+        # No legacy "tempctrl" entries should leak through.
+        assert "tempctrl" not in names
+        # Each tick must publish exactly one entry per stream; check the
+        # tail of the buffer to avoid races on disconnect timing.
+        last_two = received[-2:]
+        last_names = sorted(n for n, _ in last_two)
+        assert last_names == ["tempctrl_lna", "tempctrl_load"]
+        lna_entry = next(d for n, d in reversed(received) if n == "tempctrl_lna")
+        load_entry = next(d for n, d in reversed(received) if n == "tempctrl_load")
+        assert lna_entry["sensor_name"] == "tempctrl_lna"
+        assert load_entry["sensor_name"] == "tempctrl_load"
+        assert "status" in lna_entry and "status" in load_entry
+        assert "T_now" in lna_entry and "T_now" in load_entry
+        assert "watchdog_timeout_ms" in lna_entry
+        assert "watchdog_timeout_ms" in load_entry
+
 
 # --- Convergence Timing ---
 
