@@ -598,7 +598,51 @@ class PicoPeltier(PicoDevice):
             usb_serial=usb_serial,
             verbose=verbose,
         )
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._peltier_redis_handler
         self._start_keepalive()
+
+    _PELTIER_CHANNEL_FIELDS = (
+        "T_now",
+        "timestamp",
+        "T_target",
+        "drive_level",
+        "enabled",
+        "active",
+        "int_disabled",
+        "hysteresis",
+        "clamp",
+    )
+    _PELTIER_STREAMS = (("LNA", "tempctrl_lna"), ("LOAD", "tempctrl_load"))
+
+    def _peltier_redis_handler(self, data):
+        """Fan out the combined tempctrl status dict into two Redis streams.
+
+        The firmware emits one combined message per status tick with
+        ``LNA_*`` / ``LOAD_*`` prefixed fields plus the device-wide
+        watchdog state. We publish two streams (``tempctrl_lna``,
+        ``tempctrl_load``), each matching the standard one-stream-per-
+        sensor schema with a top-level ``status`` derived from the
+        channel's ``LNA_status`` / ``LOAD_status``. The device-wide
+        watchdog fields are duplicated into both streams; both come from
+        the same firmware tick so a momentary tick-to-tick disagreement
+        is harmless.
+        """
+        app_id = data.get("app_id")
+        watchdog_tripped = data.get("watchdog_tripped")
+        watchdog_timeout_ms = data.get("watchdog_timeout_ms")
+        for prefix, stream in self._PELTIER_STREAMS:
+            out = {
+                "sensor_name": stream,
+                "app_id": app_id,
+                "status": data.get(f"{prefix}_status"),
+                "watchdog_tripped": watchdog_tripped,
+                "watchdog_timeout_ms": watchdog_timeout_ms,
+            }
+            for k in self._PELTIER_CHANNEL_FIELDS:
+                out[k] = data.get(f"{prefix}_{k}")
+            self._base_redis_handler(out)
 
     def _start_keepalive(self):
         """Start the background keepalive thread (idempotent)."""
