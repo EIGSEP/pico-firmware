@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/EIGSEP/pico-firmware/compare/v3.2.1...v3.3.0) (2026-05-16)
+
+
+### Features
+
+* **tempctrl:** split status into per-channel Redis streams ([6c6a29d](https://github.com/EIGSEP/pico-firmware/commit/6c6a29d50a2f72f3bebe2604c004fe9a362575db))
+
 ## [3.2.1](https://github.com/EIGSEP/pico-firmware/compare/v3.2.0...v3.2.1) (2026-05-14)
 
 
