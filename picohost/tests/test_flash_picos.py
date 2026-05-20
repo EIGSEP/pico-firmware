@@ -2,7 +2,10 @@
 
 import pytest
 
-from picohost.flash_picos import flash_and_discover
+from picohost.flash_picos import (
+    _resolve_post_flash_port,
+    flash_and_discover,
+)
 
 
 @pytest.fixture
@@ -120,3 +123,144 @@ class TestFlashAndDiscover:
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         assert flash_and_discover(uf2_path=uf2) == []
+
+    def test_resolves_current_port_after_reenumeration(
+        self, monkeypatch, tmp_path
+    ):
+        """Picos may land on a different /dev/ttyACMn after the
+        post-flash reboot. The recorded ``port`` must reflect the
+        current path (looked up via the stable ``usb_serial``), not
+        the pre-flash path — otherwise two flashed Picos can collide
+        on the same recorded port and a Pico that drifted to an
+        unsnapshotted slot is silently dropped.
+        """
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+                "/dev/ttyACM1": "SER_B",
+            },
+        )
+
+        # Post-flash, both Picos have re-enumerated to different slots.
+        post_flash = {"SER_A": "/dev/ttyACM5", "SER_B": "/dev/ttyACM6"}
+        monkeypatch.setattr(
+            fp,
+            "_resolve_post_flash_port",
+            lambda serial: post_flash[serial],
+        )
+
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        serial_data = {
+            "/dev/ttyACM5": {"app_id": 0},
+            "/dev/ttyACM6": {"app_id": 5},
+        }
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: serial_data[port],
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        devices = flash_and_discover(uf2_path=uf2)
+        by_serial = {d["usb_serial"]: d for d in devices}
+        assert by_serial["SER_A"]["port"] == "/dev/ttyACM5"
+        assert by_serial["SER_A"]["app_id"] == 0
+        assert by_serial["SER_B"]["port"] == "/dev/ttyACM6"
+        assert by_serial["SER_B"]["app_id"] == 5
+
+    def test_skips_device_that_does_not_reenumerate(
+        self, monkeypatch, tmp_path
+    ):
+        """A Pico that never re-appears after its post-flash reboot
+        must be dropped from the result rather than capturing some
+        other Pico's JSON via a stale port.
+        """
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+                "/dev/ttyACM1": "SER_B",
+            },
+        )
+
+        # SER_A never re-appears; SER_B comes back fine.
+        monkeypatch.setattr(
+            fp,
+            "_resolve_post_flash_port",
+            lambda serial: {"SER_B": "/dev/ttyACM1"}.get(serial),
+        )
+
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: {"app_id": 5},
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        devices = flash_and_discover(uf2_path=uf2)
+        assert len(devices) == 1
+        assert devices[0]["usb_serial"] == "SER_B"
+        assert devices[0]["port"] == "/dev/ttyACM1"
+
+
+class TestResolvePostFlashPort:
+    def test_returns_current_path_when_serial_is_present(
+        self, monkeypatch
+    ):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {"/dev/ttyACM3": "SER_X", "/dev/ttyACM4": "SER_Y"},
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert _resolve_post_flash_port("SER_X", timeout=0.1) == "/dev/ttyACM3"
+        assert _resolve_post_flash_port("SER_Y", timeout=0.1) == "/dev/ttyACM4"
+
+    def test_returns_none_when_serial_never_appears(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {"/dev/ttyACM3": "SER_X"},
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert _resolve_post_flash_port("MISSING", timeout=0.05) is None
+
+    def test_resolves_after_delayed_reenumeration(self, monkeypatch):
+        """First poll sees the Pico absent (still rebooting); a later
+        poll sees it back. The helper must wait, not give up.
+        """
+        import picohost.flash_picos as fp
+
+        calls = {"n": 0}
+
+        def fake_find():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return {}
+            return {"/dev/ttyACM7": "SER_Z"}
+
+        monkeypatch.setattr(fp, "find_pico_ports", fake_find)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert (
+            _resolve_post_flash_port("SER_Z", timeout=1.0)
+            == "/dev/ttyACM7"
+        )
+        assert calls["n"] >= 3

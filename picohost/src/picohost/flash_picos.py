@@ -71,6 +71,36 @@ def read_json_from_serial(port, baud, timeout):
     raise RuntimeError(f"[{port}] Timed out waiting for JSON")
 
 
+_REENUMERATE_TIMEOUT_S = 10.0
+_REENUMERATE_POLL_S = 0.2
+
+
+def _resolve_post_flash_port(
+    usb_serial, timeout=_REENUMERATE_TIMEOUT_S, poll=_REENUMERATE_POLL_S
+):
+    """Return the current ``/dev/ttyACMn`` path for *usb_serial*.
+
+    Polls :func:`find_pico_ports` until the Pico re-appears after its
+    post-flash reboot, or *timeout* seconds elapse. ``picotool load``
+    triggers a USB re-enumeration, and the kernel does not guarantee
+    that the Pico comes back at the same ``/dev/ttyACMn`` slot it had
+    before — so the pre-flash path captured in the initial snapshot
+    can be stale. ``usb_serial`` is the stable identity we trust.
+
+    Returns ``None`` if the Pico does not re-enumerate within
+    *timeout*. Callers should skip the device in that case rather
+    than read JSON from whatever happens to occupy the pre-flash
+    path (which is almost certainly a different Pico).
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for dev, sn in find_pico_ports().items():
+            if sn == usb_serial:
+                return dev
+        time.sleep(poll)
+    return None
+
+
 def flash_and_discover(
     uf2_path="build/pico_multi.uf2", port=None, baud=115200, timeout=10
 ):
@@ -123,18 +153,31 @@ def flash_and_discover(
             logger.error(f"Flash failed on {port_dev}: {e}")
             continue
 
-        time.sleep(2)  # wait for reboot
-
-        try:
-            data = read_json_from_serial(port_dev, baud, timeout)
-        except RuntimeError as e:
-            logger.error(f"Serial read failed on {port_dev}: {e}")
+        # picotool load reboots the Pico, which re-enumerates as a
+        # CDC device. The kernel may assign a different /dev/ttyACMn
+        # than it had pre-flash, so resolve the current path from
+        # the stable usb_serial before reading JSON — otherwise a
+        # different Pico that drifted into port_dev would have its
+        # status attributed to *this* device's usb_serial.
+        current_port = _resolve_post_flash_port(port_serial)
+        if current_port is None:
+            logger.error(
+                f"Pico serial={port_serial} (pre-flash port "
+                f"{port_dev}) did not re-enumerate within "
+                f"{_REENUMERATE_TIMEOUT_S}s; skipping"
+            )
             continue
 
-        data["port"] = port_dev
+        try:
+            data = read_json_from_serial(current_port, baud, timeout)
+        except RuntimeError as e:
+            logger.error(f"Serial read failed on {current_port}: {e}")
+            continue
+
+        data["port"] = current_port
         data["usb_serial"] = port_serial
         all_devices.append(data)
-        logger.info(f"Read device info from {port_dev}")
+        logger.info(f"Read device info from {current_port}")
 
     return all_devices
 
