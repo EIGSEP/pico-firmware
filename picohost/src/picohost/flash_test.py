@@ -16,13 +16,14 @@ from pathlib import Path
 
 def build_picotool_cmd(uf2_path, bus=None, address=None, usb_serial=None):
     """Return the argv for ``picotool load`` targeting BOOTSEL."""
-    cmd = ["picotool", "load", "-f", "-x", str(uf2_path)]
+    cmd = ["picotool", "load", "-f"]
     if usb_serial is not None:
         cmd += ["--ser", str(usb_serial)]
     if bus is not None:
         cmd += ["--bus", str(bus)]
     if address is not None:
         cmd += ["--address", str(address)]
+    cmd += ["-x", str(uf2_path)]
     return cmd
 
 
