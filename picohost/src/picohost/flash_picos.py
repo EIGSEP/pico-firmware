@@ -78,14 +78,14 @@ _REENUMERATE_POLL_S = 0.2
 def _resolve_post_flash_port(
     usb_serial, timeout=_REENUMERATE_TIMEOUT_S, poll=_REENUMERATE_POLL_S
 ):
-    """Return the current ``/dev/ttyACMn`` path for *usb_serial*.
+    """Return the current serial device path for *usb_serial*.
 
     Polls :func:`find_pico_ports` until the Pico re-appears after its
     post-flash reboot, or *timeout* seconds elapse. ``picotool load``
     triggers a USB re-enumeration, and the kernel does not guarantee
-    that the Pico comes back at the same ``/dev/ttyACMn`` slot it had
-    before — so the pre-flash path captured in the initial snapshot
-    can be stale. ``usb_serial`` is the stable identity we trust.
+    that the Pico comes back at the same device path it had before —
+    so the pre-flash path captured in the initial snapshot can be
+    stale. ``usb_serial`` is the stable identity we trust.
 
     Returns ``None`` if the Pico does not re-enumerate within
     *timeout*. Callers should skip the device in that case rather
