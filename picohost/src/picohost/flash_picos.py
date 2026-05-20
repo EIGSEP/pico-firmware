@@ -102,7 +102,11 @@ def _resolve_post_flash_port(
 
 
 def flash_and_discover(
-    uf2_path="build/pico_multi.uf2", port=None, baud=115200, timeout=10
+    uf2_path="build/pico_multi.uf2",
+    port=None,
+    usb_serial=None,
+    baud=115200,
+    timeout=10,
 ):
     """
     Flash all attached Picos and read device config from each.
@@ -114,6 +118,11 @@ def flash_and_discover(
     port : str, optional
         Limit to a single serial port.  ``None`` means all discovered
         Picos.
+    usb_serial : str, optional
+        Limit to the Pico with this USB serial number (board unique
+        ID). Stable across reboots and port renumbering — preferred
+        over ``port`` for targeted flashing. If both are given, the
+        device must match both.
     baud : int
         Serial baud rate for reading JSON after flash.
     timeout : int
@@ -137,6 +146,8 @@ def flash_and_discover(
     ports = find_pico_ports()
     if port:
         ports = {k: v for k, v in ports.items() if k == port}
+    if usb_serial:
+        ports = {k: v for k, v in ports.items() if v == usb_serial}
 
     if not ports:
         logger.info("No Raspberry Pi Pico serial ports found")
@@ -207,6 +218,16 @@ def main():
         "--port", default=None, help="Serial port of pico, None means all"
     )
     p.add_argument(
+        "--usb-serial",
+        default=None,
+        help=(
+            "USB serial number (Pico board unique ID). Stable across "
+            "reboots and port renumbering — preferred over --port for "
+            "targeted flashing. Look up in `devices_info.json` or with "
+            "`picotool info -a`."
+        ),
+    )
+    p.add_argument(
         "--uf2",
         default="build/pico_multi.uf2",
         help="Path to your pico_multi.uf2",
@@ -261,6 +282,7 @@ def main():
         all_devices = flash_and_discover(
             uf2_path=args.uf2,
             port=args.port,
+            usb_serial=args.usb_serial,
             baud=args.baud,
             timeout=args.timeout,
         )

@@ -67,6 +67,26 @@ class TestFlashAndDiscover:
         assert len(devices) == 1
         assert devices[0]["port"] == "/dev/ttyACM0"
 
+    def test_usb_serial_filter(self, _mock_flash):
+        uf2, flashed = _mock_flash
+        devices = flash_and_discover(uf2_path=uf2, usb_serial="SER_B")
+        assert len(devices) == 1
+        assert devices[0]["usb_serial"] == "SER_B"
+        assert devices[0]["port"] == "/dev/ttyACM1"
+        assert flashed == ["SER_B"]
+
+    def test_usb_serial_no_match_returns_empty(self, _mock_flash):
+        uf2, _ = _mock_flash
+        assert flash_and_discover(uf2_path=uf2, usb_serial="MISSING") == []
+
+    def test_port_and_usb_serial_must_both_match(self, _mock_flash):
+        uf2, _ = _mock_flash
+        # SER_A is on /dev/ttyACM0, so this combination is empty
+        devices = flash_and_discover(
+            uf2_path=uf2, port="/dev/ttyACM0", usb_serial="SER_B"
+        )
+        assert devices == []
+
     def test_missing_uf2_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="UF2 file not found"):
             flash_and_discover(uf2_path=tmp_path / "nonexistent.uf2")

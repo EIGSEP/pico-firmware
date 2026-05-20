@@ -16,8 +16,17 @@ class TestBuildPicotoolCmd:
     def test_with_bus_and_address(self):
         cmd = build_picotool_cmd("foo.uf2", bus=1, address=4)
         assert cmd == [
-            "picotool", "load", "-f", "-x", "foo.uf2",
+            "picotool", "load", "-f",
             "--bus", "1", "--address", "4",
+            "-x", "foo.uf2",
+        ]
+
+    def test_with_usb_serial(self):
+        cmd = build_picotool_cmd("foo.uf2", usb_serial="E66160F423456789")
+        assert cmd == [
+            "picotool", "load", "-f",
+            "--ser", "E66160F423456789",
+            "-x", "foo.uf2",
         ]
 
     def test_accepts_path(self):
@@ -60,7 +69,30 @@ class TestFlashTestImage:
         monkeypatch.setattr(subprocess, "run", fake_run)
         flash_test_image(uf2, bus=2, address=7)
 
-        assert captured["cmd"][-4:] == ["--bus", "2", "--address", "7"]
+        assert captured["cmd"] == [
+            "picotool", "load", "-f",
+            "--bus", "2", "--address", "7",
+            "-x", str(uf2),
+        ]
+
+    def test_passes_usb_serial(self, monkeypatch, tmp_path):
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        flash_test_image(uf2, usb_serial="E66160F4ABCDEF01")
+
+        assert captured["cmd"] == [
+            "picotool", "load", "-f",
+            "--ser", "E66160F4ABCDEF01",
+            "-x", str(uf2),
+        ]
 
     def test_nonzero_exit_raises(self, monkeypatch, tmp_path):
         uf2 = tmp_path / "test.uf2"
