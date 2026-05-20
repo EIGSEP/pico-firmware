@@ -59,8 +59,8 @@ def read_json_from_serial(port, baud, timeout):
     Open the serial port, read until a valid JSON line appears or timeout.
     """
     with Serial(port, baudrate=baud, timeout=1) as ser:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             line = ser.readline().decode("utf-8", errors="ignore").strip()
             if not line:
                 continue
@@ -92,8 +92,8 @@ def _resolve_post_flash_port(
     than read JSON from whatever happens to occupy the pre-flash
     path (which is almost certainly a different Pico).
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         for dev, sn in find_pico_ports().items():
             if sn == usb_serial:
                 return dev
@@ -170,7 +170,7 @@ def flash_and_discover(
 
         try:
             data = read_json_from_serial(current_port, baud, timeout)
-        except RuntimeError as e:
+        except (RuntimeError, OSError) as e:
             logger.error(f"Serial read failed on {current_port}: {e}")
             continue
 
