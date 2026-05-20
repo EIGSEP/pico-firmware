@@ -14,9 +14,11 @@ import sys
 from pathlib import Path
 
 
-def build_picotool_cmd(uf2_path, bus=None, address=None):
+def build_picotool_cmd(uf2_path, bus=None, address=None, usb_serial=None):
     """Return the argv for ``picotool load`` targeting BOOTSEL."""
     cmd = ["picotool", "load", "-f", "-x", str(uf2_path)]
+    if usb_serial is not None:
+        cmd += ["--ser", str(usb_serial)]
     if bus is not None:
         cmd += ["--bus", str(bus)]
     if address is not None:
@@ -24,7 +26,7 @@ def build_picotool_cmd(uf2_path, bus=None, address=None):
     return cmd
 
 
-def flash_test_image(uf2_path, bus=None, address=None):
+def flash_test_image(uf2_path, bus=None, address=None, usb_serial=None):
     """Flash *uf2_path* onto a BOOTSEL-mode Pico via picotool.
 
     Parameters
@@ -35,6 +37,9 @@ def flash_test_image(uf2_path, bus=None, address=None):
         USB bus / device address. Forwarded to picotool to disambiguate
         when multiple BOOTSEL devices are connected. Discover values
         with ``picotool info -ab``.
+    usb_serial : str, optional
+        Pico board unique ID (flash serial). Stable across reboots and
+        BOOTSEL toggles; preferred over bus/address when known.
 
     Raises
     ------
@@ -47,7 +52,9 @@ def flash_test_image(uf2_path, bus=None, address=None):
     if not uf2_path.is_file():
         raise FileNotFoundError(f"UF2 file not found: {uf2_path}")
 
-    cmd = build_picotool_cmd(uf2_path, bus=bus, address=address)
+    cmd = build_picotool_cmd(
+        uf2_path, bus=bus, address=address, usb_serial=usb_serial
+    )
     print(f"Running: {' '.join(cmd)}")
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -58,8 +65,9 @@ def flash_test_image(uf2_path, bus=None, address=None):
             print(output, end="", file=sys.stderr)
         raise RuntimeError(
             f"picotool failed (exit {res.returncode}). "
-            "If multiple BOOTSEL Picos are connected, pass "
-            "--bus and --address from `picotool info -ab`."
+            "If multiple BOOTSEL Picos are connected, pass --usb-serial "
+            "(from `picotool info -a`) or --bus/--address "
+            "(from `picotool info -ab`)."
             + (f"\npicotool output:\n{output}" if output else "")
         )
     if output:
@@ -96,10 +104,24 @@ def main():
         default=None,
         help="USB device address of the target Pico (companion to --bus).",
     )
+    p.add_argument(
+        "--usb-serial",
+        default=None,
+        help=(
+            "Pico board unique ID (flash serial). Preferred over "
+            "--bus/--address: stable across reboots and BOOTSEL toggles. "
+            "Discover with `picotool info -a`."
+        ),
+    )
     args = p.parse_args()
 
     try:
-        flash_test_image(args.uf2, bus=args.bus, address=args.address)
+        flash_test_image(
+            args.uf2,
+            bus=args.bus,
+            address=args.address,
+            usb_serial=args.usb_serial,
+        )
     except FileNotFoundError as e:
         print(
             f"{e}\nBuild the test image first with ./build.sh.",
