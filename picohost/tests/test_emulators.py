@@ -582,7 +582,7 @@ class TestLidarEmulator:
         emu = LidarEmulator()
         status = emu.get_status()
         assert status["sensor_name"] == "lidar"
-        assert status["distance_m"] == 100.0
+        assert status["distance_m"] == 0.0
 
     def test_noise_is_mean_reverting(self):
         emu = LidarEmulator()

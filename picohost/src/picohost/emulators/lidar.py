@@ -9,8 +9,9 @@ class LidarEmulator(PicoEmulator):
     """Emulates src/lidar.c firmware."""
 
     def __init__(self, app_id=4, **kwargs):
-        self._base_distance = 100.0  # meters
-        self.distance = self._base_distance
+        self._base_distance = 100.0  # meters; noise mean, not initial value
+        # Firmware static struct {0}: distance unread until first successful op.
+        self.distance = 0.0
         self._sensor_failed = False  # set via simulate_sensor_failure()
         # Per-cycle freshness flag: True iff op() refreshed the
         # distance reading since the last get_status() call.
@@ -18,7 +19,7 @@ class LidarEmulator(PicoEmulator):
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.distance = self._base_distance
+        pass  # lidar_init() only sets up I2C; distance is not reset
 
     def server(self, cmd):
         pass  # lidar does not handle commands

@@ -399,7 +399,7 @@ class TestLidarProtocol:
     def test_no_commands_accepted(self):
         emu = LidarEmulator()
         emu.server({"distance_m": 999})
-        assert emu.distance == 100.0  # unchanged
+        assert emu.distance == 0.0  # unchanged
 
     def test_distance_is_float(self):
         """lidar.c: distance = dist_cm / 100.0 → always float."""

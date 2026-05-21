@@ -44,6 +44,6 @@ class PotMonEmulator(PicoEmulator):
             "sensor_name": "potmon",
             "app_id": self.app_id,
             "status": "update",
-            "pot_el_voltage": round(self.voltage_el, 4),
-            "pot_az_voltage": round(self.voltage_az, 4),
+            "pot_el_voltage": self.voltage_el,
+            "pot_az_voltage": self.voltage_az,
         }
