@@ -32,8 +32,6 @@ picohost-resolve = "picohost.resolve:main"
 
 [project.optional-dependencies]
 dev = [
-  "build",
-  "twine",
   "ruff",
   "pytest",
   "pytest-cov",
