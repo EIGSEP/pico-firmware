@@ -21,7 +21,7 @@ static bool watchdog_tripped = false;
 // Forward declarations
 static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
 static void tempctrl_update_sensor_drive(TempControl *);
-static void tempctrl_drive_raw(TempControl *);
+static void tempctrl_apply_drive(TempControl *);
 static void tempctrl_check_stall(TempControl *);
 static void tempctrl_apply_enable(TempControl *, bool);
 static bool tempctrl_drive_allowed(const TempControl *);
@@ -214,9 +214,8 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         tempctrl_check_stall(tempctrl);
         /* else: drive unchanged, PWM hardware holds previous level */
     } else {
-        /* XXX here we set drive to 0 and drive raw at 0, unneccesary? */
         tempctrl_reset_controller_state(tempctrl);
-        tempctrl_drive_raw(tempctrl);
+        tempctrl_apply_drive(tempctrl);
         // Not actively driving — no stall window pending.
         tempctrl->stall_window_active = false;
     }
@@ -239,7 +238,7 @@ void tempctrl_op(uint8_t app_id) {
 }
 
 // Helper functions
-static void tempctrl_drive_raw(TempControl *tempctrl) {
+static void tempctrl_apply_drive(TempControl *tempctrl) {
     uint32_t pwm_level = (uint32_t)(fabsf(tempctrl->drive) * PWM_WRAP);
     bool forward = (tempctrl->drive >= 0);
 
@@ -274,7 +273,7 @@ static void tempctrl_pi_drive(TempControl *tc) {
            preserves the existing anti-chatter design and prevents the
            integrator from winding up at setpoint. */
         tempctrl_reset_controller_state(tc);
-        tempctrl_drive_raw(tc); /* XXX again calling drive with 0 drive */
+        tempctrl_apply_drive(tc);
         return;
     }
 
@@ -309,7 +308,7 @@ static void tempctrl_pi_drive(TempControl *tc) {
         if (tc->drive < -tc->clamp) tc->drive = -tc->clamp;
     }
 
-    tempctrl_drive_raw(tc);
+    tempctrl_apply_drive(tc);
 }
 
 static void tempctrl_check_stall(TempControl *tempctrl) {
@@ -339,7 +338,7 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
         tempctrl->stall_tripped = true;
         tempctrl->active = false;
         tempctrl->drive = 0.0;
-        tempctrl_drive_raw(tempctrl);
+        tempctrl_apply_drive(tempctrl);
         tempctrl->stall_window_active = false;
     } else {
         // Healthy: roll the window forward.
