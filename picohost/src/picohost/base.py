@@ -588,6 +588,7 @@ class PicoPeltier(PicoDevice):
         self._keepalive_interval = keepalive_interval
         self._last_watchdog_timeout_ms = None
         self._last_clamp = {}
+        self._last_cooling = {}
         self._last_gains = {}
         self._last_temperature = {}
         self._last_enable = None
@@ -613,6 +614,7 @@ class PicoPeltier(PicoDevice):
         "active",
         "int_disabled",
         "stall_tripped",
+        "cooling_enabled",
         "hysteresis",
         "clamp",
         "Kp",
@@ -694,10 +696,13 @@ class PicoPeltier(PicoDevice):
         (hard watchdog, brownout, picotool re-flash via BOOTSEL) drops
         USB CDC, so reader-thread reconnect coincides with the firmware
         coming up at defaults. Replay whatever the host most recently
-        pushed in a safe order: watchdog → clamp → gains → temperature
-        → enable. Gains land before temperature so the channel is fully
-        tuned the instant it goes active. Keepalive starts last so the
-        firmware watchdog is configured before we start pinging it.
+        pushed in a safe order: watchdog → clamp → cooling_enabled →
+        gains → temperature → enable. cooling_enabled lands between
+        clamp and gains so the asymmetric-clamp safety setting is in
+        place before any drive can result from the next setpoint. Gains
+        land before temperature so the channel is fully tuned the
+        instant it goes active. Keepalive starts last so the firmware
+        watchdog is configured before we start pinging it.
         """
         if self._last_watchdog_timeout_ms is not None:
             self.send_command(
@@ -705,6 +710,8 @@ class PicoPeltier(PicoDevice):
             )
         if self._last_clamp:
             self.send_command(dict(self._last_clamp))
+        if self._last_cooling:
+            self.send_command(dict(self._last_cooling))
         if self._last_gains:
             self.send_command(dict(self._last_gains))
         if self._last_temperature:
@@ -767,6 +774,29 @@ class PicoPeltier(PicoDevice):
         self.send_command(cmd)
         if cmd:
             self._last_clamp.update(cmd)
+
+    def set_cooling_enabled(self, LNA=None, LOAD=None):
+        """Allow/forbid negative (cooling) drive per channel.
+
+        ``False`` clamps drive to ``[0, +clamp]`` instead of
+        ``[-clamp, +clamp]`` firmware-side — the cooling-mode
+        thermal-runaway guard. Firmware default after reboot is
+        ``True`` (symmetric); deployments that cannot dissipate
+        Peltier heat should explicitly set this ``False`` on the
+        affected channel. Cached for replay on reconnect.
+        """
+        cmd = {}
+        if LNA is not None:
+            if not isinstance(LNA, bool):
+                raise TypeError("LNA must be a bool or None")
+            cmd["LNA_cooling_enabled"] = LNA
+        if LOAD is not None:
+            if not isinstance(LOAD, bool):
+                raise TypeError("LOAD must be a bool or None")
+            cmd["LOAD_cooling_enabled"] = LOAD
+        self.send_command(cmd)
+        if cmd:
+            self._last_cooling.update(cmd)
 
     def set_gains(self, LNA_Kp=None, LNA_Ki=None, LOAD_Kp=None, LOAD_Ki=None):
         """Set PI gains per channel.

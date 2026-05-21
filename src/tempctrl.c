@@ -60,6 +60,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->enabled = false;
     tempctrl->active = false;
     tempctrl->internally_disabled = false;
+    tempctrl->cooling_enabled = true;
     tempctrl->T_now = 0;
     tempctrl->drive = 0.0;
     tempctrl->stall_tripped = false;
@@ -122,6 +123,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
         tempctrl_lna.integral = 0.0f;
         tempctrl_lna.last_sample_ms = 0;
     }
+    item_json = cJSON_GetObjectItem(root, "LNA_cooling_enabled");
+    if (item_json) tempctrl_lna.cooling_enabled = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
     tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
     item_json = cJSON_GetObjectItem(root, "LOAD_enable");
@@ -146,6 +149,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
         tempctrl_load.integral = 0.0f;
         tempctrl_load.last_sample_ms = 0;
     }
+    item_json = cJSON_GetObjectItem(root, "LOAD_cooling_enabled");
+    if (item_json) tempctrl_load.cooling_enabled = item_json->valueint ? true : false;
 
     // Watchdog timeout configuration (0 = disabled)
     item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
@@ -168,10 +173,10 @@ void tempctrl_status(uint8_t app_id) {
     const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
     const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
 
-    /* 32 KV pairs: 4 device-wide + 14 per channel * 2 channels. send_json
+    /* 34 KV pairs: 4 device-wide + 15 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(32,
+    send_json(34,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -185,6 +190,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LNA_active", tempctrl_lna.active,
         KV_BOOL, "LNA_int_disabled", tempctrl_lna.internally_disabled,
         KV_BOOL, "LNA_stall_tripped", tempctrl_lna.stall_tripped,
+        KV_BOOL, "LNA_cooling_enabled", tempctrl_lna.cooling_enabled,
         KV_FLOAT, "LNA_hysteresis", tempctrl_lna.hysteresis,
         KV_FLOAT, "LNA_clamp", tempctrl_lna.clamp,
         KV_FLOAT, "LNA_Kp", tempctrl_lna.Kp,
@@ -199,6 +205,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LOAD_active", tempctrl_load.active,
         KV_BOOL, "LOAD_int_disabled", tempctrl_load.internally_disabled,
         KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
+        KV_BOOL, "LOAD_cooling_enabled", tempctrl_load.cooling_enabled,
         KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
         KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp,
         KV_FLOAT, "LOAD_Kp", tempctrl_load.Kp,
@@ -314,20 +321,28 @@ static void tempctrl_pi_drive(TempControl *tc) {
                                          : (tc->integral + T_delta * dt);
     float tentative_drive = p_term + tc->Ki * tentative_i;
 
+    /* Asymmetric clamp: cooling_enabled=false forbids negative drive
+       (the cooling-mode thermal-runaway guard). The lower bound is the
+       saturation floor used by both anti-windup and the final clamp. */
+    float lower_clamp = tc->cooling_enabled ? -tc->clamp : 0.0f;
+
     /* Anti-windup: only commit the new integral if it would not push
-       further into the saturation we're already against. */
-    bool sat_high = (tentative_drive >  tc->clamp) && (T_delta > 0);
-    bool sat_low  = (tentative_drive < -tc->clamp) && (T_delta < 0);
+       further into the saturation we're already against. With cooling
+       disabled and T_delta<0 (we want to cool but can't), tentative_drive
+       is negative — sat_low fires against lower_clamp=0, freezing the
+       integrator instead of letting it wind up. */
+    bool sat_high = (tentative_drive >  tc->clamp)  && (T_delta > 0);
+    bool sat_low  = (tentative_drive <  lower_clamp) && (T_delta < 0);
 
     if (sat_high) {
         tc->drive = tc->clamp;
     } else if (sat_low) {
-        tc->drive = -tc->clamp;
+        tc->drive = lower_clamp;
     } else {
         tc->integral = tentative_i;
         tc->drive = tentative_drive;
-        if (tc->drive >  tc->clamp) tc->drive =  tc->clamp;
-        if (tc->drive < -tc->clamp) tc->drive = -tc->clamp;
+        if (tc->drive >  tc->clamp)   tc->drive =  tc->clamp;
+        if (tc->drive <  lower_clamp) tc->drive =  lower_clamp;
     }
 
     tempctrl_apply_drive(tc);

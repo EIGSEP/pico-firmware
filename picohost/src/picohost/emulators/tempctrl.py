@@ -47,6 +47,10 @@ class TempControlState:
         self.enabled = False
         self.active = False
         self.internally_disabled = False
+        # Asymmetric clamp guard (see tempctrl.h). True preserves the
+        # original symmetric drive range; False forbids drive<0 so the
+        # PI loop saturates at [0, +clamp] instead of [-clamp, +clamp].
+        self.cooling_enabled = True
         self.timestamp = 0.0
         # Stall guard mirror (see tempctrl_check_stall in tempctrl.c).
         self.stall_tripped = False
@@ -100,16 +104,21 @@ def tempctrl_pi_drive(tc, dt=DT_PER_PI_TICK_S):
         tentative_i = tc.integral + T_delta * effective_dt
     tentative_drive = p_term + tc.Ki * tentative_i
 
+    # Asymmetric clamp: cooling_enabled=False forbids negative drive so
+    # the PI loop saturates at [0, +clamp] instead of [-clamp, +clamp].
+    # Mirrors the firmware lower_clamp in tempctrl_pi_drive (tempctrl.c).
+    lower_clamp = -tc.clamp if tc.cooling_enabled else 0.0
+
     sat_high = tentative_drive > tc.clamp and T_delta > 0
-    sat_low = tentative_drive < -tc.clamp and T_delta < 0
+    sat_low = tentative_drive < lower_clamp and T_delta < 0
 
     if sat_high:
         tc.drive = tc.clamp
     elif sat_low:
-        tc.drive = -tc.clamp
+        tc.drive = lower_clamp
     else:
         tc.integral = tentative_i
-        tc.drive = max(-tc.clamp, min(tc.clamp, tentative_drive))
+        tc.drive = max(lower_clamp, min(tc.clamp, tentative_drive))
 
 
 # Mirrors TEMPCTRL_STALL_WINDOW_MS / TEMPCTRL_STALL_MIN_DELTA in tempctrl.h.
@@ -200,6 +209,13 @@ class TempCtrlEmulator(PicoEmulator):
             if key in cmd and _safe_int(cmd[key], 0):
                 tc.integral = 0.0
                 tc.last_sample_seen = False
+
+            key = f"{prefix}_cooling_enabled"
+            if key in cmd:
+                # Mirror firmware bool parse (item_json->valueint ? true : false)
+                # and the existing *_enable handling: cJSON's valueint is 0 for
+                # non-numeric JSON, so a string like "false" disables.
+                tc.cooling_enabled = bool(_safe_int(cmd[key], 0))
 
         if "watchdog_timeout_ms" in cmd:
             val = _safe_int(
@@ -310,6 +326,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_active": self.lna.active,
             "LNA_int_disabled": self.lna.internally_disabled,
             "LNA_stall_tripped": self.lna.stall_tripped,
+            "LNA_cooling_enabled": self.lna.cooling_enabled,
             "LNA_hysteresis": self.lna.hysteresis,
             "LNA_clamp": self.lna.clamp,
             "LNA_Kp": self.lna.Kp,
@@ -324,6 +341,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_active": self.load.active,
             "LOAD_int_disabled": self.load.internally_disabled,
             "LOAD_stall_tripped": self.load.stall_tripped,
+            "LOAD_cooling_enabled": self.load.cooling_enabled,
             "LOAD_hysteresis": self.load.hysteresis,
             "LOAD_clamp": self.load.clamp,
             "LOAD_Kp": self.load.Kp,
