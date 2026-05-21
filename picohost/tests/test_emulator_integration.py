@@ -425,7 +425,7 @@ class TestPeltierWatchdog:
             p.disconnect()
 
     def test_watchdog_trips_without_keepalive(self):
-        """Without keepalive, the watchdog trips and disables peltiers."""
+        """Without keepalive, the watchdog trip flag gates drive off."""
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
             cadence = p.EMULATOR_CADENCE_MS

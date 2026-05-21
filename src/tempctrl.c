@@ -25,6 +25,7 @@ static void tempctrl_drive_raw(TempControl *);
 static void tempctrl_hysteresis_drive(TempControl *);
 static void tempctrl_check_stall(TempControl *);
 static void tempctrl_apply_enable(TempControl *, bool);
+static bool tempctrl_drive_allowed(const TempControl *);
 
 void init_single_tempctrl(TempControl *tempctrl,
                           uint dir_pin1, uint dir_pin2, uint pwm_pin,
@@ -81,10 +82,12 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
         return;
     }
 
-    // Any valid command resets the watchdog timer and clears the trip flag.
-    // The host must explicitly re-enable peltiers after a trip.
+    // Any valid command refreshes the watchdog timer, but the trip flag
+    // is sticky: a keepalive that arrives after the timeout already fired
+    // must not silently re-engage the peltiers. The host clears
+    // watchdog_tripped by explicitly sending *_enable=true (see
+    // tempctrl_apply_enable), mirroring the stall-trip ack pattern.
     last_cmd_time = get_absolute_time();
-    watchdog_tripped = false;
 
     // Parse channel selection (default to both)
     item_json = cJSON_GetObjectItem(root, "LNA_temp_target");
@@ -170,7 +173,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // Handle sensor 1 error or drive Peltiers based on hysteresis control
     tempctrl->internally_disabled = temp_sensor_has_error(&tempctrl->temp_sensor) ? true : false;
 
-    if (tempctrl->enabled && !tempctrl->internally_disabled) {
+    if (tempctrl_drive_allowed(tempctrl)) {
         tempctrl_hysteresis_drive(tempctrl);
         tempctrl_check_stall(tempctrl);
     } else {
@@ -183,12 +186,13 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
 }
 
 void tempctrl_op(uint8_t app_id) {
-    // Communication watchdog: disable peltiers if no command received within timeout
+    // Communication watchdog: trip the (app-wide) flag if no command has
+    // arrived within the timeout. The flag is the runtime gate — `enabled`
+    // is host intent and stays untouched, so the host can see exactly which
+    // channels it had asked for vs. which are blocked by the trip.
     if (watchdog_timeout_ms > 0 && !watchdog_tripped) {
         int64_t elapsed_us = absolute_time_diff_us(last_cmd_time, get_absolute_time());
         if (elapsed_us > (int64_t)watchdog_timeout_ms * 1000) {
-            tempctrl_lna.enabled = false;
-            tempctrl_load.enabled = false;
             watchdog_tripped = true;
         }
     }
@@ -255,10 +259,11 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
     }
     if (fabsf(tempctrl->T_now - tempctrl->stall_check_T) < TEMPCTRL_STALL_MIN_DELTA) {
         // Drive engaged for a full window with no meaningful temperature
-        // movement — sensor stuck or Peltier ineffective. Trip the channel
-        // and force the host to acknowledge by re-enabling it.
+        // movement — sensor stuck or Peltier ineffective. Trip the channel;
+        // `enabled` stays as the host set it, and the trip flag is the
+        // runtime gate. Host clears it via *_enable=true (see
+        // tempctrl_apply_enable).
         tempctrl->stall_tripped = true;
-        tempctrl->enabled = false;
         tempctrl->active = false;
         tempctrl->drive = 0.0;
         tempctrl_drive_raw(tempctrl);
@@ -271,11 +276,23 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
 }
 
 static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
-    // Rising edge clears a sticky stall trip — the operator has acknowledged
-    // the fault by explicitly re-enabling the channel.
-    if (new_enabled && !tempctrl->enabled) {
+    // *_enable=true is the host's explicit ack of sticky trips: it clears
+    // this channel's stall flag and the app-wide watchdog flag. `enabled`
+    // itself is pure host intent — firmware never mutates it, so the host
+    // can always tell from status whether a channel is off because it was
+    // asked off (`enabled=false`) or because a trip is gating it
+    // (`enabled=true` with a trip flag set).
+    if (new_enabled) {
         tempctrl->stall_tripped = false;
         tempctrl->stall_window_active = false;
+        watchdog_tripped = false;
     }
     tempctrl->enabled = new_enabled;
+}
+
+static bool tempctrl_drive_allowed(const TempControl *tempctrl) {
+    return tempctrl->enabled
+        && !tempctrl->internally_disabled
+        && !tempctrl->stall_tripped
+        && !watchdog_tripped;
 }

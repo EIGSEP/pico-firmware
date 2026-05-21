@@ -225,7 +225,11 @@ class TestTempCtrlEmulator:
 
 class TestTempCtrlWatchdog:
     def test_watchdog_trips_after_timeout(self):
-        """Watchdog disables peltiers when no command arrives within timeout."""
+        """Watchdog flag trips when no command arrives within timeout.
+
+        `enabled` is host intent and stays untouched; the trip flag is the
+        runtime gate that zeroes drive.
+        """
         emu = TempCtrlEmulator()
         emu.server({"LNA_enable": True, "LOAD_enable": True})
         assert emu.lna.enabled is True
@@ -234,19 +238,45 @@ class TestTempCtrlWatchdog:
         emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
         emu.op()
         assert emu.watchdog_tripped is True
-        assert emu.lna.enabled is False
-        assert emu.load.enabled is False
+        # Host intent is preserved.
+        assert emu.lna.enabled is True
+        assert emu.load.enabled is True
+        # Trip gates drive to zero on both channels.
+        assert emu.lna.drive == 0.0
+        assert emu.load.drive == 0.0
 
-    def test_server_resets_watchdog(self):
-        """Any command resets the watchdog timer and clears the trip flag."""
+    def test_keepalive_does_not_clear_watchdog_trip(self):
+        """A bare keepalive refreshes the timer but the trip flag is sticky."""
         emu = TempCtrlEmulator()
         # Trip the watchdog
         emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
         emu.op()
         assert emu.watchdog_tripped is True
-        # Any command clears the trip
+        # A non-enable command (e.g. keepalive) must not silently re-engage
+        # the peltiers — the host has to explicitly ack with *_enable=true.
+        emu.server({})
+        assert emu.watchdog_tripped is True
+        emu.server({"LNA_temp_target": 28.0})
+        assert emu.watchdog_tripped is True
+
+    def test_enable_true_clears_watchdog_trip(self):
+        """*_enable=true is the explicit ack that clears the watchdog flag."""
+        emu = TempCtrlEmulator()
+        emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
+        emu.op()
+        assert emu.watchdog_tripped is True
         emu.server({"LNA_enable": True})
         assert emu.watchdog_tripped is False
+
+    def test_enable_false_does_not_clear_watchdog_trip(self):
+        """Disabling a channel is not an ack — trip stays sticky."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_enable": True})
+        emu._last_cmd_time = time.time() - (emu.watchdog_timeout_ms / 1000 + 1)
+        emu.op()
+        assert emu.watchdog_tripped is True
+        emu.server({"LNA_enable": False})
+        assert emu.watchdog_tripped is True
 
     def test_watchdog_does_not_trip_before_timeout(self):
         """Watchdog stays clear while commands arrive within timeout."""
@@ -281,7 +311,8 @@ class TestTempCtrlStallGuard:
 
         tc.stall_check_time = time.time() - (mod.STALL_WINDOW_MS / 1000 + 1)
 
-    def test_stall_trip_disables_channel(self):
+    def test_stall_trip_gates_drive(self):
+        """Stall trip zeroes drive while leaving host-intent `enabled` alone."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
@@ -292,7 +323,11 @@ class TestTempCtrlStallGuard:
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
-        assert emu.lna.enabled is False
+        # Host intent preserved; trip flag is the runtime gate.
+        assert emu.lna.enabled is True
+        assert emu.lna.drive == 0.0
+        # Subsequent ops keep drive at zero — the gate stays closed.
+        emu.op()
         assert emu.lna.drive == 0.0
 
     def test_stall_does_not_trip_when_temperature_moves(self):
@@ -322,8 +357,8 @@ class TestTempCtrlStallGuard:
         emu.op()
         assert emu.lna.stall_tripped is False
 
-    def test_re_enable_clears_stall_trip(self):
-        """Rising edge of enable acknowledges the trip and resets the window."""
+    def test_enable_true_clears_stall_trip(self):
+        """An explicit *_enable=true is the host's ack of a stall trip."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
@@ -332,10 +367,23 @@ class TestTempCtrlStallGuard:
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
-        assert emu.lna.enabled is False
+        assert emu.lna.enabled is True
         emu.server({"LNA_enable": True})
         assert emu.lna.stall_tripped is False
         assert emu.lna.enabled is True
+
+    def test_non_enable_command_does_not_clear_stall_trip(self):
+        """Setting a new temp target must not silently clear a stall trip."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
+        emu.op()
+        self._force_window_elapsed(emu.lna)
+        emu.op()
+        assert emu.lna.stall_tripped is True
+        emu.server({"LNA_temp_target": 28.0})
+        assert emu.lna.stall_tripped is True
 
     def test_channels_trip_independently(self):
         """A stalled LOAD does not knock out a healthy LNA."""
@@ -355,7 +403,10 @@ class TestTempCtrlStallGuard:
         self._force_window_elapsed(emu.load)
         emu.op()
         assert emu.load.stall_tripped is True
-        assert emu.load.enabled is False
+        # Host intent unchanged on the tripped channel.
+        assert emu.load.enabled is True
+        assert emu.load.drive == 0.0
+        # LNA is unaffected.
         assert emu.lna.stall_tripped is False
         assert emu.lna.enabled is True
 

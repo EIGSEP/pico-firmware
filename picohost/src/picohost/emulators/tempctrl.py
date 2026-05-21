@@ -69,10 +69,10 @@ class TempCtrlEmulator(PicoEmulator):
         self._last_cmd_time = time.time()
 
     def server(self, cmd):
-        # Any valid command resets the watchdog timer and clears the trip flag.
-        # The host must explicitly re-enable peltiers after a trip.
+        # Any valid command refreshes the watchdog timer, but the trip flag
+        # is sticky: the host clears it by explicitly sending *_enable=true
+        # (see firmware tempctrl_apply_enable).
         self._last_cmd_time = time.time()
-        self.watchdog_tripped = False
 
         for prefix, tc in [("LNA", self.lna), ("LOAD", self.load)]:
             key = f"{prefix}_temp_target"
@@ -82,11 +82,13 @@ class TempCtrlEmulator(PicoEmulator):
             key = f"{prefix}_enable"
             if key in cmd:
                 new_enabled = bool(cmd[key])
-                # Rising edge clears the sticky stall trip — mirrors
-                # tempctrl_apply_enable() in tempctrl.c.
-                if new_enabled and not tc.enabled:
+                # *_enable=true is the host's ack of sticky trips: it clears
+                # this channel's stall flag and the app-wide watchdog flag.
+                # `enabled` is host intent only; firmware never mutates it.
+                if new_enabled:
                     tc.stall_tripped = False
                     tc.stall_window_active = False
+                    self.watchdog_tripped = False
                 tc.enabled = new_enabled
 
             key = f"{prefix}_hysteresis"
@@ -112,8 +114,16 @@ class TempCtrlEmulator(PicoEmulator):
         tc = self.lna if channel == "LNA" else self.load
         tc.internally_disabled = error
 
+    def _drive_allowed(self, tc):
+        return (
+            tc.enabled
+            and not tc.internally_disabled
+            and not tc.stall_tripped
+            and not self.watchdog_tripped
+        )
+
     def _update_channel(self, tc):
-        if tc.enabled and not tc.internally_disabled:
+        if self._drive_allowed(tc):
             tempctrl_hysteresis_drive(tc)
             if not tc.thermal_frozen:
                 tc.T_now += tc.drive * THERMAL_DRIFT_RATE
@@ -140,7 +150,6 @@ class TempCtrlEmulator(PicoEmulator):
             return
         if abs(tc.T_now - tc.stall_check_T) < STALL_MIN_DELTA:
             tc.stall_tripped = True
-            tc.enabled = False
             tc.active = False
             tc.drive = 0.0
             tc.stall_window_active = False
@@ -149,12 +158,12 @@ class TempCtrlEmulator(PicoEmulator):
             tc.stall_check_time = now
 
     def op(self):
-        # Communication watchdog: disable peltiers if no command within timeout
+        # Communication watchdog: trip the app-wide flag if no command has
+        # arrived within the timeout. `enabled` is host intent and stays
+        # untouched; the trip flag is the runtime gate.
         if self.watchdog_timeout_ms > 0 and not self.watchdog_tripped:
             elapsed_ms = (time.time() - self._last_cmd_time) * 1000
             if elapsed_ms > self.watchdog_timeout_ms:
-                self.lna.enabled = False
-                self.load.enabled = False
                 self.watchdog_tripped = True
 
         self._update_channel(self.lna)
