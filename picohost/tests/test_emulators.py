@@ -610,6 +610,36 @@ class TestTempCtrlCoolingGuard:
         assert emu.lna.T_now >= 30.0
         assert abs(emu.load.T_now - 20.0) < 0.5
 
+    def test_saturated_at_zero_does_not_trip_stall(self):
+        """With cooling forbidden and T_now stuck above setpoint, the PI
+        loop sits at active=True / drive=0. That's the configured refusal
+        to cool, not a stalled Peltier — stall must not trip."""
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 30.0
+        emu.lna.thermal_frozen = True
+        emu.server(
+            {
+                "LNA_temp_target": 20.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_cooling_enabled": False,
+            }
+        )
+        _run_to_pi_tick(emu)
+        assert emu.lna.active is True
+        assert emu.lna.drive == 0.0
+        # Force-elapse the stall window and run another op cycle: with
+        # drive==0 the guard must not arm, regardless of how long we sit.
+        emu.lna.stall_check_time = time.time() - (
+            mod.STALL_WINDOW_MS / 1000 + 1
+        )
+        emu.op()
+        assert emu.lna.stall_tripped is False
+        assert emu.lna.stall_window_active is False
+        assert emu.lna.enabled is True
+
 
 class TestImuEmulator:
     def test_initial_state(self):
