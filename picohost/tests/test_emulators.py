@@ -15,6 +15,19 @@ from picohost.emulators import (
     PotMonEmulator,
     RFSwitchEmulator,
 )
+from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
+
+
+def _run_to_pi_tick(emu):
+    """Advance the emulator until the next PI tick fires on both channels.
+
+    Firmware only runs tempctrl_pi_drive on the op tick a DS18B20
+    conversion completes (~1 in OP_TICKS_PER_CONVERSION op ticks), so
+    tests that observe controller state need to step through a full
+    conversion cycle rather than calling op() once.
+    """
+    for _ in range(OP_TICKS_PER_CONVERSION):
+        emu.op()
 
 
 class TestMotorEmulator:
@@ -403,7 +416,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        emu.op()  # opens the stall window with active=True
+        _run_to_pi_tick(emu)  # opens the stall window with active=True
         assert emu.lna.active is True
         assert emu.lna.stall_window_active is True
         self._force_window_elapsed(emu.lna)
@@ -421,7 +434,7 @@ class TestTempCtrlStallGuard:
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        emu.op()
+        _run_to_pi_tick(emu)
         self._force_window_elapsed(emu.lna)
         emu.lna.T_now += 1.0  # well above STALL_MIN_DELTA
         emu.op()
@@ -436,7 +449,7 @@ class TestTempCtrlStallGuard:
         emu.server(
             {"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5}
         )
-        emu.op()
+        _run_to_pi_tick(emu)
         assert emu.lna.active is False
         assert emu.lna.stall_window_active is False
         self._force_window_elapsed(emu.lna)
@@ -449,7 +462,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        emu.op()
+        _run_to_pi_tick(emu)
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
@@ -464,7 +477,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        emu.op()
+        _run_to_pi_tick(emu)
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
@@ -485,7 +498,7 @@ class TestTempCtrlStallGuard:
                 "LOAD_enable": True,
             }
         )
-        emu.op()
+        _run_to_pi_tick(emu)
         self._force_window_elapsed(emu.load)
         emu.op()
         assert emu.load.stall_tripped is True
@@ -822,14 +835,17 @@ class TestMalformedInput:
         assert emu.get_status()["sw_state"] == 0
 
     def test_tempctrl_invalid_type(self):
+        # cJSON valuedouble is 0.0 for non-numeric JSON; firmware writes it
+        # straight into the struct (see tempctrl.c LNA_temp_target parse).
         emu = TempCtrlEmulator()
         emu.server({"LNA_temp_target": "hot"})
-        assert emu.lna.T_target == 30.0  # unchanged (default)
+        assert emu.lna.T_target == 0.0
 
     def test_tempctrl_null_value(self):
+        # Same cJSON path as above; LNA_clamp is then clamped to [0, 1].
         emu = TempCtrlEmulator()
         emu.server({"LNA_clamp": None})
-        assert emu.lna.clamp == 0.6  # unchanged
+        assert emu.lna.clamp == 0.0
 
 
 # ---------------------------------------------------------------------------

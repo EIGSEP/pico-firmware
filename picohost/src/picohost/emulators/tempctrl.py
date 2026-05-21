@@ -3,11 +3,32 @@ import time
 from .base import PicoEmulator, _safe_float, _safe_int
 
 
-# Seconds of simulated wall-clock time per emulator op tick. Chosen to
-# match the firmware's effective PI sample period (DS18B20 conversion
-# completes about every 750 ms), so a unit Ki value produces the same
-# integral growth here as on real hardware.
-DT_PER_OP_S = 0.75
+# Mirror the firmware's PI cadence. On hardware, op() runs every ~50 ms
+# and a DS18B20 conversion completes about every ~750 ms, so PI runs on
+# roughly 1 in 15 op ticks (the `fresh` gate in tempctrl_update_sensor_drive).
+OP_TICKS_PER_CONVERSION = 15
+# dt argument to tempctrl_pi_drive — matches the firmware's
+# (now_ms - last_sample_ms) value at conversion cadence.
+DT_PER_PI_TICK_S = 0.75
+# Thermal effect per op tick at unit drive. The drive value set by PI is
+# held between PI ticks (mirrors continuous PWM), so the per-op rate is
+# what determines convergence speed, independent of PI cadence.
+THERMAL_DRIFT_PER_OP = 0.05
+
+
+def _coerce_float(val):
+    """Mirror cJSON ``valuedouble``: non-numeric JSON yields 0.0.
+
+    Unlike ``_safe_float`` (which preserves a caller-supplied default on
+    bad input), the firmware assigns ``item_json->valuedouble`` directly
+    — which cJSON sets to 0.0 for strings/null/arrays/objects.
+    """
+    if isinstance(val, (str, bytes, list, dict)):
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 class TempControlState:
@@ -35,6 +56,13 @@ class TempControlState:
         # Test hook: when True, skip the thermal-drift update even with the
         # drive engaged, so the stall guard can be exercised deterministically.
         self.thermal_frozen = False
+        # Mirrors temp_sensor_has_error()'s underlying state. op() re-reads
+        # this into internally_disabled every tick, so a recovered sensor
+        # self-clears (matches firmware tempctrl_update_sensor_drive).
+        self._sensor_error = False
+        # Conversion-cycle counter for the fresh-sample gate. PI fires
+        # when this rolls over OP_TICKS_PER_CONVERSION.
+        self._op_counter = 0
 
 
 def _reset_controller_state(tc):
@@ -45,7 +73,7 @@ def _reset_controller_state(tc):
     tc.active = False
 
 
-def tempctrl_pi_drive(tc, dt=DT_PER_OP_S):
+def tempctrl_pi_drive(tc, dt=DT_PER_PI_TICK_S):
     """Matches tempctrl_pi_drive() from tempctrl.c.
 
     Deadband + PI with conditional-integration anti-windup. First sample
@@ -84,8 +112,6 @@ def tempctrl_pi_drive(tc, dt=DT_PER_OP_S):
         tc.drive = max(-tc.clamp, min(tc.clamp, tentative_drive))
 
 
-THERMAL_DRIFT_RATE = 0.05
-
 # Mirrors TEMPCTRL_STALL_WINDOW_MS / TEMPCTRL_STALL_MIN_DELTA in tempctrl.h.
 STALL_WINDOW_MS = 60000
 STALL_MIN_DELTA = 0.5
@@ -100,6 +126,11 @@ class TempCtrlEmulator(PicoEmulator):
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
+        # Boot reference for the *_timestamp field. Firmware sends
+        # temp_sensor_get_conversion_time() — uint32_t ms since boot, cast
+        # to double in the KV_FLOAT slot. monotonic() so the value cannot
+        # jump under NTP adjustments.
+        self._boot_monotonic = time.monotonic()
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
@@ -108,6 +139,10 @@ class TempCtrlEmulator(PicoEmulator):
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
+        self._boot_monotonic = time.monotonic()
+
+    def _ms_since_boot(self):
+        return float(int((time.monotonic() - self._boot_monotonic) * 1000))
 
     def server(self, cmd):
         # Any valid command refreshes the watchdog timer, but the trip flag
@@ -116,9 +151,12 @@ class TempCtrlEmulator(PicoEmulator):
         self._last_cmd_time = time.time()
 
         for prefix, tc in [("LNA", self.lna), ("LOAD", self.load)]:
+            # Numeric fields use _coerce_float (not _safe_float): cJSON
+            # writes valuedouble=0.0 for non-numeric JSON, and firmware
+            # assigns that directly into the struct.
             key = f"{prefix}_temp_target"
             if key in cmd:
-                tc.T_target = _safe_float(cmd[key], tc.T_target)
+                tc.T_target = _coerce_float(cmd[key])
 
             key = f"{prefix}_enable"
             if key in cmd:
@@ -137,19 +175,19 @@ class TempCtrlEmulator(PicoEmulator):
 
             key = f"{prefix}_hysteresis"
             if key in cmd:
-                tc.hysteresis = _safe_float(cmd[key], tc.hysteresis)
+                tc.hysteresis = _coerce_float(cmd[key])
 
             key = f"{prefix}_clamp"
             if key in cmd:
-                tc.clamp = min(1.0, max(0.0, _safe_float(cmd[key], tc.clamp)))
+                tc.clamp = min(1.0, max(0.0, _coerce_float(cmd[key])))
 
             key = f"{prefix}_Kp"
             if key in cmd:
-                tc.Kp = _safe_float(cmd[key], tc.Kp)
+                tc.Kp = _coerce_float(cmd[key])
 
             key = f"{prefix}_Ki"
             if key in cmd:
-                new_ki = _safe_float(cmd[key], tc.Ki)
+                new_ki = _coerce_float(cmd[key])
                 if new_ki != tc.Ki:
                     # Bumpless retune: drop the accumulator so the next PI
                     # step does not multiply a stale integral by a freshly
@@ -171,11 +209,14 @@ class TempCtrlEmulator(PicoEmulator):
     def inject_sensor_error(self, channel, error=True):
         """Simulate a OneWire sensor failure on channel "LNA" or "LOAD".
 
-        In the real firmware ``temp_sensor_has_error()`` returns true when the
-        DS18B20 read fails, which sets ``internally_disabled`` and causes the
-        status field to report ``"error"`` instead of ``"update"``.
+        Sets both the underlying sensor-error state and the current
+        ``internally_disabled`` flag so callers that introspect status
+        without first running op() see the change immediately. op() then
+        keeps ``internally_disabled`` in sync with the sensor state on
+        every tick (mirroring firmware's unconditional re-read).
         """
         tc = self.lna if channel == "LNA" else self.load
+        tc._sensor_error = error
         tc.internally_disabled = error
 
     def _drive_allowed(self, tc):
@@ -187,15 +228,33 @@ class TempCtrlEmulator(PicoEmulator):
         )
 
     def _update_channel(self, tc):
+        tc._op_counter += 1
+        fresh = (tc._op_counter % OP_TICKS_PER_CONVERSION == 0)
+
+        # Mirror firmware tempctrl_update_sensor_drive: temp_sensor_has_error()
+        # is re-read every op tick, so a recovered sensor self-clears.
+        tc.internally_disabled = tc._sensor_error
+
         if self._drive_allowed(tc):
-            tempctrl_pi_drive(tc)
-            if not tc.thermal_frozen:
-                tc.T_now += tc.drive * THERMAL_DRIFT_RATE
+            if fresh:
+                tempctrl_pi_drive(tc)
             self._check_stall(tc)
         else:
             _reset_controller_state(tc)
             tc.stall_window_active = False
-        tc.timestamp = time.time()
+
+        # Thermal model: drive set by PI is held between PI ticks (mirrors
+        # continuous PWM), so the effect accumulates every op tick. When
+        # the controller is disengaged, drive=0 (from _reset_controller_state)
+        # and T_now stays put — matches firmware behavior where T_now is
+        # the sensor reading and no thermal source is being driven.
+        if not tc.thermal_frozen:
+            tc.T_now += tc.drive * THERMAL_DRIFT_PER_OP
+
+        # Mirror firmware: tempctrl_status sends temp_sensor_get_conversion_time()
+        # which updates when a new sample is decoded.
+        if fresh:
+            tc.timestamp = self._ms_since_boot()
 
     def _check_stall(self, tc):
         """Mirror tempctrl_check_stall() from tempctrl.c."""

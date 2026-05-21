@@ -250,10 +250,15 @@ class TestTempCtrlProtocol:
 
     def test_sensor_error_disables_drive(self):
         """tempctrl.c: if internally_disabled, drive = 0 and integrator clears."""
+        from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
+
         emu = TempCtrlEmulator()
         emu.server({"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1})
-        emu.op()
-        emu.op()
+        # Need a full conversion cycle so PI fires at least once and drive
+        # leaves zero (matches firmware: PI only runs on the op tick a
+        # DS18B20 conversion completes).
+        for _ in range(OP_TICKS_PER_CONVERSION + 1):
+            emu.op()
         assert emu.lna.drive != 0.0
         emu.inject_sensor_error("LNA")
         emu.op()
@@ -315,8 +320,11 @@ class TestTempCtrlProtocol:
         just exits the deadband — the old bang-bang law produced a
         ~40 % PWM step here, which is the bug this controller fixes.
         """
+        from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
+
         emu = TempCtrlEmulator()
         emu.lna.T_now = 29.4  # 0.6 below target, just outside ±0.5 band
+        emu.lna.thermal_frozen = True  # pin T_now so first PI sees T_delta=0.6
         emu.server(
             {
                 "LNA_temp_target": 30.0,
@@ -324,7 +332,8 @@ class TestTempCtrlProtocol:
                 "LNA_hysteresis": 0.5,
             }
         )
-        emu.op()
+        for _ in range(OP_TICKS_PER_CONVERSION):
+            emu.op()
         # With Kp=0.2 and T_delta=0.6, drive should be ~0.12 (12 % PWM),
         # not >=0.4 like the old baseline-kick law.
         assert 0.0 < emu.lna.drive < 0.2
