@@ -47,6 +47,7 @@ def _mock_flash(monkeypatch, tmp_path):
 
     # Skip the 2-second sleep
     monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+    monkeypatch.setattr(fp, "_udev_settle", lambda: None)
 
     return uf2, flashed
 
@@ -119,6 +120,7 @@ class TestFlashAndDiscover:
             ),
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         assert flash_and_discover(uf2_path=uf2) == []
 
     def test_serial_read_failure_skips_device(self, monkeypatch, tmp_path):
@@ -142,7 +144,43 @@ class TestFlashAndDiscover:
             ),
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         assert flash_and_discover(uf2_path=uf2) == []
+
+    def test_settles_udev_before_opening_post_flash_port(
+        self, monkeypatch, tmp_path
+    ):
+        """``udevadm settle`` must run between re-enumeration and the
+        serial open. The new ttyACM node exists with driver-default
+        permissions before udev applies the rule that chgrps it to
+        ``dialout``; opening immediately races against that and fails
+        intermittently with ``EACCES``. Settling closes the window.
+        """
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
+        )
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        events = []
+        monkeypatch.setattr(
+            fp, "_udev_settle", lambda: events.append("settle")
+        )
+
+        def fake_read(port, baud, timeout):
+            events.append(("read", port))
+            return {"app_id": 0}
+
+        monkeypatch.setattr(fp, "read_json_from_serial", fake_read)
+
+        devices = flash_and_discover(uf2_path=uf2)
+        assert len(devices) == 1
+        assert events == ["settle", ("read", "/dev/ttyACM0")]
 
     def test_resolves_current_port_after_reenumeration(
         self, monkeypatch, tmp_path
@@ -187,6 +225,7 @@ class TestFlashAndDiscover:
             lambda port, baud, timeout: serial_data[port],
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
 
         devices = flash_and_discover(uf2_path=uf2)
         by_serial = {d["usb_serial"]: d for d in devices}
@@ -230,6 +269,7 @@ class TestFlashAndDiscover:
             lambda port, baud, timeout: {"app_id": 5},
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
 
         devices = flash_and_discover(uf2_path=uf2)
         assert len(devices) == 1
