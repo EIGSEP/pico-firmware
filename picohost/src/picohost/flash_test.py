@@ -1,17 +1,67 @@
 #!/usr/bin/env python3
-"""`flash-test`: load the heartbeat test UF2 onto a Pico in BOOTSEL mode.
+"""`flash-test`: load the heartbeat test UF2 onto Pico(s) in BOOTSEL mode.
 
 `flash-picos` discovers Picos by enumerating CDC serial ports, which
 means a fresh / wiped Pico (USB PID 0x0003, mass-storage) is invisible
-to it. This CLI is a thin wrapper around ``picotool load`` that targets
-a BOOTSEL-mode Pico directly, so the test image can be installed,
-USB-CDC comes up, and the normal ``flash-picos`` workflow becomes
-available.
+to it. This CLI wraps ``picotool load`` to target BOOTSEL-mode Picos so
+the test image can be installed, USB-CDC comes up, and the normal
+``flash-picos`` workflow becomes available.
+
+By default all connected BOOTSEL Picos are flashed sequentially (mirroring
+``flash-picos``). Pass ``--bus/--address`` or ``--usb-serial`` to target
+a single device.
 """
 import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+PICO_VID = "2e8a"
+PICO_PID_BOOTSEL = "0003"
+SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
+
+
+def find_bootsel_devices(sysfs_root=None):
+    """Enumerate Picos currently in BOOTSEL mode by scanning Linux sysfs.
+
+    Returns a list of ``{"usb_serial", "bus", "address"}`` dicts, one per
+    attached Pico with VID:PID 2e8a:0003. BOOTSEL Picos are USB
+    mass-storage devices and don't appear in pyserial's port list, so
+    sysfs is the cheapest discovery path that avoids parsing picotool's
+    free-form output or pulling in libusb bindings.
+
+    Returns an empty list on systems without ``/sys/bus/usb/devices``
+    (e.g. macOS); the caller should fall back to ``picotool``'s default
+    selection.
+    """
+    if sysfs_root is None:
+        sysfs_root = SYSFS_USB_DEVICES
+    sysfs_root = Path(sysfs_root)
+    devices = []
+    if not sysfs_root.is_dir():
+        return devices
+    for entry in sorted(sysfs_root.iterdir()):
+        try:
+            vid = (entry / "idVendor").read_text().strip().lower()
+            pid = (entry / "idProduct").read_text().strip().lower()
+        except (OSError, ValueError):
+            continue
+        if vid != PICO_VID or pid != PICO_PID_BOOTSEL:
+            continue
+        try:
+            serial = (entry / "serial").read_text().strip() or None
+        except OSError:
+            serial = None
+        try:
+            bus = int((entry / "busnum").read_text().strip())
+            address = int((entry / "devnum").read_text().strip())
+        except (OSError, ValueError):
+            bus = None
+            address = None
+        devices.append(
+            {"usb_serial": serial, "bus": bus, "address": address}
+        )
+    return devices
 
 
 def build_picotool_cmd(uf2_path, bus=None, address=None, usb_serial=None):
@@ -75,11 +125,19 @@ def flash_test_image(uf2_path, bus=None, address=None, usb_serial=None):
         print(output, end="")
 
 
+_DONE_MSG = (
+    "\nFlash complete. Picos should now blink in a heartbeat pattern "
+    "and enumerate as /dev/ttyACM* (USB VID:PID 2e8a:0009).\nRun "
+    "`flash-picos --uf2 build/pico_multi.uf2` to install the "
+    "production image."
+)
+
+
 def main():
     p = argparse.ArgumentParser(
         description=(
-            "Flash a small heartbeat-LED test image onto a Pico in "
-            "BOOTSEL mode. After this, the Pico enumerates as USB-CDC "
+            "Flash a small heartbeat-LED test image onto every Pico in "
+            "BOOTSEL mode. After this, each Pico enumerates as USB-CDC "
             "and can be re-flashed with the production image using "
             "`flash-picos`."
         ),
@@ -95,8 +153,8 @@ def main():
         type=int,
         default=None,
         help=(
-            "USB bus number of the target Pico. Use only when more "
-            "than one BOOTSEL device is connected."
+            "USB bus number of a single target Pico. Skips auto-discovery; "
+            "use only to override which BOOTSEL device gets flashed."
         ),
     )
     p.add_argument(
@@ -109,20 +167,56 @@ def main():
         "--usb-serial",
         default=None,
         help=(
-            "Pico board unique ID (flash serial). Preferred over "
-            "--bus/--address: stable across reboots and BOOTSEL toggles. "
-            "Discover with `picotool info -a`."
+            "Pico board unique ID. Skips auto-discovery and flashes only "
+            "this device. Discover with `picotool info -a`."
         ),
     )
     args = p.parse_args()
 
+    targeted = (
+        args.bus is not None
+        or args.address is not None
+        or args.usb_serial is not None
+    )
+
     try:
-        flash_test_image(
-            args.uf2,
-            bus=args.bus,
-            address=args.address,
-            usb_serial=args.usb_serial,
-        )
+        if targeted or not SYSFS_USB_DEVICES.is_dir():
+            flash_test_image(
+                args.uf2,
+                bus=args.bus,
+                address=args.address,
+                usb_serial=args.usb_serial,
+            )
+        else:
+            devices = find_bootsel_devices()
+            if not devices:
+                print(
+                    "No Picos in BOOTSEL mode were found. Hold BOOTSEL "
+                    "while plugging the Pico in (or while pressing the "
+                    "RUN button) and re-run.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print(f"Found {len(devices)} Pico(s) in BOOTSEL mode.")
+            failures = 0
+            for dev in devices:
+                serial = dev.get("usb_serial")
+                bus = dev.get("bus")
+                address = dev.get("address")
+                label = serial or f"bus {bus} address {address}"
+                print(f"\n→ Flashing Pico {label}")
+                try:
+                    if serial:
+                        flash_test_image(args.uf2, usb_serial=serial)
+                    else:
+                        flash_test_image(
+                            args.uf2, bus=bus, address=address
+                        )
+                except RuntimeError as e:
+                    print(str(e), file=sys.stderr)
+                    failures += 1
+            if failures:
+                sys.exit(1)
     except FileNotFoundError as e:
         print(
             f"{e}\nBuild the test image first with ./build.sh.",
@@ -133,12 +227,7 @@ def main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    print(
-        "\nFlash complete. The Pico should now blink in a heartbeat "
-        "pattern and enumerate as /dev/ttyACM* (USB VID:PID "
-        "2e8a:0009).\nRun `flash-picos --uf2 build/pico_multi.uf2` to "
-        "install the production image."
-    )
+    print(_DONE_MSG)
 
 
 if __name__ == "__main__":
