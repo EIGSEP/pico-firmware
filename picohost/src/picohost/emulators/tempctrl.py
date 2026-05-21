@@ -120,6 +120,7 @@ class TempCtrlEmulator(PicoEmulator):
             self._check_stall(tc)
         else:
             tc.drive = 0.0
+            tc.active = False
             tc.stall_window_active = False
         tc.timestamp = time.time()
 

@@ -175,6 +175,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         tempctrl_check_stall(tempctrl);
     } else {
         tempctrl->drive = 0.0;
+        tempctrl->active = false;
         tempctrl_drive_raw(tempctrl);
         // Not actively driving — no stall window pending.
         tempctrl->stall_window_active = false;
