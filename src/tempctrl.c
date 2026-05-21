@@ -106,7 +106,17 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     item_json = cJSON_GetObjectItem(root, "LNA_Kp");
     if (item_json) tempctrl_lna.Kp = item_json->valuedouble;
     item_json = cJSON_GetObjectItem(root, "LNA_Ki");
-    if (item_json) tempctrl_lna.Ki = item_json->valuedouble;
+    if (item_json) {
+        float new_ki = (float)item_json->valuedouble;
+        if (new_ki != tempctrl_lna.Ki) {
+            /* Bumpless retune: drop the accumulator so the next PI step
+               does not multiply a stale integral by a freshly-changed
+               gain. */
+            tempctrl_lna.integral = 0.0f;
+            tempctrl_lna.last_sample_ms = 0;
+        }
+        tempctrl_lna.Ki = new_ki;
+    }
     item_json = cJSON_GetObjectItem(root, "LNA_integral_reset");
     if (item_json && item_json->valueint) {
         tempctrl_lna.integral = 0.0f;
@@ -123,7 +133,14 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     item_json = cJSON_GetObjectItem(root, "LOAD_Kp");
     if (item_json) tempctrl_load.Kp = item_json->valuedouble;
     item_json = cJSON_GetObjectItem(root, "LOAD_Ki");
-    if (item_json) tempctrl_load.Ki = item_json->valuedouble;
+    if (item_json) {
+        float new_ki = (float)item_json->valuedouble;
+        if (new_ki != tempctrl_load.Ki) {
+            tempctrl_load.integral = 0.0f;
+            tempctrl_load.last_sample_ms = 0;
+        }
+        tempctrl_load.Ki = new_ki;
+    }
     item_json = cJSON_GetObjectItem(root, "LOAD_integral_reset");
     if (item_json && item_json->valueint) {
         tempctrl_load.integral = 0.0f;
@@ -289,7 +306,12 @@ static void tempctrl_pi_drive(TempControl *tc) {
     tc->last_sample_ms = now_ms;
 
     float p_term = tc->Kp * T_delta;
-    float tentative_i = tc->integral + T_delta * dt;
+    /* Pure-P (Ki==0): freeze the integrator. Ki*integral is zero either
+       way, but skipping the accumulation keeps `*_integral` clean over
+       long sessions. Bumpless transfer on a later Ki retune is enforced
+       in tempctrl_server by resetting the integral when Ki changes. */
+    float tentative_i = (tc->Ki == 0.0f) ? tc->integral
+                                         : (tc->integral + T_delta * dt);
     float tentative_drive = p_term + tc->Ki * tentative_i;
 
     /* Anti-windup: only commit the new integral if it would not push
