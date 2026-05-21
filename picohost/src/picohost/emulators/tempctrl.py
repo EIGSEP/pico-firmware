@@ -276,7 +276,10 @@ class TempCtrlEmulator(PicoEmulator):
 
     def _check_stall(self, tc):
         """Mirror tempctrl_check_stall() from tempctrl.c."""
-        if not tc.active:
+        # `active` alone isn't sufficient: with cooling_enabled=False the PI
+        # loop can sit outside the deadband (active=True) while saturated at
+        # drive=0, which is the configured refusal-to-cool, not a stall.
+        if not tc.active or tc.drive == 0.0:
             tc.stall_window_active = False
             return
         now = time.time()

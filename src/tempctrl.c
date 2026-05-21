@@ -349,9 +349,12 @@ static void tempctrl_pi_drive(TempControl *tc) {
 }
 
 static void tempctrl_check_stall(TempControl *tempctrl) {
-    // Only check while we're actively driving — in the hysteresis band the
-    // Peltier is off and T_now can legitimately sit nearly still.
-    if (!tempctrl->active) {
+    // Only check while we're actually driving — in the hysteresis band the
+    // Peltier is off and T_now can legitimately sit nearly still. `active`
+    // alone isn't sufficient: with cooling_enabled=false the PI loop can sit
+    // outside the deadband (active=true) while saturated at drive=0, which
+    // is the configured refusal-to-cool, not a stall.
+    if (!tempctrl->active || tempctrl->drive == 0.0f) {
         tempctrl->stall_window_active = false;
         return;
     }
