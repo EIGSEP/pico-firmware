@@ -30,7 +30,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.1.0
       - name: Build package
         working-directory: picohost
         run: uv build
