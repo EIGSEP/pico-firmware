@@ -65,15 +65,20 @@ class ImuEmulator(PicoEmulator):
         self._sensor_failed = False
 
     def op(self):
-        # Re-init if previously timed out (matches imu_op -> imu_init)
-        if not self.is_initialized and not self._sensor_failed:
+        # Mirrors imu_op -> imu_init, including the memset(&imu.data, 0)
+        # at imu.c:109 that zeros sensor data on every (re-)init.
+        if not self.is_initialized:
             self.is_initialized = True
             self._last_event_time = time.monotonic()
+            self.az_angle = 0.0
+            self.el_angle = 0.0
+            self.yaw = 0.0
+            self.pitch = 0.0
+            self.roll = 0.0
+            self.accel_x = 0.0
+            self.accel_y = 0.0
+            self.accel_z = 0.0
 
-        if not self.is_initialized:
-            return
-
-        # When sensor has failed, no events arrive -- check for timeout
         if self._sensor_failed:
             if (
                 time.monotonic() - self._last_event_time

@@ -872,6 +872,37 @@ class TestImuErrorState:
         emu.op()
         assert emu.get_status()["status"] == "update"
 
+    def test_reinit_clears_sensor_data(self):
+        """Mirror imu.c:109 memset(&imu.data, 0, sizeof(imu.data)).
+
+        After a timeout-triggered re-init, firmware reports zeros until
+        the next packet arrives.  Emulator must do the same so a host
+        sees status="error" alongside zero data, not stale pre-failure
+        values.
+        """
+        import picohost.emulators.imu as imu_mod
+
+        emu = ImuEmulator()
+        for _ in range(20):
+            emu.op()
+        emu.get_status()
+        assert (emu.yaw, emu.pitch, emu.roll) != (0.0, 0.0, 0.0)
+
+        emu.simulate_sensor_failure()
+        emu._last_event_time -= imu_mod.IMU_EVENT_TIMEOUT_S + 1
+        emu.op()
+        assert emu.is_initialized is False
+
+        emu.op()
+        status = emu.get_status()
+        assert status["status"] == "error"
+        assert status["yaw"] == 0.0
+        assert status["pitch"] == 0.0
+        assert status["roll"] == 0.0
+        assert status["accel_x"] == 0.0
+        assert status["accel_y"] == 0.0
+        assert status["accel_z"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Edge case behavioral tests
