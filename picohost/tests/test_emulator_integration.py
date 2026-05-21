@@ -17,7 +17,7 @@ from picohost.testing import (
     DummyPicoRFSwitch,
     DummyPicoPeltier,
     DummyPicoIMU,
-    DummyPicoTempMon,
+    DummyPicoPotentiometer,
     DummyPicoLidar,
 )
 
@@ -65,17 +65,6 @@ TEMPCTRL_FIELDS = {
     "LOAD_Kp",
     "LOAD_Ki",
     "LOAD_integral",
-}
-
-TEMPMON_FIELDS = {
-    "sensor_name",
-    "app_id",
-    "LNA_status",
-    "LNA_temp",
-    "LNA_timestamp",
-    "LOAD_status",
-    "LOAD_temp",
-    "LOAD_timestamp",
 }
 
 IMU_FIELDS = {
@@ -136,14 +125,6 @@ def imu():
     _wait_for_first_status(i)
     yield i
     i.disconnect()
-
-
-@pytest.fixture
-def tempmon():
-    m = DummyPicoTempMon("/dev/dummy")
-    _wait_for_first_status(m)
-    yield m
-    m.disconnect()
 
 
 @pytest.fixture
@@ -336,40 +317,6 @@ class TestPeltierIntegrationTypes:
             )
 
 
-# --- TempMon ---
-
-
-class TestTempMonIntegration:
-    def test_status_fields(self, tempmon):
-        """TempMon emulator populates all status fields via reader thread."""
-        cadence = tempmon.EMULATOR_CADENCE_MS
-        wait_for_condition(
-            lambda: len(tempmon.last_status) > 0,
-            cadence_ms=cadence,
-        )
-        assert set(tempmon.last_status.keys()) == TEMPMON_FIELDS
-        assert tempmon.last_status["sensor_name"] == "temp_mon"
-
-    def test_status_types(self, tempmon):
-        """Verify tempmon status value types through serial pipeline."""
-        cadence = tempmon.EMULATOR_CADENCE_MS
-        wait_for_condition(
-            lambda: len(tempmon.last_status) > 0,
-            cadence_ms=cadence,
-        )
-        s = tempmon.last_status
-        assert isinstance(s["sensor_name"], str)
-        assert isinstance(s["app_id"], int)
-        for ch in ("LNA", "LOAD"):
-            assert isinstance(s[f"{ch}_status"], str)
-            assert isinstance(s[f"{ch}_temp"], (int, float)), (
-                f"{ch}_temp should be numeric"
-            )
-            assert isinstance(s[f"{ch}_timestamp"], (int, float)), (
-                f"{ch}_timestamp should be numeric"
-            )
-
-
 # --- Lidar ---
 
 
@@ -458,7 +405,7 @@ class TestRedisIntegration:
             def add(self, name, data):
                 received.append((name, data))
 
-        mon = DummyPicoTempMon(
+        mon = DummyPicoPotentiometer(
             "/dev/dummy", metadata_writer=FakeMetadataWriter()
         )
         cadence = mon.EMULATOR_CADENCE_MS
@@ -468,7 +415,7 @@ class TestRedisIntegration:
         )
         mon.disconnect()
         names = [name for name, _ in received]
-        assert "temp_mon" in names
+        assert "potmon" in names
 
     def test_peltier_publishes_two_streams_per_tick(self):
         """PicoPeltier splits its combined firmware tick into LNA and LOAD."""

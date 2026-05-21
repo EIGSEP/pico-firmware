@@ -10,9 +10,9 @@ import pytest
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
-    TempMonEmulator,
     ImuEmulator,
     LidarEmulator,
+    PotMonEmulator,
     RFSwitchEmulator,
 )
 
@@ -497,37 +497,6 @@ class TestTempCtrlStallGuard:
         assert emu.lna.enabled is True
 
 
-class TestTempMonEmulator:
-    def test_initial_state(self):
-        emu = TempMonEmulator()
-        status = emu.get_status()
-        assert status["sensor_name"] == "temp_mon"
-        assert status["app_id"] == 2
-
-    def test_noise_is_mean_reverting(self):
-        emu = TempMonEmulator()
-        for _ in range(1000):
-            emu.op()
-        # Mean-reverting noise stays tightly around base temperature
-        assert abs(emu.temp_lna - 25.0) < 1.0
-        assert abs(emu.temp_load - 25.0) < 1.0
-
-    def test_status_fields(self):
-        emu = TempMonEmulator()
-        status = emu.get_status()
-        expected_keys = {
-            "sensor_name",
-            "app_id",
-            "LNA_status",
-            "LNA_temp",
-            "LNA_timestamp",
-            "LOAD_status",
-            "LOAD_temp",
-            "LOAD_timestamp",
-        }
-        assert set(status.keys()) == expected_keys
-
-
 class TestImuEmulator:
     def test_initial_state(self):
         emu = ImuEmulator(app_id=3)
@@ -772,17 +741,6 @@ class TestTempCtrlStatusTypes:
             assert isinstance(status[f"{prefix}_clamp"], float)
 
 
-class TestTempMonStatusTypes:
-    def test_status_field_types(self):
-        emu = TempMonEmulator()
-        emu.op()
-        status = emu.get_status()
-        for prefix in ("LNA", "LOAD"):
-            assert isinstance(status[f"{prefix}_status"], str)
-            assert isinstance(status[f"{prefix}_temp"], float)
-            assert isinstance(status[f"{prefix}_timestamp"], float)
-
-
 class TestImuStatusTypes:
     def test_status_field_types(self):
         emu = ImuEmulator()
@@ -896,21 +854,6 @@ class TestTempCtrlErrorState:
         assert status["LOAD_status"] == "error"
 
 
-class TestTempMonErrorState:
-    def test_sensor_error_channel_load(self):
-        emu = TempMonEmulator()
-        emu.inject_sensor_error("LOAD")
-        status = emu.get_status()
-        assert status["LNA_status"] == "update"
-        assert status["LOAD_status"] == "error"
-
-    def test_sensor_error_clear(self):
-        emu = TempMonEmulator()
-        emu.inject_sensor_error("LNA")
-        emu.inject_sensor_error("LNA", error=False)
-        assert emu.get_status()["LNA_status"] == "update"
-
-
 class TestImuErrorState:
     def test_persistent_failure_then_recovery(self):
         """Sustained sensor failure flips status="error"; recovery returns to "update"."""
@@ -968,9 +911,9 @@ class TestTempCtrlEdgeCases:
 ALL_EMULATORS = [
     MotorEmulator,
     TempCtrlEmulator,
-    TempMonEmulator,
     ImuEmulator,
     LidarEmulator,
+    PotMonEmulator,
     RFSwitchEmulator,
 ]
 

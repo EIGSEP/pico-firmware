@@ -15,9 +15,9 @@ import pytest
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
-    TempMonEmulator,
     ImuEmulator,
     LidarEmulator,
+    PotMonEmulator,
     RFSwitchEmulator,
 )
 
@@ -70,9 +70,9 @@ class TestBaseProtocol:
         for Cls in (
             MotorEmulator,
             TempCtrlEmulator,
-            TempMonEmulator,
             ImuEmulator,
             LidarEmulator,
+            PotMonEmulator,
             RFSwitchEmulator,
         ):
             kwargs = {"settle_ms": 0} if Cls is RFSwitchEmulator else {}
@@ -92,16 +92,16 @@ class TestBaseProtocol:
         emulators = [
             MotorEmulator(),
             TempCtrlEmulator(),
-            TempMonEmulator(),
             ImuEmulator(),
             LidarEmulator(),
+            PotMonEmulator(),
             RFSwitchEmulator(settle_ms=0),
         ]
         for emu in emulators:
             before = emu.get_status()
             emu.server({})
             after = emu.get_status()
-            # Status should be unchanged (timestamps may differ for tempctrl/tempmon)
+            # Status should be unchanged (timestamps may differ for tempctrl)
             for key in before:
                 if "timestamp" not in key:
                     assert before[key] == after[key], (
@@ -332,32 +332,6 @@ class TestTempCtrlProtocol:
     def test_sensor_error_status_field(self):
         """tempctrl.c line 93-94: error status on sensor failure."""
         emu = TempCtrlEmulator()
-        emu.inject_sensor_error("LNA")
-        status = emu.get_status()
-        assert status["LNA_status"] == "error"
-        assert status["LOAD_status"] == "update"
-
-
-# ---------------------------------------------------------------------------
-# TempMon protocol (src/tempmon.c)
-# ---------------------------------------------------------------------------
-
-
-class TestTempMonProtocol:
-    """Protocol conformance tests for APP_TEMPMON (app_id=2)."""
-
-    def test_sensor_name(self):
-        assert TempMonEmulator().get_status()["sensor_name"] == "temp_mon"
-
-    def test_no_commands_accepted(self):
-        """tempmon_server() is an empty function."""
-        emu = TempMonEmulator()
-        emu.server({"LNA_temp_target": 99.0, "sw_state": 5})
-        # no crash, no state change
-        assert emu._base_temp_lna == 25.0
-
-    def test_sensor_error_status(self):
-        emu = TempMonEmulator()
         emu.inject_sensor_error("LNA")
         status = emu.get_status()
         assert status["LNA_status"] == "error"

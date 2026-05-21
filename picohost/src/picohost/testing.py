@@ -18,7 +18,6 @@ from .motor import PicoMotor
 from .emulators import (
     MotorEmulator,
     TempCtrlEmulator,
-    TempMonEmulator,
     ImuEmulator,
     LidarEmulator,
     PotMonEmulator,
@@ -87,11 +86,6 @@ class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
 
 class DummyPicoIMU(DummyPicoDevice, PicoIMU):
     EMULATOR_CLASS = ImuEmulator
-    EMULATOR_CADENCE_MS = 50.0
-
-
-class DummyPicoTempMon(DummyPicoDevice):
-    EMULATOR_CLASS = TempMonEmulator
     EMULATOR_CADENCE_MS = 50.0
 
 
