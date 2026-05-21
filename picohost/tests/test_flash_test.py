@@ -397,3 +397,40 @@ class TestMainAutoDiscover:
         assert calls == [
             {"bus": 1, "address": 7, "usb_serial": None},
         ]
+
+    def test_skips_device_with_incomplete_selector(
+        self, monkeypatch, tmp_path
+    ):
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        sysfs = tmp_path / "sysfs"
+        sysfs.mkdir()
+        _make_usb_device(
+            sysfs, "1-1", "2e8a", "0003",
+            serial="AAA", bus=1, devnum=3,
+        )
+        dev = sysfs / "1-2"
+        dev.mkdir()
+        (dev / "idVendor").write_text("2e8a\n")
+        (dev / "idProduct").write_text("0003\n")
+        # no serial, no busnum/devnum -> incomplete selector
+
+        monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
+        calls = []
+
+        def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
+            calls.append({
+                "bus": bus, "address": address, "usb_serial": usb_serial,
+            })
+
+        monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
+        monkeypatch.setattr(
+            "sys.argv", ["flash-test", "--uf2", str(uf2)]
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert calls == [
+            {"bus": None, "address": None, "usb_serial": "AAA"},
+        ]

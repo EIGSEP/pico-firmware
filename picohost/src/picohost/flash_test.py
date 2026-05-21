@@ -207,6 +207,15 @@ def main():
                 serial = dev.get("usb_serial")
                 bus = dev.get("bus")
                 address = dev.get("address")
+                has_bus_address = bus is not None and address is not None
+                if not serial and not has_bus_address:
+                    print(
+                        "Skipping BOOTSEL device with incomplete selector "
+                        f"(serial={serial}, bus={bus}, address={address}).",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+                    continue
                 label = serial or f"bus {bus} address {address}"
                 print(f"\n→ Flashing Pico {label}")
                 try:
