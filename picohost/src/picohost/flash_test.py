@@ -58,7 +58,11 @@ def flash_test_image(uf2_path, bus=None, address=None, usb_serial=None):
     )
     print(f"Running: {' '.join(cmd)}")
     res = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
     )
     output = res.stdout or ""
     if res.returncode != 0:

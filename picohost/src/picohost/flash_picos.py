@@ -46,7 +46,11 @@ def flash_uf2(uf2_path, serial):
     cmd = f"picotool load -f --ser {serial} -x {uf2_path}".split()
     print(f"Flashing {uf2_path} → serial={serial}")
     res = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
     )
     if res.returncode != 0:
         print(res.stdout, file=sys.stderr)
