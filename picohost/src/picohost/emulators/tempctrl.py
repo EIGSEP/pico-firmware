@@ -116,7 +116,10 @@ class TempCtrlEmulator(PicoEmulator):
 
             key = f"{prefix}_enable"
             if key in cmd:
-                new_enabled = bool(cmd[key])
+                # cJSON's valueint is 0 for non-numeric types — mirror that
+                # so {"LNA_enable": "false"} disables on the emulator just
+                # like it does on firmware (instead of being truthy).
+                new_enabled = bool(_safe_int(cmd[key], 0))
                 # *_enable=true is the host's ack of sticky trips: it clears
                 # this channel's stall flag and the app-wide watchdog flag.
                 # `enabled` is host intent only; firmware never mutates it.
@@ -143,14 +146,14 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.Ki = _safe_float(cmd[key], tc.Ki)
 
             key = f"{prefix}_integral_reset"
-            if key in cmd and cmd[key]:
+            if key in cmd and _safe_int(cmd[key], 0):
                 tc.integral = 0.0
                 tc.last_sample_seen = False
 
         if "watchdog_timeout_ms" in cmd:
-            self.watchdog_timeout_ms = _safe_int(
-                cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms
-            )
+            val = _safe_int(cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms)
+            # Firmware clamps negatives to 0 (see tempctrl.c watchdog parse).
+            self.watchdog_timeout_ms = 0 if val < 0 else val
 
     def inject_sensor_error(self, channel, error=True):
         """Simulate a OneWire sensor failure on channel "LNA" or "LOAD".
