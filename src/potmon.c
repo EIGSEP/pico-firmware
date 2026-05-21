@@ -19,8 +19,11 @@ static void pot_sensor_init(PotSensor *pot, uint gpio_pin, uint adc_channel)
 /*helper func to read a value off of a pot sensor*/
 static void pot_sensor_read(PotSensor *pot)
 {
-    /*read a channel*/
     adc_select_input(pot->adc_channel);
+    /* Discard one sample to let the shared S/H cap settle after the
+       mux switch — otherwise a low-impedance neighbour channel bleeds
+       into a high-impedance/floating one (e.g. an unconnected pot). */
+    (void)adc_read();
     uint16_t raw = adc_read();
     pot->voltage = ((float)raw / (float)POTMON_ADC_MAX) * POTMON_VREF;
 }
