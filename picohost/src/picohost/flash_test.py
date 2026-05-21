@@ -172,6 +172,10 @@ def main():
         ),
     )
     args = p.parse_args()
+    if (args.bus is None) != (args.address is None):
+        p.error("--bus and --address must be provided together.")
+    if args.usb_serial is not None and args.bus is not None:
+        p.error("--usb-serial cannot be combined with --bus/--address.")
 
     targeted = (
         args.bus is not None

@@ -193,6 +193,47 @@ class TestFindBootselDevices:
 
 
 class TestMainAutoDiscover:
+    def test_rejects_bus_without_address(self, monkeypatch, tmp_path):
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            "sys.argv", ["flash-test", "--uf2", str(uf2), "--bus", "1"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+
+    def test_rejects_address_without_bus(self, monkeypatch, tmp_path):
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            "sys.argv", ["flash-test", "--uf2", str(uf2), "--address", "7"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+
+    def test_rejects_usb_serial_with_bus_address(self, monkeypatch, tmp_path):
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "flash-test",
+                "--uf2",
+                str(uf2),
+                "--usb-serial",
+                "AAA",
+                "--bus",
+                "1",
+                "--address",
+                "7",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+
     def test_flashes_each_bootsel_device(self, monkeypatch, tmp_path):
         uf2 = tmp_path / "test.uf2"
         uf2.write_bytes(b"\x00")
