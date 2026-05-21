@@ -57,6 +57,13 @@ typedef struct {
     // enabled together with the trip flags.
     bool enabled;
     bool internally_disabled;  // sensor read error (auto-derived each cycle)
+    // Asymmetric clamp: when false, the PI controller saturates at
+    // [0, +clamp] instead of [-clamp, +clamp], forbidding cooling drive.
+    // Default true preserves the original symmetric behavior. Deployments
+    // that cannot dissipate Peltier heat (insufficient sink, hot enclosure)
+    // should set this false on the affected channel to block the
+    // cooling-mode thermal-runaway failure mode.
+    bool cooling_enabled;
     // Stall guard: sticky fault tripped when an active drive fails to move
     // T_now. Cleared by an explicit *_enable=true command from the host
     // (mirrors the watchdog ack pattern).

@@ -219,6 +219,7 @@ class TestTempCtrlEmulator:
             "LNA_active",
             "LNA_int_disabled",
             "LNA_stall_tripped",
+            "LNA_cooling_enabled",
             "LNA_hysteresis",
             "LNA_clamp",
             "LNA_Kp",
@@ -233,6 +234,7 @@ class TestTempCtrlEmulator:
             "LOAD_active",
             "LOAD_int_disabled",
             "LOAD_stall_tripped",
+            "LOAD_cooling_enabled",
             "LOAD_hysteresis",
             "LOAD_clamp",
             "LOAD_Kp",
@@ -512,6 +514,101 @@ class TestTempCtrlStallGuard:
         # LNA is unaffected.
         assert emu.lna.stall_tripped is False
         assert emu.lna.enabled is True
+
+
+class TestTempCtrlCoolingGuard:
+    """``cooling_enabled=False`` forbids drive<0 — the cooling-mode
+    thermal-runaway guard. PI saturates at [0, +clamp] instead of
+    [-clamp, +clamp] and the integrator does not wind up negative.
+    """
+
+    def test_default_is_cooling_enabled(self):
+        emu = TempCtrlEmulator()
+        assert emu.lna.cooling_enabled is True
+        assert emu.load.cooling_enabled is True
+
+    def test_disable_clamps_drive_to_nonnegative(self):
+        """With cooling disabled and setpoint below T_now, drive
+        cannot go negative even though T_delta < 0."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 30.0
+        emu.server(
+            {
+                "LNA_temp_target": 20.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_cooling_enabled": False,
+            }
+        )
+        for _ in range(1000):
+            emu.op()
+        # Drive floors at zero; T_now does not move below the initial
+        # value because no heating is requested and cooling is forbidden.
+        assert emu.lna.drive == 0.0
+        assert emu.lna.T_now >= 30.0
+
+    def test_disabled_integrator_does_not_wind_up_negative(self):
+        """With Ki>0, cooling disabled, and a persistent cooling demand,
+        the conditional-integration anti-windup must keep the integral
+        from accumulating negative — otherwise it would wind up and
+        eventually corrupt a later legitimate heating step."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 30.0
+        emu.lna.thermal_frozen = True  # keep the cooling demand constant
+        emu.server(
+            {
+                "LNA_temp_target": 20.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_Ki": 0.05,
+                "LNA_cooling_enabled": False,
+            }
+        )
+        for _ in range(1000):
+            emu.op()
+        assert emu.lna.drive == 0.0
+        # Anti-windup: integral stays at zero even with persistent
+        # negative T_delta because lower_clamp=0 saturates sat_low.
+        assert emu.lna.integral == 0.0
+
+    def test_heating_still_works_when_cooling_disabled(self):
+        """Heating is unaffected — only the negative half is forbidden."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 20.0
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_cooling_enabled": False,
+            }
+        )
+        for _ in range(1000):
+            emu.op()
+        assert abs(emu.lna.T_now - 30.0) < 0.5
+
+    def test_per_channel_isolation(self):
+        """Disabling cooling on LNA leaves LOAD's full range available."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 30.0
+        emu.load.T_now = 30.0
+        emu.server(
+            {
+                "LNA_temp_target": 20.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_cooling_enabled": False,
+                "LOAD_temp_target": 20.0,
+                "LOAD_enable": True,
+                "LOAD_hysteresis": 0.5,
+            }
+        )
+        for _ in range(1000):
+            emu.op()
+        # LNA refused to cool; LOAD reached the lower setpoint.
+        assert emu.lna.drive == 0.0
+        assert emu.lna.T_now >= 30.0
+        assert abs(emu.load.T_now - 20.0) < 0.5
 
 
 class TestImuEmulator:
