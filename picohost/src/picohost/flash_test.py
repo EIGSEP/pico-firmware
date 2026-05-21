@@ -208,7 +208,7 @@ def main():
                 bus = dev.get("bus")
                 address = dev.get("address")
                 has_bus_address = bus is not None and address is not None
-                if not serial and not has_bus_address:
+                if serial is None and not has_bus_address:
                     print(
                         "Skipping BOOTSEL device with incomplete selector "
                         f"(serial={serial}, bus={bus}, address={address}).",
@@ -219,7 +219,7 @@ def main():
                 label = serial or f"bus {bus} address {address}"
                 print(f"\n→ Flashing Pico {label}")
                 try:
-                    if serial:
+                    if serial is not None:
                         flash_test_image(args.uf2, usb_serial=serial)
                     else:
                         flash_test_image(
