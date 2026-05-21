@@ -611,6 +611,7 @@ class PicoPeltier(PicoDevice):
         "enabled",
         "active",
         "int_disabled",
+        "stall_tripped",
         "hysteresis",
         "clamp",
     )

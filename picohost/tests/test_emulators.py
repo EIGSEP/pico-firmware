@@ -205,6 +205,7 @@ class TestTempCtrlEmulator:
             "LNA_enabled",
             "LNA_active",
             "LNA_int_disabled",
+            "LNA_stall_tripped",
             "LNA_hysteresis",
             "LNA_clamp",
             "LOAD_status",
@@ -215,6 +216,7 @@ class TestTempCtrlEmulator:
             "LOAD_enabled",
             "LOAD_active",
             "LOAD_int_disabled",
+            "LOAD_stall_tripped",
             "LOAD_hysteresis",
             "LOAD_clamp",
         }
@@ -267,6 +269,94 @@ class TestTempCtrlWatchdog:
         emu._last_cmd_time = time.time() - 999
         emu.op()
         assert emu.watchdog_tripped is False
+        assert emu.lna.enabled is True
+
+
+class TestTempCtrlStallGuard:
+    """The stall guard trips when drive is engaged but T_now refuses to move."""
+
+    def _force_window_elapsed(self, tc):
+        # Pretend the stall window opened before the threshold.
+        import picohost.emulators.tempctrl as mod
+
+        tc.stall_check_time = time.time() - (mod.STALL_WINDOW_MS / 1000 + 1)
+
+    def test_stall_trip_disables_channel(self):
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
+        emu.op()  # opens the stall window with active=True
+        assert emu.lna.active is True
+        assert emu.lna.stall_window_active is True
+        self._force_window_elapsed(emu.lna)
+        emu.op()
+        assert emu.lna.stall_tripped is True
+        assert emu.lna.enabled is False
+        assert emu.lna.drive == 0.0
+
+    def test_stall_does_not_trip_when_temperature_moves(self):
+        """Healthy drive rolls the window forward without tripping."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
+        emu.op()
+        self._force_window_elapsed(emu.lna)
+        emu.lna.T_now += 1.0  # well above STALL_MIN_DELTA
+        emu.op()
+        assert emu.lna.stall_tripped is False
+        assert emu.lna.enabled is True
+
+    def test_stall_does_not_trip_inside_hysteresis_band(self):
+        """active=False (within hysteresis band) means no stall window runs."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 30.0
+        emu.lna.thermal_frozen = True
+        emu.server(
+            {"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5}
+        )
+        emu.op()
+        assert emu.lna.active is False
+        assert emu.lna.stall_window_active is False
+        self._force_window_elapsed(emu.lna)
+        emu.op()
+        assert emu.lna.stall_tripped is False
+
+    def test_re_enable_clears_stall_trip(self):
+        """Rising edge of enable acknowledges the trip and resets the window."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
+        emu.op()
+        self._force_window_elapsed(emu.lna)
+        emu.op()
+        assert emu.lna.stall_tripped is True
+        assert emu.lna.enabled is False
+        emu.server({"LNA_enable": True})
+        assert emu.lna.stall_tripped is False
+        assert emu.lna.enabled is True
+
+    def test_channels_trip_independently(self):
+        """A stalled LOAD does not knock out a healthy LNA."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.load.T_now = 25.0
+        emu.load.thermal_frozen = True
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LOAD_temp_target": 30.0,
+                "LOAD_enable": True,
+            }
+        )
+        emu.op()
+        self._force_window_elapsed(emu.load)
+        emu.op()
+        assert emu.load.stall_tripped is True
+        assert emu.load.enabled is False
+        assert emu.lna.stall_tripped is False
         assert emu.lna.enabled is True
 
 

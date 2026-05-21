@@ -23,6 +23,8 @@ static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, 
 static void tempctrl_update_sensor_drive(TempControl *);
 static void tempctrl_drive_raw(TempControl *);
 static void tempctrl_hysteresis_drive(TempControl *);
+static void tempctrl_check_stall(TempControl *);
+static void tempctrl_apply_enable(TempControl *, bool);
 
 void init_single_tempctrl(TempControl *tempctrl,
                           uint dir_pin1, uint dir_pin2, uint pwm_pin,
@@ -54,6 +56,10 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->internally_disabled = false;
     tempctrl->T_now = 0;
     tempctrl->drive = 0.0;
+    tempctrl->stall_tripped = false;
+    tempctrl->stall_window_active = false;
+    tempctrl->stall_check_T = 0.0;
+    tempctrl->stall_check_time = get_absolute_time();
 }
 
 void tempctrl_init(uint8_t app_id) {
@@ -84,7 +90,7 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     item_json = cJSON_GetObjectItem(root, "LNA_temp_target");
     tempctrl_lna.T_target = item_json ? item_json->valuedouble : tempctrl_lna.T_target;
     item_json = cJSON_GetObjectItem(root, "LNA_enable");
-    if (item_json) tempctrl_lna.enabled = item_json->valueint ? true : false;
+    if (item_json) tempctrl_apply_enable(&tempctrl_lna, item_json->valueint ? true : false);
     item_json = cJSON_GetObjectItem(root, "LNA_hysteresis");
     tempctrl_lna.hysteresis = item_json ? item_json->valuedouble : tempctrl_lna.hysteresis;
     item_json = cJSON_GetObjectItem(root, "LNA_clamp");
@@ -92,7 +98,7 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
     tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
     item_json = cJSON_GetObjectItem(root, "LOAD_enable");
-    if (item_json) tempctrl_load.enabled = item_json->valueint ? true : false;
+    if (item_json) tempctrl_apply_enable(&tempctrl_load, item_json->valueint ? true : false);
     item_json = cJSON_GetObjectItem(root, "LOAD_hysteresis");
     tempctrl_load.hysteresis = item_json ? item_json->valuedouble : tempctrl_load.hysteresis;
     item_json = cJSON_GetObjectItem(root, "LOAD_clamp");
@@ -119,7 +125,7 @@ void tempctrl_status(uint8_t app_id) {
     const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
     const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
 
-    send_json(24,
+    send_json(26,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -132,6 +138,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LNA_enabled", tempctrl_lna.enabled,
         KV_BOOL, "LNA_active", tempctrl_lna.active,
         KV_BOOL, "LNA_int_disabled", tempctrl_lna.internally_disabled,
+        KV_BOOL, "LNA_stall_tripped", tempctrl_lna.stall_tripped,
         KV_FLOAT, "LNA_hysteresis", tempctrl_lna.hysteresis,
         KV_FLOAT, "LNA_clamp", tempctrl_lna.clamp,
         KV_STR, "LOAD_status", status_load,
@@ -142,6 +149,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
         KV_BOOL, "LOAD_active", tempctrl_load.active,
         KV_BOOL, "LOAD_int_disabled", tempctrl_load.internally_disabled,
+        KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
         KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
         KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp
     );
@@ -164,9 +172,12 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
 
     if (tempctrl->enabled && !tempctrl->internally_disabled) {
         tempctrl_hysteresis_drive(tempctrl);
+        tempctrl_check_stall(tempctrl);
     } else {
         tempctrl->drive = 0.0;
         tempctrl_drive_raw(tempctrl);
+        // Not actively driving — no stall window pending.
+        tempctrl->stall_window_active = false;
     }
 }
 
@@ -205,7 +216,7 @@ static void tempctrl_drive_raw(TempControl *tempctrl) {
 static void tempctrl_hysteresis_drive(TempControl *tempctrl) {
     float T_delta = tempctrl->T_target - tempctrl->T_now;
     int sign = (T_delta >= 0) ? 1 : -1;
-    
+
     if (fabsf(T_delta) <= tempctrl->hysteresis) {
         // Within hysteresis band - turn off
         tempctrl->drive = 0.0;
@@ -221,4 +232,49 @@ static void tempctrl_hysteresis_drive(TempControl *tempctrl) {
         }
     }
     tempctrl_drive_raw(tempctrl);
+}
+
+static void tempctrl_check_stall(TempControl *tempctrl) {
+    // Only check while we're actively driving — in the hysteresis band the
+    // Peltier is off and T_now can legitimately sit nearly still.
+    if (!tempctrl->active) {
+        tempctrl->stall_window_active = false;
+        return;
+    }
+    absolute_time_t now = get_absolute_time();
+    if (!tempctrl->stall_window_active) {
+        tempctrl->stall_check_T = tempctrl->T_now;
+        tempctrl->stall_check_time = now;
+        tempctrl->stall_window_active = true;
+        return;
+    }
+    int64_t elapsed_us = absolute_time_diff_us(tempctrl->stall_check_time, now);
+    if (elapsed_us < (int64_t)TEMPCTRL_STALL_WINDOW_MS * 1000) {
+        return;
+    }
+    if (fabsf(tempctrl->T_now - tempctrl->stall_check_T) < TEMPCTRL_STALL_MIN_DELTA) {
+        // Drive engaged for a full window with no meaningful temperature
+        // movement — sensor stuck or Peltier ineffective. Trip the channel
+        // and force the host to acknowledge by re-enabling it.
+        tempctrl->stall_tripped = true;
+        tempctrl->enabled = false;
+        tempctrl->active = false;
+        tempctrl->drive = 0.0;
+        tempctrl_drive_raw(tempctrl);
+        tempctrl->stall_window_active = false;
+    } else {
+        // Healthy: roll the window forward.
+        tempctrl->stall_check_T = tempctrl->T_now;
+        tempctrl->stall_check_time = now;
+    }
+}
+
+static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
+    // Rising edge clears a sticky stall trip — the operator has acknowledged
+    // the fault by explicitly re-enabling the channel.
+    if (new_enabled && !tempctrl->enabled) {
+        tempctrl->stall_tripped = false;
+        tempctrl->stall_window_active = false;
+    }
+    tempctrl->enabled = new_enabled;
 }
