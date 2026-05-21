@@ -10,6 +10,8 @@ See CLAUDE.md § Command Protocol for the general framing.
 
 import json
 
+import pytest
+
 from picohost.emulators import (
     MotorEmulator,
     TempCtrlEmulator,
@@ -195,8 +197,9 @@ class TestTempCtrlProtocol:
         """init_single_tempctrl() sets these defaults."""
         emu = TempCtrlEmulator()
         assert emu.lna.T_target == 30.0
-        assert emu.lna.gain == 0.2
-        assert emu.lna.baseline == 0.4
+        assert emu.lna.Kp == 0.2
+        assert emu.lna.Ki == 0.0
+        assert emu.lna.integral == 0.0
         assert emu.lna.clamp == 0.6
         assert emu.lna.hysteresis == 0.5
         assert emu.lna.enabled is False
@@ -220,19 +223,22 @@ class TestTempCtrlProtocol:
         assert emu.lna.enabled is False
 
     def test_hysteresis_band_drive_zero(self):
-        """Within hysteresis band, drive = 0 and active = false."""
+        """Inside deadband: drive = 0, integrator frozen + cleared."""
         emu = TempCtrlEmulator()
         emu.lna.T_now = 29.8
+        emu.lna.integral = 5.0  # leftover state must not leak through
         emu.server(
             {
                 "LNA_temp_target": 30.0,
                 "LNA_enable": True,
                 "LNA_hysteresis": 0.5,
+                "LNA_Ki": 0.1,
             }
         )
         emu.op()
         assert emu.lna.drive == 0.0
         assert emu.lna.active is False
+        assert emu.lna.integral == 0.0
 
     def test_drive_clamped_to_max(self):
         """Drive magnitude limited by clamp."""
@@ -243,14 +249,85 @@ class TestTempCtrlProtocol:
         assert abs(emu.lna.drive) <= 0.3 + 1e-9
 
     def test_sensor_error_disables_drive(self):
-        """tempctrl.c line 137-142: if internally_disabled, drive = 0."""
+        """tempctrl.c: if internally_disabled, drive = 0 and integrator clears."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
+        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1})
+        emu.op()
         emu.op()
         assert emu.lna.drive != 0.0
         emu.inject_sensor_error("LNA")
         emu.op()
         assert emu.lna.drive == 0.0
+        assert emu.lna.integral == 0.0
+
+    def test_kp_ki_commands_round_trip(self):
+        """LNA_Kp / LNA_Ki / LOAD_Kp / LOAD_Ki update channel state."""
+        emu = TempCtrlEmulator()
+        emu.server(
+            {
+                "LNA_Kp": 0.35,
+                "LNA_Ki": 0.02,
+                "LOAD_Kp": 0.4,
+                "LOAD_Ki": 0.05,
+            }
+        )
+        assert emu.lna.Kp == 0.35
+        assert emu.lna.Ki == 0.02
+        assert emu.load.Kp == 0.4
+        assert emu.load.Ki == 0.05
+
+    def test_integral_reset_clears_state(self):
+        """*_integral_reset zeroes the integrator without touching gains."""
+        emu = TempCtrlEmulator()
+        emu.lna.integral = 12.5
+        emu.lna.Kp = 0.4
+        emu.lna.Ki = 0.1
+        emu.server({"LNA_integral_reset": True})
+        assert emu.lna.integral == 0.0
+        assert emu.lna.Kp == 0.4
+        assert emu.lna.Ki == 0.1
+
+    def test_anti_windup_freezes_integral_at_saturation(self):
+        """Integrator must not grow while the output is clamped against
+        the direction of error."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 0.0  # huge positive T_delta vs default target 30
+        emu.server(
+            {
+                "LNA_enable": True,
+                "LNA_Ki": 0.5,
+                "LNA_clamp": 0.6,
+            }
+        )
+        # Many ticks against the saturation rail — integrator must stay put.
+        for _ in range(20):
+            emu.op()
+            emu.lna.T_now = 0.0  # pin T_now so we stay deeply saturated
+        saturated_integral = emu.lna.integral
+        for _ in range(20):
+            emu.op()
+            emu.lna.T_now = 0.0
+        assert emu.lna.integral == saturated_integral
+        assert abs(emu.lna.drive) == pytest.approx(0.6)
+
+    def test_no_baseline_step_when_leaving_hysteresis(self):
+        """Drive must ramp smoothly through small values when T_delta
+        just exits the deadband — the old bang-bang law produced a
+        ~40 % PWM step here, which is the bug this controller fixes.
+        """
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 29.4  # 0.6 below target, just outside ±0.5 band
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
+        )
+        emu.op()
+        # With Kp=0.2 and T_delta=0.6, drive should be ~0.12 (12 % PWM),
+        # not >=0.4 like the old baseline-kick law.
+        assert 0.0 < emu.lna.drive < 0.2
 
     def test_sensor_error_status_field(self):
         """tempctrl.c line 93-94: error status on sensor failure."""

@@ -588,6 +588,7 @@ class PicoPeltier(PicoDevice):
         self._keepalive_interval = keepalive_interval
         self._last_watchdog_timeout_ms = None
         self._last_clamp = {}
+        self._last_gains = {}
         self._last_temperature = {}
         self._last_enable = None
         super().__init__(
@@ -614,6 +615,9 @@ class PicoPeltier(PicoDevice):
         "stall_tripped",
         "hysteresis",
         "clamp",
+        "Kp",
+        "Ki",
+        "integral",
     )
     _PELTIER_STREAMS = (("LNA", "tempctrl_lna"), ("LOAD", "tempctrl_load"))
 
@@ -690,10 +694,10 @@ class PicoPeltier(PicoDevice):
         (hard watchdog, brownout, picotool re-flash via BOOTSEL) drops
         USB CDC, so reader-thread reconnect coincides with the firmware
         coming up at defaults. Replay whatever the host most recently
-        pushed, in the same safe order the panda-side ``apply_settings``
-        uses: watchdog → clamp → temperature → enable. Keepalive is
-        started last so the firmware watchdog is configured before we
-        start pinging it.
+        pushed in a safe order: watchdog → clamp → gains → temperature
+        → enable. Gains land before temperature so the channel is fully
+        tuned the instant it goes active. Keepalive starts last so the
+        firmware watchdog is configured before we start pinging it.
         """
         if self._last_watchdog_timeout_ms is not None:
             self.send_command(
@@ -701,6 +705,8 @@ class PicoPeltier(PicoDevice):
             )
         if self._last_clamp:
             self.send_command(dict(self._last_clamp))
+        if self._last_gains:
+            self.send_command(dict(self._last_gains))
         if self._last_temperature:
             self.send_command(dict(self._last_temperature))
         if self._last_enable is not None:
@@ -761,6 +767,40 @@ class PicoPeltier(PicoDevice):
         self.send_command(cmd)
         if cmd:
             self._last_clamp.update(cmd)
+
+    def set_gains(self, LNA_Kp=None, LNA_Ki=None, LOAD_Kp=None, LOAD_Ki=None):
+        """Set PI gains per channel.
+
+        Ki defaults to 0 in firmware, so the controller runs as pure
+        proportional + deadband until a host opts in. Cached for replay
+        on reconnect (firmware resets gains to defaults on reboot).
+        """
+        cmd = {}
+        if LNA_Kp is not None:
+            cmd["LNA_Kp"] = LNA_Kp
+        if LNA_Ki is not None:
+            cmd["LNA_Ki"] = LNA_Ki
+        if LOAD_Kp is not None:
+            cmd["LOAD_Kp"] = LOAD_Kp
+        if LOAD_Ki is not None:
+            cmd["LOAD_Ki"] = LOAD_Ki
+        self.send_command(cmd)
+        if cmd:
+            self._last_gains.update(cmd)
+
+    def reset_integral(self, LNA=False, LOAD=False):
+        """Clear the PI integrator on the selected channel(s).
+
+        One-shot — not cached for replay (firmware reset clears the
+        integral implicitly).
+        """
+        cmd = {}
+        if LNA:
+            cmd["LNA_integral_reset"] = True
+        if LOAD:
+            cmd["LOAD_integral_reset"] = True
+        if cmd:
+            self.send_command(cmd)
 
 
 class PicoIMU(PicoDevice):

@@ -44,8 +44,10 @@ typedef struct {
     float T_now;
     float T_target;
     float drive;
-    float gain;
-    float baseline;
+    float Kp;
+    float Ki;
+    float integral;       /* accumulated error (deg C * s) */
+    uint32_t last_sample_ms;  /* timestamp of last PI tick; 0 = no prior sample */
     float hysteresis;
     float clamp;
     bool active;

@@ -27,8 +27,12 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset
 // Start temperature conversion
 void temp_sensor_start_conversion(TempSensor *sensor);
 
-// Read temperature (returns true if successful)
-void temp_sensor_read(TempSensor *sensor);
+// Attempt to read a new temperature sample. Returns true exactly when
+// a fresh sample was just decoded this call (so callers gating on new
+// data — e.g. a PI controller — can avoid integrating on stale ticks).
+// Returns false when the DS18B20 conversion is not yet ready, or when
+// the read failed (see temp_sensor_has_error()).
+bool temp_sensor_read(TempSensor *sensor);
 
 // Get current temperature value
 float temp_sensor_get_temp(TempSensor *sensor);

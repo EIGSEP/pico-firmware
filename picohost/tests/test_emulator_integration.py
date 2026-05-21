@@ -48,6 +48,9 @@ TEMPCTRL_FIELDS = {
     "LNA_stall_tripped",
     "LNA_hysteresis",
     "LNA_clamp",
+    "LNA_Kp",
+    "LNA_Ki",
+    "LNA_integral",
     "LOAD_status",
     "LOAD_T_now",
     "LOAD_timestamp",
@@ -59,6 +62,9 @@ TEMPCTRL_FIELDS = {
     "LOAD_stall_tripped",
     "LOAD_hysteresis",
     "LOAD_clamp",
+    "LOAD_Kp",
+    "LOAD_Ki",
+    "LOAD_integral",
 }
 
 TEMPMON_FIELDS = {
@@ -592,9 +598,11 @@ class TestConvergenceTiming:
     def test_peltier_convergence_bounded(self):
         """Temperature converges within a cycle count derived from the model.
 
-        With default params (gain=0.2, baseline=0.4, clamp=0.6) and
-        THERMAL_DRIFT_RATE=0.05, each op moves ~0.03°C when clamped.
-        A 10°C delta (25->35) needs ~333 ops; we allow 500 as upper bound.
+        With default params (Kp=0.2, Ki=0, clamp=0.6) the controller is
+        pure proportional, so drive saturates at the clamp until T_delta
+        drops below clamp/Kp = 3°C. THERMAL_DRIFT_RATE=0.05 gives 0.03°C
+        per clamped op; a 10°C move (25→35) needs ~233 ops at saturation
+        plus a P-controlled tail into the deadband. Allow 500 ops.
         """
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
         try:

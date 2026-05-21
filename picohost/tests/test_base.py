@@ -583,9 +583,73 @@ class TestPicoPeltier:
             "LOAD_T_now",
             "LNA_drive_level",
             "LOAD_drive_level",
+            "LNA_Kp",
+            "LNA_Ki",
+            "LNA_integral",
         ):
             assert key in peltier.last_status, f"Missing key: {key}"
         peltier.disconnect()
+
+    def test_set_gains_round_trip(self):
+        """set_gains() updates emulator Kp/Ki and surfaces in status."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
+        before = peltier.last_status.get("LNA_Kp")
+        peltier.set_gains(LNA_Kp=0.4, LNA_Ki=0.02, LOAD_Kp=0.5)
+        assert wait_for_settle(
+            lambda: peltier.last_status.get("LNA_Kp"),
+            initial=before,
+            cadence_ms=cadence,
+            max_cycles=10,
+        ) == pytest.approx(0.4)
+        assert peltier.last_status.get("LNA_Ki") == pytest.approx(0.02)
+        assert peltier.last_status.get("LOAD_Kp") == pytest.approx(0.5)
+        peltier.disconnect()
+
+    def test_reset_integral_sends_only_selected_channels(self):
+        """reset_integral() sends an *_integral_reset only for chosen channels."""
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier.reset_integral(LNA=True)
+            assert sent[-1] == {"LNA_integral_reset": True}
+            peltier.reset_integral(LNA=True, LOAD=True)
+            assert sent[-1] == {
+                "LNA_integral_reset": True,
+                "LOAD_integral_reset": True,
+            }
+            before = len(sent)
+            peltier.reset_integral()  # default: both False → no-op
+            assert len(sent) == before
+        finally:
+            peltier.disconnect()
+
+    def test_reset_integral_not_cached_for_replay(self):
+        """One-shot command; firmware reset clears the integral implicitly."""
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            peltier.reset_integral(LNA=True, LOAD=True)
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier.on_reconnect()
+            for payload in sent:
+                assert "LNA_integral_reset" not in payload
+                assert "LOAD_integral_reset" not in payload
+        finally:
+            peltier.disconnect()
 
 
 class TestPicoPeltierReconnectReplay:
@@ -602,6 +666,7 @@ class TestPicoPeltierReconnectReplay:
         try:
             assert peltier._last_watchdog_timeout_ms is None
             assert peltier._last_clamp == {}
+            assert peltier._last_gains == {}
             assert peltier._last_temperature == {}
             assert peltier._last_enable is None
         finally:
@@ -612,12 +677,18 @@ class TestPicoPeltierReconnectReplay:
         try:
             peltier.set_watchdog_timeout(15000)
             peltier.set_clamp(LNA=0.5, LOAD=0.6)
+            peltier.set_gains(LNA_Kp=0.3, LNA_Ki=0.02, LOAD_Kp=0.25)
             peltier.set_temperature(T_LNA=25.0, LNA_hyst=0.3)
             peltier.set_enable(LNA=True, LOAD=False)
             assert peltier._last_watchdog_timeout_ms == 15000
             assert peltier._last_clamp == {
                 "LNA_clamp": 0.5,
                 "LOAD_clamp": 0.6,
+            }
+            assert peltier._last_gains == {
+                "LNA_Kp": 0.3,
+                "LNA_Ki": 0.02,
+                "LOAD_Kp": 0.25,
             }
             assert peltier._last_temperature == {
                 "LNA_temp_target": 25.0,
@@ -657,15 +728,18 @@ class TestPicoPeltierReconnectReplay:
             peltier.disconnect()
 
     def test_on_reconnect_replays_in_safe_order(self):
-        """watchdog → clamp → temperature → enable, matching apply_settings.
+        """watchdog → clamp → gains → temperature → enable.
 
-        Disables keepalive so the spy only sees replay traffic — the
-        background ``{}`` keepalive is tested independently.
+        Gains land before temperature so the channel is fully tuned
+        the instant it goes active. Disables keepalive so the spy only
+        sees replay traffic — the background ``{}`` keepalive is tested
+        independently.
         """
         peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
             peltier.set_watchdog_timeout(15000)
             peltier.set_clamp(LNA=0.5, LOAD=0.6)
+            peltier.set_gains(LNA_Kp=0.25, LNA_Ki=0.01)
             peltier.set_temperature(
                 T_LNA=25.0, LNA_hyst=0.3, T_LOAD=28.0, LOAD_hyst=0.4
             )
@@ -684,6 +758,7 @@ class TestPicoPeltierReconnectReplay:
             assert sent == [
                 {"watchdog_timeout_ms": 15000},
                 {"LNA_clamp": 0.5, "LOAD_clamp": 0.6},
+                {"LNA_Kp": 0.25, "LNA_Ki": 0.01},
                 {
                     "LNA_temp_target": 25.0,
                     "LNA_hysteresis": 0.3,
@@ -791,6 +866,9 @@ class TestPicoPeltierRedisHandler:
         "LNA_stall_tripped": False,
         "LNA_hysteresis": 0.5,
         "LNA_clamp": 0.8,
+        "LNA_Kp": 0.2,
+        "LNA_Ki": 0.01,
+        "LNA_integral": 1.25,
         "LOAD_status": "error",
         "LOAD_T_now": None,
         "LOAD_timestamp": 750.0,
@@ -802,6 +880,9 @@ class TestPicoPeltierRedisHandler:
         "LOAD_stall_tripped": False,
         "LOAD_hysteresis": 0.5,
         "LOAD_clamp": 0.8,
+        "LOAD_Kp": 0.25,
+        "LOAD_Ki": 0.0,
+        "LOAD_integral": 0.0,
     }
 
     _EXPECTED_KEYS = {
@@ -820,6 +901,9 @@ class TestPicoPeltierRedisHandler:
         "stall_tripped",
         "hysteresis",
         "clamp",
+        "Kp",
+        "Ki",
+        "integral",
     }
 
     def _capture_all(self, peltier, data):

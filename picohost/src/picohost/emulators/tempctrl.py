@@ -3,6 +3,13 @@ import time
 from .base import PicoEmulator, _safe_float, _safe_int
 
 
+# Seconds of simulated wall-clock time per emulator op tick. Chosen to
+# match the firmware's effective PI sample period (DS18B20 conversion
+# completes about every 750 ms), so a unit Ki value produces the same
+# integral growth here as on real hardware.
+DT_PER_OP_S = 0.75
+
+
 class TempControlState:
     """Models the TempControl struct from tempctrl.h."""
 
@@ -10,8 +17,10 @@ class TempControlState:
         self.T_now = 25.0
         self.T_target = 30.0
         self.drive = 0.0
-        self.gain = 0.2
-        self.baseline = 0.4
+        self.Kp = 0.2
+        self.Ki = 0.0
+        self.integral = 0.0
+        self.last_sample_seen = False
         self.clamp = 0.6
         self.hysteresis = 0.5
         self.enabled = False
@@ -28,19 +37,45 @@ class TempControlState:
         self.thermal_frozen = False
 
 
-def tempctrl_hysteresis_drive(tc):
-    """Matches tempctrl_hysteresis_drive() from tempctrl.c."""
+def _reset_controller_state(tc):
+    """Match tempctrl_reset_controller_state() in tempctrl.c."""
+    tc.drive = 0.0
+    tc.integral = 0.0
+    tc.last_sample_seen = False
+    tc.active = False
+
+
+def tempctrl_pi_drive(tc, dt=DT_PER_OP_S):
+    """Matches tempctrl_pi_drive() from tempctrl.c.
+
+    Deadband + PI with conditional-integration anti-windup. First sample
+    after reset uses dt=0 to avoid an initial integrator jump.
+    """
     T_delta = tc.T_target - tc.T_now
-    sign = 1 if T_delta >= 0 else -1
 
     if abs(T_delta) <= tc.hysteresis:
-        tc.drive = 0.0
-        tc.active = False
+        _reset_controller_state(tc)
+        return
+
+    tc.active = True
+
+    effective_dt = dt if tc.last_sample_seen else 0.0
+    tc.last_sample_seen = True
+
+    p_term = tc.Kp * T_delta
+    tentative_i = tc.integral + T_delta * effective_dt
+    tentative_drive = p_term + tc.Ki * tentative_i
+
+    sat_high = tentative_drive > tc.clamp and T_delta > 0
+    sat_low = tentative_drive < -tc.clamp and T_delta < 0
+
+    if sat_high:
+        tc.drive = tc.clamp
+    elif sat_low:
+        tc.drive = -tc.clamp
     else:
-        tc.active = True
-        tc.drive = T_delta * tc.gain + sign * tc.baseline
-        if abs(tc.drive) > tc.clamp:
-            tc.drive = sign * tc.clamp
+        tc.integral = tentative_i
+        tc.drive = max(-tc.clamp, min(tc.clamp, tentative_drive))
 
 
 THERMAL_DRIFT_RATE = 0.05
@@ -99,6 +134,19 @@ class TempCtrlEmulator(PicoEmulator):
             if key in cmd:
                 tc.clamp = min(1.0, max(0.0, _safe_float(cmd[key], tc.clamp)))
 
+            key = f"{prefix}_Kp"
+            if key in cmd:
+                tc.Kp = _safe_float(cmd[key], tc.Kp)
+
+            key = f"{prefix}_Ki"
+            if key in cmd:
+                tc.Ki = _safe_float(cmd[key], tc.Ki)
+
+            key = f"{prefix}_integral_reset"
+            if key in cmd and cmd[key]:
+                tc.integral = 0.0
+                tc.last_sample_seen = False
+
         if "watchdog_timeout_ms" in cmd:
             self.watchdog_timeout_ms = _safe_int(
                 cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms
@@ -124,13 +172,12 @@ class TempCtrlEmulator(PicoEmulator):
 
     def _update_channel(self, tc):
         if self._drive_allowed(tc):
-            tempctrl_hysteresis_drive(tc)
+            tempctrl_pi_drive(tc)
             if not tc.thermal_frozen:
                 tc.T_now += tc.drive * THERMAL_DRIFT_RATE
             self._check_stall(tc)
         else:
-            tc.drive = 0.0
-            tc.active = False
+            _reset_controller_state(tc)
             tc.stall_window_active = False
         tc.timestamp = time.time()
 
@@ -188,6 +235,9 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_stall_tripped": self.lna.stall_tripped,
             "LNA_hysteresis": self.lna.hysteresis,
             "LNA_clamp": self.lna.clamp,
+            "LNA_Kp": self.lna.Kp,
+            "LNA_Ki": self.lna.Ki,
+            "LNA_integral": self.lna.integral,
             "LOAD_status": load_status,
             "LOAD_T_now": self.load.T_now,
             "LOAD_timestamp": self.load.timestamp,
@@ -199,4 +249,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_stall_tripped": self.load.stall_tripped,
             "LOAD_hysteresis": self.load.hysteresis,
             "LOAD_clamp": self.load.clamp,
+            "LOAD_Kp": self.load.Kp,
+            "LOAD_Ki": self.load.Ki,
+            "LOAD_integral": self.load.integral,
         }

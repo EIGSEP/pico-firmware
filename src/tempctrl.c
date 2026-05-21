@@ -22,34 +22,39 @@ static bool watchdog_tripped = false;
 static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
 static void tempctrl_update_sensor_drive(TempControl *);
 static void tempctrl_drive_raw(TempControl *);
-static void tempctrl_hysteresis_drive(TempControl *);
 static void tempctrl_check_stall(TempControl *);
 static void tempctrl_apply_enable(TempControl *, bool);
 static bool tempctrl_drive_allowed(const TempControl *);
+static void tempctrl_pi_drive(TempControl *);
+static void tempctrl_reset_controller_state(TempControl *);
 
 void init_single_tempctrl(TempControl *tempctrl,
                           uint dir_pin1, uint dir_pin2, uint pwm_pin,
                           pwm_config *config, uint temp_sensor_pin, PIO pio) {
-    // Initialize GPIO for Peltier 
+    // Initialize GPIO for Peltier
     gpio_init(dir_pin1);
     gpio_set_dir(dir_pin1, GPIO_OUT);
     gpio_init(dir_pin2);
     gpio_set_dir(dir_pin2, GPIO_OUT);
-    // Set up PWM for Peltier 
+    // Set up PWM for Peltier
     gpio_set_function(pwm_pin, GPIO_FUNC_PWM);
     tempctrl->pwm_slice = pwm_gpio_to_slice_num(pwm_pin);
     pwm_init(tempctrl->pwm_slice, config, true);
-    
+
     uint offset = pio_add_program(pio, &onewire_program);
     temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
 
-    // Initialize Temperature Control structure
+    // Initialize Temperature Control structure. Ki defaults to 0 so an
+    // un-tuned deployment behaves as pure P + deadband (no integral
+    // creep until the host opts in via LNA_Ki / LOAD_Ki).
     tempctrl->dir_pin1 = dir_pin1;
     tempctrl->dir_pin2 = dir_pin2;
     tempctrl->pwm_pin = pwm_pin;
     tempctrl->T_target = 30.0;
-    tempctrl->gain = 0.2;
-    tempctrl->baseline = 0.4;  // Baseline drive level
+    tempctrl->Kp = 0.2;
+    tempctrl->Ki = 0.0;
+    tempctrl->integral = 0.0;
+    tempctrl->last_sample_ms = 0;
     tempctrl->clamp = 0.6;  // Maximum drive level
     tempctrl->hysteresis = 0.5;
     tempctrl->enabled = false;
@@ -98,6 +103,15 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     tempctrl_lna.hysteresis = item_json ? item_json->valuedouble : tempctrl_lna.hysteresis;
     item_json = cJSON_GetObjectItem(root, "LNA_clamp");
     if (item_json) tempctrl_lna.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
+    item_json = cJSON_GetObjectItem(root, "LNA_Kp");
+    if (item_json) tempctrl_lna.Kp = item_json->valuedouble;
+    item_json = cJSON_GetObjectItem(root, "LNA_Ki");
+    if (item_json) tempctrl_lna.Ki = item_json->valuedouble;
+    item_json = cJSON_GetObjectItem(root, "LNA_integral_reset");
+    if (item_json && item_json->valueint) {
+        tempctrl_lna.integral = 0.0f;
+        tempctrl_lna.last_sample_ms = 0;
+    }
     item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
     tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
     item_json = cJSON_GetObjectItem(root, "LOAD_enable");
@@ -106,6 +120,15 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     tempctrl_load.hysteresis = item_json ? item_json->valuedouble : tempctrl_load.hysteresis;
     item_json = cJSON_GetObjectItem(root, "LOAD_clamp");
     if (item_json) tempctrl_load.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
+    item_json = cJSON_GetObjectItem(root, "LOAD_Kp");
+    if (item_json) tempctrl_load.Kp = item_json->valuedouble;
+    item_json = cJSON_GetObjectItem(root, "LOAD_Ki");
+    if (item_json) tempctrl_load.Ki = item_json->valuedouble;
+    item_json = cJSON_GetObjectItem(root, "LOAD_integral_reset");
+    if (item_json && item_json->valueint) {
+        tempctrl_load.integral = 0.0f;
+        tempctrl_load.last_sample_ms = 0;
+    }
 
     // Watchdog timeout configuration (0 = disabled)
     item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
@@ -128,7 +151,10 @@ void tempctrl_status(uint8_t app_id) {
     const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
     const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
 
-    send_json(26,
+    /* 32 KV pairs: 4 device-wide + 14 per channel * 2 channels. send_json
+       silently truncates if the count argument disagrees with the actual
+       entries — re-count when editing. */
+    send_json(32,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -144,6 +170,9 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LNA_stall_tripped", tempctrl_lna.stall_tripped,
         KV_FLOAT, "LNA_hysteresis", tempctrl_lna.hysteresis,
         KV_FLOAT, "LNA_clamp", tempctrl_lna.clamp,
+        KV_FLOAT, "LNA_Kp", tempctrl_lna.Kp,
+        KV_FLOAT, "LNA_Ki", tempctrl_lna.Ki,
+        KV_FLOAT, "LNA_integral", tempctrl_lna.integral,
         KV_STR, "LOAD_status", status_load,
         KV_FLOAT, "LOAD_T_now", tempctrl_load.T_now,
         KV_FLOAT, "LOAD_timestamp", (double)time_load,
@@ -154,7 +183,10 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LOAD_int_disabled", tempctrl_load.internally_disabled,
         KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
         KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
-        KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp
+        KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp,
+        KV_FLOAT, "LOAD_Kp", tempctrl_load.Kp,
+        KV_FLOAT, "LOAD_Ki", tempctrl_load.Ki,
+        KV_FLOAT, "LOAD_integral", tempctrl_load.integral
     );
 }
 
@@ -163,22 +195,27 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     if (!tempctrl->temp_sensor.conversion_started) {
         temp_sensor_start_conversion(&tempctrl->temp_sensor);
     }
-    
-    // Read sensors (auto-skip if conversion not ready)
-    temp_sensor_read(&tempctrl->temp_sensor);
-    
+
+    // Attempt a read. `fresh` is true only on the tick a new DS18B20
+    // value was just decoded — gating the PI integrator on this prevents
+    // it from accumulating ~15x per real sample (op() runs every ~50ms,
+    // conversions complete every ~750ms).
+    bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
+
     // Update current temperatures
     tempctrl->T_now = temp_sensor_get_temp(&tempctrl->temp_sensor);
-    
-    // Handle sensor 1 error or drive Peltiers based on hysteresis control
+
     tempctrl->internally_disabled = temp_sensor_has_error(&tempctrl->temp_sensor) ? true : false;
 
     if (tempctrl_drive_allowed(tempctrl)) {
-        tempctrl_hysteresis_drive(tempctrl);
+        if (fresh) {
+            tempctrl_pi_drive(tempctrl);
+        }
         tempctrl_check_stall(tempctrl);
+        /* else: drive unchanged, PWM hardware holds previous level */
     } else {
-        tempctrl->drive = 0.0;
-        tempctrl->active = false;
+        /* XXX here we set drive to 0 and drive raw at 0, unneccesary? */
+        tempctrl_reset_controller_state(tempctrl);
         tempctrl_drive_raw(tempctrl);
         // Not actively driving — no stall window pending.
         tempctrl->stall_window_active = false;
@@ -218,25 +255,61 @@ static void tempctrl_drive_raw(TempControl *tempctrl) {
     }
 }
 
-static void tempctrl_hysteresis_drive(TempControl *tempctrl) {
-    float T_delta = tempctrl->T_target - tempctrl->T_now;
-    int sign = (T_delta >= 0) ? 1 : -1;
+/* Clear the integrator and "first sample" sentinel. Called when the
+   channel is disabled, sensor-errored, or inside the hysteresis
+   deadband — any case where the next active PI step must not see stale
+   accumulator state. */
+static void tempctrl_reset_controller_state(TempControl *tc) {
+    tc->drive = 0.0f;
+    tc->integral = 0.0f;
+    tc->last_sample_ms = 0;
+    tc->active = false;
+}
 
-    if (fabsf(T_delta) <= tempctrl->hysteresis) {
-        // Within hysteresis band - turn off
-        tempctrl->drive = 0.0;
-        tempctrl->active = false;
-    } else {
-        // Outside hysteresis band - engage control
-        tempctrl->active = true;
-        // Simple proportional control using gain and baseline drive
-        tempctrl->drive = T_delta * tempctrl->gain + sign * tempctrl->baseline;
-        // Limit drive to maximum power (clamp acts as max power)
-        if (fabsf(tempctrl->drive) > tempctrl->clamp) {
-            tempctrl->drive = sign * tempctrl->clamp;
-        }
+static void tempctrl_pi_drive(TempControl *tc) {
+    float T_delta = tc->T_target - tc->T_now;
+
+    if (fabsf(T_delta) <= tc->hysteresis) {
+        /* Inside deadband: zero drive AND freeze the integrator. This
+           preserves the existing anti-chatter design and prevents the
+           integrator from winding up at setpoint. */
+        tempctrl_reset_controller_state(tc);
+        tempctrl_drive_raw(tc); /* XXX again calling drive with 0 drive */
+        return;
     }
-    tempctrl_drive_raw(tempctrl);
+
+    tc->active = true;
+
+    /* dt from real elapsed time since last PI tick. First sample after a
+       reset uses dt=0 so the integrator does not jump. */
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    float dt = 0.0f;
+    if (tc->last_sample_ms != 0) {
+        dt = (float)(now_ms - tc->last_sample_ms) / 1000.0f;
+    }
+    tc->last_sample_ms = now_ms;
+
+    float p_term = tc->Kp * T_delta;
+    float tentative_i = tc->integral + T_delta * dt;
+    float tentative_drive = p_term + tc->Ki * tentative_i;
+
+    /* Anti-windup: only commit the new integral if it would not push
+       further into the saturation we're already against. */
+    bool sat_high = (tentative_drive >  tc->clamp) && (T_delta > 0);
+    bool sat_low  = (tentative_drive < -tc->clamp) && (T_delta < 0);
+
+    if (sat_high) {
+        tc->drive = tc->clamp;
+    } else if (sat_low) {
+        tc->drive = -tc->clamp;
+    } else {
+        tc->integral = tentative_i;
+        tc->drive = tentative_drive;
+        if (tc->drive >  tc->clamp) tc->drive =  tc->clamp;
+        if (tc->drive < -tc->clamp) tc->drive = -tc->clamp;
+    }
+
+    tempctrl_drive_raw(tc);
 }
 
 static void tempctrl_check_stall(TempControl *tempctrl) {
