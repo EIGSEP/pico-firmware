@@ -45,7 +45,7 @@ def _mock_flash(monkeypatch, tmp_path):
         lambda port, baud, timeout: serial_data[port],
     )
 
-    # Skip the 2-second sleep
+    # Skip polling delays and udev settling in the test environment.
     monkeypatch.setattr(fp.time, "sleep", lambda _: None)
     monkeypatch.setattr(fp, "_udev_settle", lambda: None)
 

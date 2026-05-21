@@ -88,12 +88,30 @@ def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
     without ``udevadm`` (e.g. macOS).
     """
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["udevadm", "settle", f"--timeout={int(timeout)}"],
             check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 1,
         )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                logger.warning(
+                    "udevadm settle failed with exit code %s: %s",
+                    result.returncode,
+                    detail,
+                )
+            else:
+                logger.warning(
+                    "udevadm settle failed with exit code %s",
+                    result.returncode,
+                )
     except FileNotFoundError:
         pass
+    except subprocess.TimeoutExpired:
+        logger.warning("udevadm settle timed out after %.1f seconds", timeout + 1)
 
 
 def _resolve_post_flash_port(
