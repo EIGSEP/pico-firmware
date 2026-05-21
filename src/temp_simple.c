@@ -28,42 +28,43 @@ void temp_sensor_start_conversion(TempSensor *sensor) {
     }
 }
 
-void temp_sensor_read(TempSensor *sensor) {
+bool temp_sensor_read(TempSensor *sensor) {
     // Check if enough time has passed since conversion start
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if ((now - sensor->last_conversion_time) < DS18B20_CONVERSION_TIME_MS) {
-        return;
+        return false;
     }
-    
+
     // Reset and read scratchpad
     if (!ow_reset(&sensor->ow)) {
         sensor->read_error = true;
-        return;
+        return false;
     }
-    
+
     ow_send(&sensor->ow, OW_SKIP_ROM);  // Skip ROM since only one device
     ow_send(&sensor->ow, DS18B20_READ_SCRATCHPAD);
-    
+
     // Read 9 bytes of scratchpad
     uint8_t data[9];
     for (int i = 0; i < 9; i++) {
         data[i] = ow_read(&sensor->ow);
     }
-    
-    
+
+
     // Convert to temperature
     int16_t raw_temp = (data[1] << 8) | data[0];
     float temp = raw_temp / 16.0;
-    
+
     // Check for valid temperature range and NaN
     if (isnan(temp) || temp < -55.0 || temp > 125.0) {
         sensor->read_error = true;
-        return;
+        return false;
     }
-    
+
     sensor->temperature = temp;
     sensor->conversion_started = false;  // Ready for next conversion
     sensor->read_error = false;  // Successful read
+    return true;
 }
 
 float temp_sensor_get_temp(TempSensor *sensor) {

@@ -208,6 +208,9 @@ class TestTempCtrlEmulator:
             "LNA_stall_tripped",
             "LNA_hysteresis",
             "LNA_clamp",
+            "LNA_Kp",
+            "LNA_Ki",
+            "LNA_integral",
             "LOAD_status",
             "LOAD_T_now",
             "LOAD_timestamp",
@@ -219,8 +222,46 @@ class TestTempCtrlEmulator:
             "LOAD_stall_tripped",
             "LOAD_hysteresis",
             "LOAD_clamp",
+            "LOAD_Kp",
+            "LOAD_Ki",
+            "LOAD_integral",
         }
         assert set(status.keys()) == expected_keys
+
+    def test_integral_eliminates_steady_state_offset(self):
+        """With Ki > 0, T_now converges to within the deadband and the
+        integrator settles at a finite, nonzero value — the headline
+        new behavior over the old proportional+baseline law.
+        """
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                "LNA_Ki": 0.05,
+            }
+        )
+        for _ in range(2000):
+            emu.op()
+        assert abs(emu.lna.T_now - 30.0) <= 0.5
+
+    def test_disable_clears_integrator(self):
+        """Going from enabled → disabled wipes integral so the next
+        re-enable starts clean (no kick from stale state)."""
+        emu = TempCtrlEmulator()
+        # Seed accumulator + sample-flag directly so the test isolates
+        # the disable-path's reset behavior from PI accumulation dynamics
+        # (which are exercised by test_integral_eliminates_steady_state_offset).
+        emu.lna.integral = 5.0
+        emu.lna.last_sample_seen = True
+        emu.lna.drive = 0.3
+        emu.server({"LNA_enable": False})
+        emu.op()
+        assert emu.lna.integral == 0.0
+        assert emu.lna.drive == 0.0
+        assert emu.lna.last_sample_seen is False
 
 
 class TestTempCtrlWatchdog:
