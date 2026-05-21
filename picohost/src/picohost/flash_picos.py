@@ -77,6 +77,45 @@ def read_json_from_serial(port, baud, timeout):
 
 _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
+_UDEV_SETTLE_TIMEOUT_S = 3.0
+
+
+def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
+    """Block until udev has drained its pending event queue.
+
+    After post-flash re-enumeration the new ``/dev/ttyACMn`` node is
+    created by devtmpfs with the driver-default mode before udev's
+    stock rules chgrp it to ``dialout``. ``list_ports.comports()`` sees
+    the device the instant the node exists, so opening it immediately
+    races against udev's permission pass and fails intermittently with
+    ``EACCES``. Settling here closes the window. No-op on systems
+    without ``udevadm`` (e.g. macOS).
+    """
+    try:
+        result = subprocess.run(
+            ["udevadm", "settle", f"--timeout={int(timeout)}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 1,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                logger.warning(
+                    "udevadm settle failed with exit code %s: %s",
+                    result.returncode,
+                    detail,
+                )
+            else:
+                logger.warning(
+                    "udevadm settle failed with exit code %s",
+                    result.returncode,
+                )
+    except FileNotFoundError:
+        pass
+    except subprocess.TimeoutExpired:
+        logger.warning("udevadm settle timed out after %.1f seconds", timeout + 1)
 
 
 def _resolve_post_flash_port(
@@ -182,6 +221,8 @@ def flash_and_discover(
                 f"{_REENUMERATE_TIMEOUT_S}s; skipping"
             )
             continue
+
+        _udev_settle()
 
         try:
             data = read_json_from_serial(current_port, baud, timeout)
