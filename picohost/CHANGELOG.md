@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.4.0](https://github.com/EIGSEP/pico-firmware/compare/v3.3.0...v3.4.0) (2026-05-21)
+
+
+### Features
+
+* **flash_test:** auto-discover all BOOTSEL Picos by default ([#85](https://github.com/EIGSEP/pico-firmware/issues/85)) ([41d1df8](https://github.com/EIGSEP/pico-firmware/commit/41d1df817a3a755439af6e22c5c0b6114cf4fc74))
+* **picohost:** identify Picos by USB serial in flash CLIs ([#81](https://github.com/EIGSEP/pico-firmware/issues/81)) ([2dae27d](https://github.com/EIGSEP/pico-firmware/commit/2dae27da900f1a6556dfc390091e337cccd7bdc8))
+* **picohost:** run calibrate_pot through PicoManager, support fractional turns ([2347450](https://github.com/EIGSEP/pico-firmware/commit/2347450afccc6cd95622397daf57ed79fb3f9b87))
+* **tempctrl:** per-channel stall guard for stuck sensors ([d953ba3](https://github.com/EIGSEP/pico-firmware/commit/d953ba34ab823155e2b85228c52ee26444338905))
+* **tempctrl:** replace bang-bang with PI controller ([b2e6299](https://github.com/EIGSEP/pico-firmware/commit/b2e62991c1eb897cbd6a05a6dd401fb49c6d2cc7))
+
+
+### Bug Fixes
+
+* **flash_picos:** resolve port from usb_serial after re-enumeration ([#80](https://github.com/EIGSEP/pico-firmware/issues/80)) ([8391445](https://github.com/EIGSEP/pico-firmware/commit/83914457b770a4eb5be300e70a2bdf502bb7bd81))
+* **imu-emulator:** clear sensor data on (re-)init to match firmware ([cec4137](https://github.com/EIGSEP/pico-firmware/commit/cec4137bd52e8f3c3fcee0a5e0ecad54cd98a074))
+* **lidar/potmon-emulator:** align defaults with firmware contract ([e2d2211](https://github.com/EIGSEP/pico-firmware/commit/e2d22112e1b378cccf243c360383363e153d7ef2))
+* **picohost:** settle udev before opening post-flash serial port ([#83](https://github.com/EIGSEP/pico-firmware/issues/83)) ([2e0b729](https://github.com/EIGSEP/pico-firmware/commit/2e0b72955f2dbdac5f9c069ad63418ff814f1c36))
+* **picohost:** tolerate non-UTF-8 bytes in picotool output ([b9acd25](https://github.com/EIGSEP/pico-firmware/commit/b9acd25afa26596347a6d625f3787a332e3d45b7))
+* **tempctrl-emulator:** close remaining divergences from tempctrl.c ([534661b](https://github.com/EIGSEP/pico-firmware/commit/534661b718d6cfcd1f8f7158dbfd94ac48f56184))
+* **tempctrl-emulator:** match firmware cJSON parse semantics ([d0469e0](https://github.com/EIGSEP/pico-firmware/commit/d0469e0b0d76a926c042fc3fdf0c177cb27b056a))
+* **tempctrl:** clear active flag when channel is disabled ([f48cf18](https://github.com/EIGSEP/pico-firmware/commit/f48cf18f660703b4d896fff8f442299c52f98056))
+* **tempctrl:** reset PI integrator on Ki change; freeze it when Ki=0 ([5527bd8](https://github.com/EIGSEP/pico-firmware/commit/5527bd8f868e01249c46694b19eb907bbefa5521))
+
 ## [3.3.0](https://github.com/EIGSEP/pico-firmware/compare/v3.2.1...v3.3.0) (2026-05-16)
 
 
