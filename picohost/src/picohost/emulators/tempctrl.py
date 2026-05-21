@@ -18,6 +18,14 @@ class TempControlState:
         self.active = False
         self.internally_disabled = False
         self.timestamp = 0.0
+        # Stall guard mirror (see tempctrl_check_stall in tempctrl.c).
+        self.stall_tripped = False
+        self.stall_window_active = False
+        self.stall_check_T = 0.0
+        self.stall_check_time = 0.0
+        # Test hook: when True, skip the thermal-drift update even with the
+        # drive engaged, so the stall guard can be exercised deterministically.
+        self.thermal_frozen = False
 
 
 def tempctrl_hysteresis_drive(tc):
@@ -36,6 +44,10 @@ def tempctrl_hysteresis_drive(tc):
 
 
 THERMAL_DRIFT_RATE = 0.05
+
+# Mirrors TEMPCTRL_STALL_WINDOW_MS / TEMPCTRL_STALL_MIN_DELTA in tempctrl.h.
+STALL_WINDOW_MS = 60000
+STALL_MIN_DELTA = 0.5
 
 
 class TempCtrlEmulator(PicoEmulator):
@@ -69,7 +81,13 @@ class TempCtrlEmulator(PicoEmulator):
 
             key = f"{prefix}_enable"
             if key in cmd:
-                tc.enabled = bool(cmd[key])
+                new_enabled = bool(cmd[key])
+                # Rising edge clears the sticky stall trip — mirrors
+                # tempctrl_apply_enable() in tempctrl.c.
+                if new_enabled and not tc.enabled:
+                    tc.stall_tripped = False
+                    tc.stall_window_active = False
+                tc.enabled = new_enabled
 
             key = f"{prefix}_hysteresis"
             if key in cmd:
@@ -97,10 +115,37 @@ class TempCtrlEmulator(PicoEmulator):
     def _update_channel(self, tc):
         if tc.enabled and not tc.internally_disabled:
             tempctrl_hysteresis_drive(tc)
-            tc.T_now += tc.drive * THERMAL_DRIFT_RATE
+            if not tc.thermal_frozen:
+                tc.T_now += tc.drive * THERMAL_DRIFT_RATE
+            self._check_stall(tc)
         else:
             tc.drive = 0.0
+            tc.stall_window_active = False
         tc.timestamp = time.time()
+
+    def _check_stall(self, tc):
+        """Mirror tempctrl_check_stall() from tempctrl.c."""
+        if not tc.active:
+            tc.stall_window_active = False
+            return
+        now = time.time()
+        if not tc.stall_window_active:
+            tc.stall_check_T = tc.T_now
+            tc.stall_check_time = now
+            tc.stall_window_active = True
+            return
+        elapsed_ms = (now - tc.stall_check_time) * 1000
+        if elapsed_ms < STALL_WINDOW_MS:
+            return
+        if abs(tc.T_now - tc.stall_check_T) < STALL_MIN_DELTA:
+            tc.stall_tripped = True
+            tc.enabled = False
+            tc.active = False
+            tc.drive = 0.0
+            tc.stall_window_active = False
+        else:
+            tc.stall_check_T = tc.T_now
+            tc.stall_check_time = now
 
     def op(self):
         # Communication watchdog: disable peltiers if no command within timeout
@@ -130,6 +175,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_enabled": self.lna.enabled,
             "LNA_active": self.lna.active,
             "LNA_int_disabled": self.lna.internally_disabled,
+            "LNA_stall_tripped": self.lna.stall_tripped,
             "LNA_hysteresis": self.lna.hysteresis,
             "LNA_clamp": self.lna.clamp,
             "LOAD_status": load_status,
@@ -140,6 +186,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_enabled": self.load.enabled,
             "LOAD_active": self.load.active,
             "LOAD_int_disabled": self.load.internally_disabled,
+            "LOAD_stall_tripped": self.load.stall_tripped,
             "LOAD_hysteresis": self.load.hysteresis,
             "LOAD_clamp": self.load.clamp,
         }

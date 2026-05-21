@@ -45,6 +45,7 @@ TEMPCTRL_FIELDS = {
     "LNA_enabled",
     "LNA_active",
     "LNA_int_disabled",
+    "LNA_stall_tripped",
     "LNA_hysteresis",
     "LNA_clamp",
     "LOAD_status",
@@ -55,6 +56,7 @@ TEMPCTRL_FIELDS = {
     "LOAD_enabled",
     "LOAD_active",
     "LOAD_int_disabled",
+    "LOAD_stall_tripped",
     "LOAD_hysteresis",
     "LOAD_clamp",
 }

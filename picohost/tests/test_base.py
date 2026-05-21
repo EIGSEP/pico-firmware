@@ -788,6 +788,7 @@ class TestPicoPeltierRedisHandler:
         "LNA_enabled": True,
         "LNA_active": True,
         "LNA_int_disabled": False,
+        "LNA_stall_tripped": False,
         "LNA_hysteresis": 0.5,
         "LNA_clamp": 0.8,
         "LOAD_status": "error",
@@ -798,6 +799,7 @@ class TestPicoPeltierRedisHandler:
         "LOAD_enabled": True,
         "LOAD_active": False,
         "LOAD_int_disabled": True,
+        "LOAD_stall_tripped": False,
         "LOAD_hysteresis": 0.5,
         "LOAD_clamp": 0.8,
     }
@@ -815,6 +817,7 @@ class TestPicoPeltierRedisHandler:
         "enabled",
         "active",
         "int_disabled",
+        "stall_tripped",
         "hysteresis",
         "clamp",
     }
