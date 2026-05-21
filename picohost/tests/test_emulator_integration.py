@@ -444,8 +444,12 @@ class TestRedisIntegration:
         last_two = received[-2:]
         last_names = sorted(n for n, _ in last_two)
         assert last_names == ["tempctrl_lna", "tempctrl_load"]
-        lna_entry = next(d for n, d in reversed(received) if n == "tempctrl_lna")
-        load_entry = next(d for n, d in reversed(received) if n == "tempctrl_load")
+        lna_entry = next(
+            d for n, d in reversed(received) if n == "tempctrl_lna"
+        )
+        load_entry = next(
+            d for n, d in reversed(received) if n == "tempctrl_load"
+        )
         assert lna_entry["sensor_name"] == "tempctrl_lna"
         assert load_entry["sensor_name"] == "tempctrl_load"
         assert "status" in lna_entry and "status" in load_entry

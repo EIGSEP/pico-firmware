@@ -253,7 +253,9 @@ class TestTempCtrlProtocol:
         from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
 
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1})
+        emu.server(
+            {"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1}
+        )
         # Need a full conversion cycle so PI fires at least once and drive
         # leaves zero (matches firmware: PI only runs on the op tick a
         # DS18B20 conversion completes).

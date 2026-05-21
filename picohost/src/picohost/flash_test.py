@@ -11,6 +11,7 @@ By default all connected BOOTSEL Picos are flashed sequentially (mirroring
 ``flash-picos``). Pass ``--bus/--address`` or ``--usb-serial`` to target
 a single device.
 """
+
 import argparse
 import subprocess
 import sys
@@ -58,9 +59,7 @@ def find_bootsel_devices(sysfs_root=None):
         except (OSError, ValueError):
             bus = None
             address = None
-        devices.append(
-            {"usb_serial": serial, "bus": bus, "address": address}
-        )
+        devices.append({"usb_serial": serial, "bus": bus, "address": address})
     return devices
 
 
@@ -226,9 +225,7 @@ def main():
                     if serial is not None:
                         flash_test_image(args.uf2, usb_serial=serial)
                     else:
-                        flash_test_image(
-                            args.uf2, bus=bus, address=address
-                        )
+                        flash_test_image(args.uf2, bus=bus, address=address)
                 except RuntimeError as e:
                     print(str(e), file=sys.stderr)
                     failures += 1

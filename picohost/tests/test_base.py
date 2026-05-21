@@ -974,8 +974,7 @@ class TestPicoPeltierRedisHandler:
             for entry in self._capture_all(peltier, self._SAMPLE):
                 for k, v in entry.items():
                     assert isinstance(v, self._SCALAR_TYPES), (
-                        f"field {k!r} has non-scalar type "
-                        f"{type(v).__name__}"
+                        f"field {k!r} has non-scalar type {type(v).__name__}"
                     )
         finally:
             peltier.disconnect()

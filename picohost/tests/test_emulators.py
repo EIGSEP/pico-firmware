@@ -447,7 +447,11 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 30.0
         emu.lna.thermal_frozen = True
         emu.server(
-            {"LNA_temp_target": 30.0, "LNA_enable": True, "LNA_hysteresis": 0.5}
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+            }
         )
         _run_to_pi_tick(emu)
         assert emu.lna.active is False

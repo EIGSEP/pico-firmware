@@ -36,9 +36,7 @@ class TestMain:
         main()
         assert capsys.readouterr().out.strip() == "/dev/ttyACM0"
 
-    def test_lookup_miss_exits_nonzero(
-        self, _mock_ports, monkeypatch, capsys
-    ):
+    def test_lookup_miss_exits_nonzero(self, _mock_ports, monkeypatch, capsys):
         monkeypatch.setattr("sys.argv", ["picohost-resolve", "NOPE"])
         with pytest.raises(SystemExit) as exc:
             main()

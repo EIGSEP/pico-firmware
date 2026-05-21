@@ -1,6 +1,6 @@
 import time
 
-from .base import PicoEmulator, _safe_float, _safe_int
+from .base import PicoEmulator, _safe_int
 
 
 # Mirror the firmware's PI cadence. On hardware, op() runs every ~50 ms
@@ -202,7 +202,9 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.last_sample_seen = False
 
         if "watchdog_timeout_ms" in cmd:
-            val = _safe_int(cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms)
+            val = _safe_int(
+                cmd["watchdog_timeout_ms"], self.watchdog_timeout_ms
+            )
             # Firmware clamps negatives to 0 (see tempctrl.c watchdog parse).
             self.watchdog_timeout_ms = 0 if val < 0 else val
 
@@ -229,7 +231,7 @@ class TempCtrlEmulator(PicoEmulator):
 
     def _update_channel(self, tc):
         tc._op_counter += 1
-        fresh = (tc._op_counter % OP_TICKS_PER_CONVERSION == 0)
+        fresh = tc._op_counter % OP_TICKS_PER_CONVERSION == 0
 
         # Mirror firmware tempctrl_update_sensor_drive: temp_sensor_has_error()
         # is re-read every op tick, so a recovered sensor self-clears.

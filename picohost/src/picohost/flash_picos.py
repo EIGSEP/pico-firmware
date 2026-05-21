@@ -115,7 +115,9 @@ def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
     except FileNotFoundError:
         pass
     except subprocess.TimeoutExpired:
-        logger.warning("udevadm settle timed out after %.1f seconds", timeout + 1)
+        logger.warning(
+            "udevadm settle timed out after %.1f seconds", timeout + 1
+        )
 
 
 def _resolve_post_flash_port(

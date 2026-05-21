@@ -14,7 +14,9 @@ from picohost.flash_test import (
 )
 
 
-def _make_usb_device(root, name, vid, pid, *, serial=None, bus=None, devnum=None):
+def _make_usb_device(
+    root, name, vid, pid, *, serial=None, bus=None, devnum=None
+):
     """Create a fake sysfs USB device directory for tests."""
     dev = root / name
     dev.mkdir()
@@ -37,17 +39,27 @@ class TestBuildPicotoolCmd:
     def test_with_bus_and_address(self):
         cmd = build_picotool_cmd("foo.uf2", bus=1, address=4)
         assert cmd == [
-            "picotool", "load", "-f",
-            "--bus", "1", "--address", "4",
-            "-x", "foo.uf2",
+            "picotool",
+            "load",
+            "-f",
+            "--bus",
+            "1",
+            "--address",
+            "4",
+            "-x",
+            "foo.uf2",
         ]
 
     def test_with_usb_serial(self):
         cmd = build_picotool_cmd("foo.uf2", usb_serial="E66160F423456789")
         assert cmd == [
-            "picotool", "load", "-f",
-            "--ser", "E66160F423456789",
-            "-x", "foo.uf2",
+            "picotool",
+            "load",
+            "-f",
+            "--ser",
+            "E66160F423456789",
+            "-x",
+            "foo.uf2",
         ]
 
     def test_accepts_path(self):
@@ -74,7 +86,11 @@ class TestFlashTestImage:
         flash_test_image(uf2)
 
         assert captured["cmd"] == [
-            "picotool", "load", "-f", "-x", str(uf2),
+            "picotool",
+            "load",
+            "-f",
+            "-x",
+            str(uf2),
         ]
 
     def test_passes_bus_and_address(self, monkeypatch, tmp_path):
@@ -91,9 +107,15 @@ class TestFlashTestImage:
         flash_test_image(uf2, bus=2, address=7)
 
         assert captured["cmd"] == [
-            "picotool", "load", "-f",
-            "--bus", "2", "--address", "7",
-            "-x", str(uf2),
+            "picotool",
+            "load",
+            "-f",
+            "--bus",
+            "2",
+            "--address",
+            "7",
+            "-x",
+            str(uf2),
         ]
 
     def test_passes_usb_serial(self, monkeypatch, tmp_path):
@@ -110,9 +132,13 @@ class TestFlashTestImage:
         flash_test_image(uf2, usb_serial="E66160F4ABCDEF01")
 
         assert captured["cmd"] == [
-            "picotool", "load", "-f",
-            "--ser", "E66160F4ABCDEF01",
-            "-x", str(uf2),
+            "picotool",
+            "load",
+            "-f",
+            "--ser",
+            "E66160F4ABCDEF01",
+            "-x",
+            str(uf2),
         ]
 
     def test_nonzero_exit_raises(self, monkeypatch, tmp_path):
@@ -133,22 +159,37 @@ class TestFindBootselDevices:
 
     def test_skips_non_pico_devices(self, tmp_path):
         _make_usb_device(
-            tmp_path, "1-1", "1234", "5678",
-            serial="other", bus=1, devnum=2,
+            tmp_path,
+            "1-1",
+            "1234",
+            "5678",
+            serial="other",
+            bus=1,
+            devnum=2,
         )
         assert find_bootsel_devices(tmp_path) == []
 
     def test_skips_pico_in_cdc_mode(self, tmp_path):
         _make_usb_device(
-            tmp_path, "1-2", "2e8a", "0009",
-            serial="CDCPICO", bus=1, devnum=3,
+            tmp_path,
+            "1-2",
+            "2e8a",
+            "0009",
+            serial="CDCPICO",
+            bus=1,
+            devnum=3,
         )
         assert find_bootsel_devices(tmp_path) == []
 
     def test_finds_bootsel_pico(self, tmp_path):
         _make_usb_device(
-            tmp_path, "1-3", "2e8a", "0003",
-            serial="E66160F4ABCDEF01", bus=1, devnum=4,
+            tmp_path,
+            "1-3",
+            "2e8a",
+            "0003",
+            serial="E66160F4ABCDEF01",
+            bus=1,
+            devnum=4,
         )
         assert find_bootsel_devices(tmp_path) == [
             {"usb_serial": "E66160F4ABCDEF01", "bus": 1, "address": 4},
@@ -156,8 +197,13 @@ class TestFindBootselDevices:
 
     def test_accepts_uppercase_vid_pid(self, tmp_path):
         _make_usb_device(
-            tmp_path, "1-4", "2E8A", "0003",
-            serial="UPPER1", bus=2, devnum=5,
+            tmp_path,
+            "1-4",
+            "2E8A",
+            "0003",
+            serial="UPPER1",
+            bus=2,
+            devnum=5,
         )
         devs = find_bootsel_devices(tmp_path)
         assert len(devs) == 1
@@ -165,16 +211,31 @@ class TestFindBootselDevices:
 
     def test_finds_multiple(self, tmp_path):
         _make_usb_device(
-            tmp_path, "1-3", "2e8a", "0003",
-            serial="AAA", bus=1, devnum=3,
+            tmp_path,
+            "1-3",
+            "2e8a",
+            "0003",
+            serial="AAA",
+            bus=1,
+            devnum=3,
         )
         _make_usb_device(
-            tmp_path, "1-5", "2e8a", "0003",
-            serial="BBB", bus=1, devnum=6,
+            tmp_path,
+            "1-5",
+            "2e8a",
+            "0003",
+            serial="BBB",
+            bus=1,
+            devnum=6,
         )
         _make_usb_device(
-            tmp_path, "2-1", "2e8a", "0009",
-            serial="not-bootsel", bus=2, devnum=2,
+            tmp_path,
+            "2-1",
+            "2e8a",
+            "0009",
+            serial="not-bootsel",
+            bus=2,
+            devnum=2,
         )
         devs = find_bootsel_devices(tmp_path)
         serials = {d["usb_serial"] for d in devs}
@@ -241,12 +302,22 @@ class TestMainAutoDiscover:
         sysfs = tmp_path / "sysfs"
         sysfs.mkdir()
         _make_usb_device(
-            sysfs, "1-1", "2e8a", "0003",
-            serial="AAA", bus=1, devnum=3,
+            sysfs,
+            "1-1",
+            "2e8a",
+            "0003",
+            serial="AAA",
+            bus=1,
+            devnum=3,
         )
         _make_usb_device(
-            sysfs, "1-2", "2e8a", "0003",
-            serial="BBB", bus=1, devnum=4,
+            sysfs,
+            "1-2",
+            "2e8a",
+            "0003",
+            serial="BBB",
+            bus=1,
+            devnum=4,
         )
 
         monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
@@ -254,17 +325,17 @@ class TestMainAutoDiscover:
         calls = []
 
         def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
-            calls.append({
-                "uf2": str(uf2_path),
-                "bus": bus,
-                "address": address,
-                "usb_serial": usb_serial,
-            })
+            calls.append(
+                {
+                    "uf2": str(uf2_path),
+                    "bus": bus,
+                    "address": address,
+                    "usb_serial": usb_serial,
+                }
+            )
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
-        monkeypatch.setattr(
-            "sys.argv", ["flash-test", "--uf2", str(uf2)]
-        )
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
 
         main()
 
@@ -288,9 +359,7 @@ class TestMainAutoDiscover:
             called.append((a, kw))
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
-        monkeypatch.setattr(
-            "sys.argv", ["flash-test", "--uf2", str(uf2)]
-        )
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -304,12 +373,22 @@ class TestMainAutoDiscover:
         sysfs.mkdir()
         # Two BOOTSEL devices present, but user asked for one specifically.
         _make_usb_device(
-            sysfs, "1-1", "2e8a", "0003",
-            serial="AAA", bus=1, devnum=3,
+            sysfs,
+            "1-1",
+            "2e8a",
+            "0003",
+            serial="AAA",
+            bus=1,
+            devnum=3,
         )
         _make_usb_device(
-            sysfs, "1-2", "2e8a", "0003",
-            serial="BBB", bus=1, devnum=4,
+            sysfs,
+            "1-2",
+            "2e8a",
+            "0003",
+            serial="BBB",
+            bus=1,
+            devnum=4,
         )
 
         monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
@@ -317,9 +396,13 @@ class TestMainAutoDiscover:
         calls = []
 
         def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
-            calls.append({
-                "bus": bus, "address": address, "usb_serial": usb_serial,
-            })
+            calls.append(
+                {
+                    "bus": bus,
+                    "address": address,
+                    "usb_serial": usb_serial,
+                }
+            )
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
         monkeypatch.setattr(
@@ -338,12 +421,22 @@ class TestMainAutoDiscover:
         sysfs = tmp_path / "sysfs"
         sysfs.mkdir()
         _make_usb_device(
-            sysfs, "1-1", "2e8a", "0003",
-            serial="AAA", bus=1, devnum=3,
+            sysfs,
+            "1-1",
+            "2e8a",
+            "0003",
+            serial="AAA",
+            bus=1,
+            devnum=3,
         )
         _make_usb_device(
-            sysfs, "1-2", "2e8a", "0003",
-            serial="BBB", bus=1, devnum=4,
+            sysfs,
+            "1-2",
+            "2e8a",
+            "0003",
+            serial="BBB",
+            bus=1,
+            devnum=4,
         )
 
         monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
@@ -356,9 +449,7 @@ class TestMainAutoDiscover:
                 raise RuntimeError("picotool failed")
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
-        monkeypatch.setattr(
-            "sys.argv", ["flash-test", "--uf2", str(uf2)]
-        )
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -384,14 +475,16 @@ class TestMainAutoDiscover:
         calls = []
 
         def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
-            calls.append({
-                "bus": bus, "address": address, "usb_serial": usb_serial,
-            })
+            calls.append(
+                {
+                    "bus": bus,
+                    "address": address,
+                    "usb_serial": usb_serial,
+                }
+            )
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
-        monkeypatch.setattr(
-            "sys.argv", ["flash-test", "--uf2", str(uf2)]
-        )
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
 
         main()
         assert calls == [
@@ -406,8 +499,13 @@ class TestMainAutoDiscover:
         sysfs = tmp_path / "sysfs"
         sysfs.mkdir()
         _make_usb_device(
-            sysfs, "1-1", "2e8a", "0003",
-            serial="AAA", bus=1, devnum=3,
+            sysfs,
+            "1-1",
+            "2e8a",
+            "0003",
+            serial="AAA",
+            bus=1,
+            devnum=3,
         )
         dev = sysfs / "1-2"
         dev.mkdir()
@@ -419,14 +517,16 @@ class TestMainAutoDiscover:
         calls = []
 
         def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
-            calls.append({
-                "bus": bus, "address": address, "usb_serial": usb_serial,
-            })
+            calls.append(
+                {
+                    "bus": bus,
+                    "address": address,
+                    "usb_serial": usb_serial,
+                }
+            )
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
-        monkeypatch.setattr(
-            "sys.argv", ["flash-test", "--uf2", str(uf2)]
-        )
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
 
         with pytest.raises(SystemExit) as exc_info:
             main()

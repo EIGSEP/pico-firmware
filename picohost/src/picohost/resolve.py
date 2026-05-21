@@ -6,6 +6,7 @@ replug/reboot. Use this helper in field debug sessions when you know
 the Pico by its role (e.g. from ``devices_info.json``) but need the
 current port to attach a serial client.
 """
+
 import argparse
 import sys
 

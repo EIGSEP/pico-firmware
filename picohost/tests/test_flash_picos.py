@@ -278,9 +278,7 @@ class TestFlashAndDiscover:
 
 
 class TestResolvePostFlashPort:
-    def test_returns_current_path_when_serial_is_present(
-        self, monkeypatch
-    ):
+    def test_returns_current_path_when_serial_is_present(self, monkeypatch):
         import picohost.flash_picos as fp
 
         monkeypatch.setattr(
@@ -319,8 +317,5 @@ class TestResolvePostFlashPort:
 
         monkeypatch.setattr(fp, "find_pico_ports", fake_find)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-        assert (
-            _resolve_post_flash_port("SER_Z", timeout=1.0)
-            == "/dev/ttyACM7"
-        )
+        assert _resolve_post_flash_port("SER_Z", timeout=1.0) == "/dev/ttyACM7"
         assert calls["n"] >= 3
