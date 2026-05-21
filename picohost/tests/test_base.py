@@ -784,9 +784,10 @@ class TestPicoPeltierReconnectReplay:
             peltier.disconnect()
 
     def test_set_cooling_enabled_partial_no_command(self):
-        """``set_cooling_enabled()`` with both args None must not send a
-        command (matches ``set_clamp`` shape — partial-application
-        callers don't touch the untouched channel)."""
+        """``set_cooling_enabled()`` with both args None must not touch
+        the wire or the replay cache — matches the shape shared by
+        ``set_temperature`` / ``set_clamp`` / ``set_gains`` / and
+        ``reset_integral``."""
         peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
             sent = []
@@ -798,8 +799,7 @@ class TestPicoPeltierReconnectReplay:
 
             peltier.send_command = spy  # type: ignore[method-assign]
             peltier.set_cooling_enabled()
-            # send_command is still called (empty cmd), but cache stays
-            # empty so on_reconnect won't replay this group.
+            assert sent == []
             assert peltier._last_cooling == {}
         finally:
             peltier.disconnect()

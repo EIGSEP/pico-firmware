@@ -754,8 +754,8 @@ class PicoPeltier(PicoDevice):
         if T_LOAD is not None:
             cmd["LOAD_temp_target"] = T_LOAD
             cmd["LOAD_hysteresis"] = LOAD_hyst
-        self.send_command(cmd)
         if cmd:
+            self.send_command(cmd)
             self._last_temperature.update(cmd)
 
     def set_enable(self, LNA=True, LOAD=True):
@@ -771,8 +771,8 @@ class PicoPeltier(PicoDevice):
             cmd["LNA_clamp"] = LNA
         if LOAD is not None:
             cmd["LOAD_clamp"] = LOAD
-        self.send_command(cmd)
         if cmd:
+            self.send_command(cmd)
             self._last_clamp.update(cmd)
 
     def set_cooling_enabled(self, LNA=None, LOAD=None):
@@ -794,8 +794,8 @@ class PicoPeltier(PicoDevice):
             if not isinstance(LOAD, bool):
                 raise TypeError("LOAD must be a bool or None")
             cmd["LOAD_cooling_enabled"] = LOAD
-        self.send_command(cmd)
         if cmd:
+            self.send_command(cmd)
             self._last_cooling.update(cmd)
 
     def set_gains(self, LNA_Kp=None, LNA_Ki=None, LOAD_Kp=None, LOAD_Ki=None):
@@ -814,8 +814,8 @@ class PicoPeltier(PicoDevice):
             cmd["LOAD_Kp"] = LOAD_Kp
         if LOAD_Ki is not None:
             cmd["LOAD_Ki"] = LOAD_Ki
-        self.send_command(cmd)
         if cmd:
+            self.send_command(cmd)
             self._last_gains.update(cmd)
 
     def reset_integral(self, LNA=False, LOAD=False):
