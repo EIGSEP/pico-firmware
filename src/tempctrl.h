@@ -49,11 +49,15 @@ typedef struct {
     float hysteresis;
     float clamp;
     bool active;
+    // `enabled` is host intent only — firmware never mutates it. A channel
+    // drives only when enabled && none of the trip flags below are set; the
+    // host distinguishes "asked off" from "blocked by trip" by reading
+    // enabled together with the trip flags.
     bool enabled;
-    bool internally_disabled;
+    bool internally_disabled;  // sensor read error (auto-derived each cycle)
     // Stall guard: sticky fault tripped when an active drive fails to move
-    // T_now. Cleared on the rising edge of `enabled` (host must explicitly
-    // re-enable, mirroring the watchdog pattern).
+    // T_now. Cleared by an explicit *_enable=true command from the host
+    // (mirrors the watchdog ack pattern).
     bool stall_tripped;
     bool stall_window_active;
     float stall_check_T;
