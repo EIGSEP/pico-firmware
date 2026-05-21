@@ -263,6 +263,51 @@ class TestTempCtrlEmulator:
         assert emu.lna.drive == 0.0
         assert emu.lna.last_sample_seen is False
 
+    def test_pure_p_does_not_accumulate_integral(self):
+        """With Ki==0 the integrator must stay at zero across active PI
+        ticks, so a later Ki retune cannot inherit drift."""
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.server(
+            {
+                "LNA_temp_target": 30.0,
+                "LNA_enable": True,
+                "LNA_hysteresis": 0.5,
+                # Ki defaults to 0; assert that explicitly for clarity.
+                "LNA_Ki": 0.0,
+            }
+        )
+        # Run while outside the deadband so the PI step is exercised
+        # without entering the reset-on-deadband path.
+        emu.lna.thermal_frozen = True
+        for _ in range(50):
+            emu.op()
+        assert emu.lna.active is True
+        assert emu.lna.integral == 0.0
+
+    def test_ki_change_resets_integrator(self):
+        """Changing Ki via the server command drops the accumulator so
+        the next PI tick does not multiply a stale integral by the new
+        gain (bumpless retune)."""
+        emu = TempCtrlEmulator()
+        emu.lna.integral = 4.2
+        emu.lna.last_sample_seen = True
+        emu.server({"LNA_Ki": 0.05})
+        assert emu.lna.integral == 0.0
+        assert emu.lna.last_sample_seen is False
+        assert emu.lna.Ki == 0.05
+
+    def test_ki_repeat_does_not_reset_integrator(self):
+        """Re-sending the same Ki value (e.g. as part of a config heartbeat)
+        must not nuke the accumulator."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_Ki": 0.05})
+        emu.lna.integral = 4.2
+        emu.lna.last_sample_seen = True
+        emu.server({"LNA_Ki": 0.05})
+        assert emu.lna.integral == 4.2
+        assert emu.lna.last_sample_seen is True
+
 
 class TestTempCtrlWatchdog:
     def test_watchdog_trips_after_timeout(self):

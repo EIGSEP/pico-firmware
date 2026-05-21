@@ -63,7 +63,13 @@ def tempctrl_pi_drive(tc, dt=DT_PER_OP_S):
     tc.last_sample_seen = True
 
     p_term = tc.Kp * T_delta
-    tentative_i = tc.integral + T_delta * effective_dt
+    # Pure-P (Ki==0): freeze the integrator. Matches firmware
+    # tempctrl_pi_drive — bumpless retune is enforced on Ki transitions
+    # in server(), not here.
+    if tc.Ki == 0.0:
+        tentative_i = tc.integral
+    else:
+        tentative_i = tc.integral + T_delta * effective_dt
     tentative_drive = p_term + tc.Ki * tentative_i
 
     sat_high = tentative_drive > tc.clamp and T_delta > 0
@@ -143,7 +149,14 @@ class TempCtrlEmulator(PicoEmulator):
 
             key = f"{prefix}_Ki"
             if key in cmd:
-                tc.Ki = _safe_float(cmd[key], tc.Ki)
+                new_ki = _safe_float(cmd[key], tc.Ki)
+                if new_ki != tc.Ki:
+                    # Bumpless retune: drop the accumulator so the next PI
+                    # step does not multiply a stale integral by a freshly
+                    # changed gain.
+                    tc.integral = 0.0
+                    tc.last_sample_seen = False
+                tc.Ki = new_ki
 
             key = f"{prefix}_integral_reset"
             if key in cmd and _safe_int(cmd[key], 0):
