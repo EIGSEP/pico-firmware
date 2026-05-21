@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.5.0](https://github.com/EIGSEP/pico-firmware/compare/v3.4.0...v3.5.0) (2026-05-21)
+
+
+### Features
+
+* **tempctrl:** add cooling-mode guard via asymmetric clamp ([fc4c13f](https://github.com/EIGSEP/pico-firmware/commit/fc4c13ff75e3d95a5de4897d5da29dc40af5b33d))
+
+
+### Bug Fixes
+
+* **tempctrl:** gate stall guard on drive!=0, not just active ([9960ece](https://github.com/EIGSEP/pico-firmware/commit/9960ece24fb7ddc65a1315ef60adfdd0b5d8b1ae))
+
 ## [3.4.0](https://github.com/EIGSEP/pico-firmware/compare/v3.3.0...v3.4.0) (2026-05-21)
 
 
