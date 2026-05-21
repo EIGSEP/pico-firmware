@@ -3,15 +3,16 @@ Manual potentiometer calibration entry point.
 
 Reads voltage samples from the running PicoManager's metadata stream
 (``stream:potmon``), walks the user through a voltage-to-angle sweep,
-computes a linear fit, and publishes it to three places:
+computes a linear fit, and publishes it to two places:
 
   1. :class:`picohost.buses.PotCalStore` — canonical Redis store, so a
      rebooted :class:`picohost.PicoPotentiometer` picks the cal up at
-     ``__init__`` time.
+     ``__init__`` time. Followed by a ``BGSAVE`` to fsync the RDB
+     snapshot, since the default ``save 3600 1`` policy would otherwise
+     leave a single-key write unsnapshotted for up to an hour.
   2. The running pot device via :class:`picohost.proxy.PicoProxy`
      (``set_calibration``) — the new cal takes effect on the next
      status tick without restarting the manager.
-  3. A timestamped JSON artifact on disk (audit).
 
 Requires PicoManager to be running and the ``potmon`` device to be
 healthy. The script never touches the serial port itself, so it can
@@ -34,7 +35,6 @@ import logging
 import math
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import numpy as np
 from eigsep_redis import Transport
@@ -162,27 +162,9 @@ def collect_per_turn(transport, n_samples, turns):
     return voltages_0, voltages_1, angles
 
 
-def _default_output_path():
-    """Timestamped default filename — never overwrites prior runs."""
-    # "-" instead of ":" in the time part so the filename is valid on
-    # every filesystem (Windows/macOS reject ":" in filenames).
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    return f"pot_cal_{stamp}.json"
-
-
 def main():
     parser = ArgumentParser(
         description="Calibrate potentiometer voltage-to-angle mapping.",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        default=None,
-        help=(
-            "Output JSON artifact path. Defaults to a timestamped file "
-            "in the current directory so prior runs aren't overwritten."
-        ),
     )
     parser.add_argument(
         "-t",
@@ -296,9 +278,14 @@ def main():
     # Persist to Redis first — if the live push later fails, the cal is
     # still stored and will load on the next PicoManager restart.
     PotCalStore(transport).upload(cal_data)
+    # Force an RDB snapshot now so the cal survives a power loss before
+    # the next scheduled save (default policy is `save 3600 1`, which
+    # would leave this single-key write unsnapshotted for up to an hour).
+    transport.r.bgsave()
     print(
         f"\nPublished calibration to Redis at "
-        f"{args.redis_host}:{args.redis_port} (key: pot_calibration)."
+        f"{args.redis_host}:{args.redis_port} (key: pot_calibration); "
+        "BGSAVE triggered."
     )
 
     # Push to the running PicoPotentiometer so the new cal takes effect
@@ -317,13 +304,6 @@ def main():
             file=sys.stderr,
         )
 
-    # JSON artifact (audit)
-    output_path = (
-        Path(args.output) if args.output else Path(_default_output_path())
-    )
-    with open(output_path, "w") as f:
-        json.dump(cal_data, f, indent=2)
-    print(f"\nCalibration saved to {output_path}")
     print(f"  pot_el: angle = {cal0[0]:.4f} * V + {cal0[1]:.4f}")
     print(f"  pot_az: angle = {cal1[0]:.4f} * V + {cal1[1]:.4f}")
     if args.mode == "turns":
