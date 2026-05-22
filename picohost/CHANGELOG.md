@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.0](https://github.com/EIGSEP/pico-firmware/compare/v3.5.0...v3.6.0) (2026-05-22)
+
+
+### Miscellaneous Chores
+
+* release 3.6.0 ([cf1809b](https://github.com/EIGSEP/pico-firmware/commit/cf1809ba72b1a467bf94630da9c2d287fec9dc7e))
+
 ## [3.5.0](https://github.com/EIGSEP/pico-firmware/compare/v3.4.0...v3.5.0) (2026-05-21)
 
 
