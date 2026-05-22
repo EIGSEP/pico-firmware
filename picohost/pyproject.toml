@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
   "numpy",
   "pyserial",
-  "eigsep_redis>=2.1.0",
+  "eigsep_redis>=2.3.0",
 ]
 
 [project.scripts]
