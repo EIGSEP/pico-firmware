@@ -36,6 +36,8 @@ class because the eigsep_redis surface already fits.
 import json
 import logging
 
+from eigsep_redis import SingleStreamReader, SingleStreamWriter
+
 from .keys import (
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
@@ -168,27 +170,22 @@ class PotCalStore:
         self.transport.r.delete(POT_CAL_KEY)
 
 
-class PicoCmdReader:
+class PicoCmdReader(SingleStreamReader):
     """
     Blocking reader for the pico command stream.
 
-    Mirrors :class:`eigsep_redis.StatusReader` — a single
-    hard-coded stream (:data:`PICO_CMD_STREAM`) with per-transport
-    last-read-id tracking so independent readers don't race. Only
-    the manager's command-relay thread is expected to call
-    :meth:`read`; other consumers should talk to
-    :class:`PicoRespWriter` via the response stream.
+    Subclasses :class:`eigsep_redis.SingleStreamReader` for cursor
+    bookkeeping but overrides :meth:`read` because the manager's
+    command-relay thread consumes up to ``count`` entries per call
+    and wants the raw ``(msg_id, fields)`` shape — the base's
+    single-decoded-entry contract doesn't fit. Only the manager's
+    command-relay thread is expected to call :meth:`read`; other
+    consumers should talk to :class:`PicoRespWriter` via the
+    response stream.
     """
 
-    def __init__(self, transport):
-        self.transport = transport
-
-    @property
-    def stream(self):
-        """``{PICO_CMD_STREAM: last_read_id}`` — view, used for blocking reads."""
-        return {
-            PICO_CMD_STREAM: self.transport._get_last_read_id(PICO_CMD_STREAM)
-        }
+    stream = PICO_CMD_STREAM
+    data_set = None  # singleton — no registry-set membership check
 
     def read(self, timeout=1.0, count=10):
         """Blocking read of up to ``count`` command entries.
@@ -211,18 +208,18 @@ class PicoCmdReader:
         """
         block_time = int(timeout * 1000) if timeout else 0
         result = self.transport.r.xread(
-            self.stream, block=block_time, count=count
+            {self.stream: self.transport.get_last_read_id(self.stream)},
+            block=block_time,
+            count=count,
         )
         if not result:
             return []
-        # Single-stream read → result has exactly one (stream, messages) tuple.
         _stream, messages = result[0]
-        last_id = messages[-1][0]
-        self.transport._set_last_read_id(PICO_CMD_STREAM, last_id)
+        self.transport.set_last_read_id(self.stream, messages[-1][0])
         return messages
 
 
-class PicoRespWriter:
+class PicoRespWriter(SingleStreamWriter):
     """Writer for the pico response stream.
 
     Every processed command yields one entry on
@@ -238,8 +235,21 @@ class PicoRespWriter:
     failure mode to paper over.
     """
 
-    def __init__(self, transport):
-        self.transport = transport
+    stream = PICO_RESP_STREAM
+    data_set = None  # singleton — no DATA_STREAMS_SET registration
+    maxlen = None  # response stream is intentionally unbounded
+
+    def _encode(self, target, source, request_id, status, data, warning=None):
+        entry = {
+            "target": target,
+            "source": source,
+            "request_id": request_id,
+            "status": status,
+            "data": json.dumps(data),
+        }
+        if warning is not None:
+            entry["warning"] = warning
+        return entry
 
     def send(self, target, source, request_id, status, data, warning=None):
         """Publish one response entry.
@@ -257,16 +267,7 @@ class PicoRespWriter:
             Optional advisory message attached to an otherwise-ok
             response (e.g. claim override).
         """
-        entry = {
-            "target": target,
-            "source": source,
-            "request_id": request_id,
-            "status": status,
-            "data": json.dumps(data),
-        }
-        if warning is not None:
-            entry["warning"] = warning
-        self.transport.r.xadd(PICO_RESP_STREAM, entry)
+        self.publish(target, source, request_id, status, data, warning=warning)
 
 
 class PicoClaimStore:
