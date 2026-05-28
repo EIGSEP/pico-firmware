@@ -1,10 +1,13 @@
 """Tests for picohost.flash_picos.flash_and_discover."""
 
+import types
+
 import pytest
 
 from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
+    flash_uf2,
 )
 
 
@@ -275,6 +278,63 @@ class TestFlashAndDiscover:
         assert len(devices) == 1
         assert devices[0]["usb_serial"] == "SER_B"
         assert devices[0]["port"] == "/dev/ttyACM1"
+
+
+class TestFlashUf2:
+    """picotool's ``-f`` reboots the target into BOOTSEL and must then
+    re-discover it before loading; on a busy hub that re-enumeration
+    can fall outside picotool's window and fail intermittently. The
+    flash step retries with backoff so a transient miss does not
+    abandon the device.
+    """
+
+    def _patch_run(self, monkeypatch, returncodes):
+        """Make subprocess.run return the given codes in sequence."""
+        import picohost.flash_picos as fp
+
+        calls = {"n": 0, "cmds": []}
+
+        def fake_run(cmd, **kwargs):
+            calls["cmds"].append(cmd)
+            rc = returncodes[calls["n"]]
+            calls["n"] += 1
+            return types.SimpleNamespace(returncode=rc, stdout="picotool out")
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        return calls
+
+    def test_succeeds_on_first_attempt(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [0])
+        flash_uf2("x.uf2", "SER_A")
+        assert calls["n"] == 1
+
+    def test_retries_then_succeeds(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [1, 1, 0])
+        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
+        assert calls["n"] == 3
+
+    def test_raises_after_exhausting_attempts(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [1, 1, 1])
+        with pytest.raises(RuntimeError, match="after 3 attempts"):
+            flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
+        assert calls["n"] == 3
+
+    def test_backoff_between_attempts(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        codes = iter([1, 0])
+        monkeypatch.setattr(
+            fp.subprocess,
+            "run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=next(codes), stdout=""
+            ),
+        )
+        sleeps = []
+        monkeypatch.setattr(fp.time, "sleep", lambda s: sleeps.append(s))
+        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=2.0)
+        assert sleeps == [2.0]
 
 
 class TestResolvePostFlashPort:

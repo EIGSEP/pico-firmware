@@ -38,24 +38,61 @@ def find_pico_ports():
     return ports
 
 
-def flash_uf2(uf2_path, serial):
+_FLASH_MAX_ATTEMPTS = 3
+_FLASH_RETRY_BACKOFF_S = 2.0
+
+
+def flash_uf2(
+    uf2_path,
+    serial,
+    attempts=_FLASH_MAX_ATTEMPTS,
+    backoff=_FLASH_RETRY_BACKOFF_S,
+):
     """
     Flash the UF2 onto the Pico whose USB serial number is `serial`,
     using picotool's --ser selector.
+
+    ``picotool load -f`` reboots the target into BOOTSEL and must then
+    re-discover it as a BOOTSEL device before loading. On a busy USB
+    bus — e.g. several Picos behind a hub on a Raspberry Pi — that
+    re-enumeration can land outside picotool's internal discovery
+    window, so the load fails intermittently with "No accessible
+    RP-series devices in BOOTSEL mode were found".
+
+    We retry with linear backoff. On a retry the target is already
+    sitting in BOOTSEL (the earlier attempt's reset took effect), so
+    picotool only has to *find* it — which usually succeeds once the
+    bus has quieted, without another reset round-trip.
     """
     cmd = f"picotool load -f --ser {serial} -x {uf2_path}".split()
     print(f"Flashing {uf2_path} → serial={serial}")
-    res = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        errors="replace",
+    res = None
+    for attempt in range(1, attempts + 1):
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+        )
+        if res.returncode == 0:
+            print(res.stdout, end="")
+            return
+        if attempt < attempts:
+            delay = backoff * attempt
+            logger.warning(
+                "picotool failed on serial=%s (attempt %d/%d); "
+                "retrying in %.1fs",
+                serial,
+                attempt,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
+    print(res.stdout, file=sys.stderr)
+    raise RuntimeError(
+        f"picotool failed on serial={serial} after {attempts} attempts"
     )
-    if res.returncode != 0:
-        print(res.stdout, file=sys.stderr)
-        raise RuntimeError(f"picotool failed on serial={serial}")
-    print(res.stdout, end="")
 
 
 def read_json_from_serial(port, baud, timeout):
@@ -78,6 +115,7 @@ def read_json_from_serial(port, baud, timeout):
 _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
+_INTER_DEVICE_SETTLE_S = 1.0
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -201,7 +239,13 @@ def flash_and_discover(
     logger.info(f"Found Picos on: {ports}")
     all_devices = []
 
-    for port_dev, port_serial in ports.items():
+    for idx, (port_dev, port_serial) in enumerate(ports.items()):
+        if idx > 0:
+            # Let the bus quiet after the previous Pico's post-flash
+            # re-enumeration before forcing the next one into BOOTSEL.
+            # Back-to-back resets on a shared hub disturb siblings and
+            # cause cascading "not found in BOOTSEL" failures.
+            time.sleep(_INTER_DEVICE_SETTLE_S)
         logger.info(f"Flashing Pico on port: {port_dev}")
         try:
             flash_uf2(uf2_path, port_serial)
