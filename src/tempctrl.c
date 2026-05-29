@@ -67,6 +67,10 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->stall_window_active = false;
     tempctrl->stall_check_T = 0.0;
     tempctrl->stall_check_time = get_absolute_time();
+    tempctrl->runaway_strikes = 0;
+    tempctrl->rate_ref_valid = false;
+    tempctrl->rate_ref_ms = 0;
+    tempctrl->sensor_rejects = 0;
 }
 
 void tempctrl_init(uint8_t app_id) {
@@ -166,12 +170,15 @@ void tempctrl_status(uint8_t app_id) {
     const uint32_t time_lna = temp_sensor_get_conversion_time(&tempctrl_lna.temp_sensor);
     const uint32_t time_load = temp_sensor_get_conversion_time(&tempctrl_load.temp_sensor);
 
-    /* read_error is set/cleared on every temp_sensor_read() attempt, so
-       LNA_status / LOAD_status reflect the most recent attempt rather
-       than a stale timeout window. Matches the per-cycle status contract
-       enforced by eigsep_observing._avg_sensor_values. */
-    const char *status_lna = temp_sensor_has_error(&tempctrl_lna.temp_sensor) ? "error" : "update";
-    const char *status_load = temp_sensor_has_error(&tempctrl_load.temp_sensor) ? "error" : "update";
+    /* internally_disabled is recomputed every op tick from the hardware
+       read error OR a latched sensor-sanity reject (see
+       tempctrl_update_sensor_drive), so LNA_status / LOAD_status reflect the
+       most recent cycle and surface a garbage-but-valid sensor that the bus
+       error alone would miss. Matches the per-cycle status contract enforced
+       by eigsep_observing._avg_sensor_values and the emulator's status
+       derivation. */
+    const char *status_lna = tempctrl_lna.internally_disabled ? "error" : "update";
+    const char *status_load = tempctrl_load.internally_disabled ? "error" : "update";
 
     /* 34 KV pairs: 4 device-wide + 15 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
@@ -225,11 +232,39 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // it from accumulating ~15x per real sample (op() runs every ~50ms,
     // conversions complete every ~750ms).
     bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
+    bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
 
-    // Update current temperatures
-    tempctrl->T_now = temp_sensor_get_temp(&tempctrl->temp_sensor);
+    // Sensor sanity guard: only consider a fresh, hardware-valid sample.
+    // Reject one whose implied rate of change is physically impossible
+    // (a failing thermistor returning garbage) and hold the last good
+    // T_now; latch the channel after TEMPCTRL_MAX_REJECTS consecutive
+    // rejects. rate_ref_ms advances on every fresh sample so the rate
+    // denominator stays ~one conversion; T_now is the value reference.
+    if (fresh && !hw_error) {
+        float raw = temp_sensor_get_temp(&tempctrl->temp_sensor);
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (!tempctrl->rate_ref_valid) {
+            tempctrl->T_now = raw;
+            tempctrl->rate_ref_valid = true;
+            tempctrl->sensor_rejects = 0;
+        } else {
+            float dt = (float)(now_ms - tempctrl->rate_ref_ms) / 1000.0f;
+            if (dt > 0.0f &&
+                fabsf(raw - tempctrl->T_now) / dt > TEMPCTRL_MAX_RATE_C_PER_S) {
+                // Reject: hold T_now, count toward the latch ceiling.
+                if (tempctrl->sensor_rejects < TEMPCTRL_MAX_REJECTS) {
+                    tempctrl->sensor_rejects++;
+                }
+            } else {
+                tempctrl->T_now = raw;
+                tempctrl->sensor_rejects = 0;
+            }
+        }
+        tempctrl->rate_ref_ms = now_ms;
+    }
 
-    tempctrl->internally_disabled = temp_sensor_has_error(&tempctrl->temp_sensor) ? true : false;
+    tempctrl->internally_disabled =
+        hw_error || (tempctrl->sensor_rejects >= TEMPCTRL_MAX_REJECTS);
 
     if (tempctrl_drive_allowed(tempctrl)) {
         if (fresh) {
@@ -356,11 +391,13 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
     // is the configured refusal-to-cool, not a stall.
     if (!tempctrl->active || tempctrl->drive == 0.0f) {
         tempctrl->stall_window_active = false;
+        tempctrl->runaway_strikes = 0;
         return;
     }
     absolute_time_t now = get_absolute_time();
     if (!tempctrl->stall_window_active) {
         tempctrl->stall_check_T = tempctrl->T_now;
+        tempctrl->stall_check_drive = tempctrl->drive;
         tempctrl->stall_check_time = now;
         tempctrl->stall_window_active = true;
         return;
@@ -369,7 +406,8 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
     if (elapsed_us < (int64_t)TEMPCTRL_STALL_WINDOW_MS * 1000) {
         return;
     }
-    if (fabsf(tempctrl->T_now - tempctrl->stall_check_T) < TEMPCTRL_STALL_MIN_DELTA) {
+    float delta = tempctrl->T_now - tempctrl->stall_check_T;
+    if (fabsf(delta) < TEMPCTRL_STALL_MIN_DELTA) {
         // Drive engaged for a full window with no meaningful temperature
         // movement — sensor stuck or Peltier ineffective. Trip the channel;
         // `enabled` stays as the host set it, and the trip flag is the
@@ -380,11 +418,34 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
         tempctrl->drive = 0.0;
         tempctrl_apply_drive(tempctrl);
         tempctrl->stall_window_active = false;
-    } else {
-        // Healthy: roll the window forward.
-        tempctrl->stall_check_T = tempctrl->T_now;
-        tempctrl->stall_check_time = now;
+        tempctrl->runaway_strikes = 0;
+        return;
     }
+    // Temperature moved. If it moved the *opposite* direction of the drive
+    // (delta * drive < 0) the channel is running away — mis-wired Peltier,
+    // lost hot-side dissipation, or swapped sensor. Score a strike; trip
+    // only after TEMPCTRL_RUNAWAY_STRIKES consecutive wrong-direction
+    // windows so a single startup/soak transient cannot false-trip a
+    // channel that is actually controlling.
+    if (delta * tempctrl->stall_check_drive < 0.0f) {
+        tempctrl->runaway_strikes++;
+        if (tempctrl->runaway_strikes >= TEMPCTRL_RUNAWAY_STRIKES) {
+            tempctrl->stall_tripped = true;
+            tempctrl->active = false;
+            tempctrl->drive = 0.0;
+            tempctrl_apply_drive(tempctrl);
+            tempctrl->stall_window_active = false;
+            tempctrl->runaway_strikes = 0;
+            return;
+        }
+    } else {
+        // Healthy progress in the driven direction — clear any strikes.
+        tempctrl->runaway_strikes = 0;
+    }
+    // Roll the window forward for the next evaluation.
+    tempctrl->stall_check_T = tempctrl->T_now;
+    tempctrl->stall_check_drive = tempctrl->drive;
+    tempctrl->stall_check_time = now;
 }
 
 static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
@@ -397,6 +458,9 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
     if (new_enabled) {
         tempctrl->stall_tripped = false;
         tempctrl->stall_window_active = false;
+        tempctrl->runaway_strikes = 0;
+        tempctrl->sensor_rejects = 0;
+        tempctrl->rate_ref_valid = false;
         watchdog_tripped = false;
     }
     tempctrl->enabled = new_enabled;

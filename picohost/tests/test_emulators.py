@@ -641,6 +641,170 @@ class TestTempCtrlCoolingGuard:
         assert emu.lna.enabled is True
 
 
+class TestTempCtrlRunawayGuard:
+    """Driving one direction while T_now moves the opposite direction trips
+    the channel (via stall_tripped) after RUNAWAY_STRIKES consecutive
+    wrong-direction windows — the thermal-runaway signature the no-movement
+    stall guard cannot catch (the temperature *is* moving).
+    """
+
+    def _force_window_elapsed(self, tc):
+        import picohost.emulators.tempctrl as mod
+
+        tc.stall_check_time = time.time() - (mod.STALL_WINDOW_MS / 1000 + 1)
+
+    def _setup_cooling(self, emu):
+        """Arm LNA cooling so drive saturates negative; open the window."""
+        emu.lna.T_now = 30.0
+        emu.lna.thermal_frozen = True  # drive T_now by hand
+        emu.server({"LNA_temp_target": 20.0, "LNA_enable": True})
+        _run_to_pi_tick(emu)
+        assert emu.lna.drive < 0.0
+        assert emu.lna.stall_window_active is True
+
+    def _wrong_way_window(self, emu):
+        """Force a completed window in which T_now moved *up* while the
+        drive is negative (cooling), then evaluate it with one op."""
+        self._force_window_elapsed(emu.lna)
+        emu.lna.T_now += 1.0
+        emu.op()
+
+    def test_runaway_trips_after_consecutive_wrong_windows(self):
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._setup_cooling(emu)
+        # All but the last wrong-direction window only accumulate strikes.
+        for i in range(mod.RUNAWAY_STRIKES - 1):
+            self._wrong_way_window(emu)
+            assert emu.lna.stall_tripped is False
+            assert emu.lna.runaway_strikes == i + 1
+        # The strike that reaches the threshold trips the channel.
+        self._wrong_way_window(emu)
+        assert emu.lna.stall_tripped is True
+        assert emu.lna.drive == 0.0
+        # Host intent preserved; trip flag is the runtime gate.
+        assert emu.lna.enabled is True
+
+    def test_correct_direction_window_resets_strikes(self):
+        emu = TempCtrlEmulator()
+        self._setup_cooling(emu)
+        self._wrong_way_window(emu)
+        assert emu.lna.runaway_strikes == 1
+        # A correct-direction window (cooling drive, T_now falls) clears it.
+        self._force_window_elapsed(emu.lna)
+        emu.lna.T_now -= 1.0
+        emu.op()
+        assert emu.lna.runaway_strikes == 0
+        assert emu.lna.stall_tripped is False
+
+    def test_runaway_trips_when_heating_drive_cools(self):
+        """Symmetric: heating drive (>0) while T_now falls also trips."""
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 20.0
+        emu.lna.thermal_frozen = True
+        emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
+        _run_to_pi_tick(emu)
+        assert emu.lna.drive > 0.0
+        for _ in range(mod.RUNAWAY_STRIKES):
+            self._force_window_elapsed(emu.lna)
+            emu.lna.T_now -= 1.0  # heating drive but cooling → wrong way
+            emu.op()
+        assert emu.lna.stall_tripped is True
+        assert emu.lna.drive == 0.0
+
+    def test_target_crossing_does_not_count_wrong_direction(self):
+        emu = TempCtrlEmulator()
+        self._setup_cooling(emu)
+        self._force_window_elapsed(emu.lna)
+        emu.lna.T_now = emu.lna.T_target - 1.0
+        emu.lna.thermal_frozen = False
+        _run_to_pi_tick(emu)
+        assert emu.lna.drive > 0.0
+        assert emu.lna.runaway_strikes == 0
+        assert emu.lna.stall_tripped is False
+
+    def test_enable_true_clears_runaway_trip(self):
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._setup_cooling(emu)
+        for _ in range(mod.RUNAWAY_STRIKES):
+            self._wrong_way_window(emu)
+        assert emu.lna.stall_tripped is True
+        emu.server({"LNA_enable": True})
+        assert emu.lna.stall_tripped is False
+        assert emu.lna.runaway_strikes == 0
+
+
+class TestTempCtrlSensorSanity:
+    """A fresh sample implying a physically impossible rate of change is
+    rejected (T_now holds); MAX_REJECTS consecutive rejects latch the
+    channel as a sensor fault (internally_disabled → status "error").
+    """
+
+    def _seed(self, emu):
+        """Run one good fresh conversion so the rate reference is valid."""
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is True
+
+    def test_single_glitch_absorbed(self):
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        emu.lna.inject_sensor_glitch(90.0)
+        _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == 1
+        assert emu.lna.internally_disabled is False
+        # Bogus value was not adopted — T_now holds the last good reading.
+        assert emu.lna.T_now == 25.0
+
+    def test_consecutive_glitches_latch_sensor_fault(self):
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS)
+        for _ in range(mod.MAX_REJECTS):
+            _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == mod.MAX_REJECTS
+        assert emu.lna.internally_disabled is True
+        assert emu.get_status()["LNA_status"] == "error"
+        # Never adopted a garbage value while latching.
+        assert emu.lna.T_now == 25.0
+
+    def test_good_sample_after_glitches_resets(self):
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        emu.lna.inject_sensor_glitch(90.0, count=2)
+        _run_to_pi_tick(emu)
+        _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == 2
+        assert emu.lna.internally_disabled is False
+        # A plausible reading (empty glitch queue → reads true T_now) clears
+        # the reject counter.
+        _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == 0
+        assert emu.lna.internally_disabled is False
+
+    def test_enable_true_clears_sensor_rejects_and_rate_reference(self):
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS)
+        for _ in range(mod.MAX_REJECTS):
+            _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == mod.MAX_REJECTS
+        assert emu.lna.rate_ref_valid is True
+        emu.server({"LNA_enable": True})
+        assert emu.lna.sensor_rejects == 0
+        assert emu.lna.rate_ref_valid is False
+
+
 class TestImuEmulator:
     def test_initial_state(self):
         emu = ImuEmulator(app_id=3)
