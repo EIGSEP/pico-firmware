@@ -62,8 +62,9 @@ class TempControlState:
         # drive engaged, so the stall guard can be exercised deterministically.
         self.thermal_frozen = False
         # Mirrors temp_sensor_has_error()'s underlying state. op() re-reads
-        # this into internally_disabled every tick, so a recovered sensor
-        # self-clears (matches firmware tempctrl_update_sensor_drive).
+        # this into internally_disabled every tick, so a recovered bus fault
+        # self-clears (matches firmware tempctrl_update_sensor_drive). The
+        # rate-sanity latch (sensor_tripped) is sticky by contrast.
         self._sensor_error = False
         # Conversion-cycle counter for the fresh-sample gate. PI fires
         # when this rolls over OP_TICKS_PER_CONVERSION.
@@ -74,8 +75,16 @@ class TempControlState:
         # Sensor sanity guard mirror (see tempctrl_update_sensor_drive).
         # rate_ref_valid gates the first-sample seeding; sensor_rejects
         # counts consecutive rejected samples and latches at MAX_REJECTS.
+        # seed_pending marks a first (candidate) sample awaiting confirmation:
+        # the reference anchors only when two consecutive samples agree within
+        # the rate budget (two-to-anchor), so a lone transient cannot poison it.
+        # sensor_tripped latches once sensor_rejects reaches MAX_REJECTS and
+        # is cleared only by a *_enable=true host ack (like stall_tripped),
+        # so a sensor that produced a burst of garbage cannot silently
+        # re-enable drive when a later reading happens to look plausible.
         self.rate_ref_valid = False
         self.sensor_rejects = 0
+        self.sensor_tripped = False
         # Test hook: queued bogus sensor readings, one consumed per fresh
         # conversion, standing in for a failing thermistor. A normal fresh
         # tick (empty queue) reads the thermal-model T_now and always
@@ -215,6 +224,7 @@ class TempCtrlEmulator(PicoEmulator):
                     tc.stall_window_active = False
                     tc.runaway_strikes = 0
                     tc.sensor_rejects = 0
+                    tc.sensor_tripped = False
                     tc.rate_ref_valid = False
                     self.watchdog_tripped = False
                 tc.enabled = new_enabled
@@ -320,12 +330,14 @@ class TempCtrlEmulator(PicoEmulator):
             # temp_sensor_get_conversion_time(), updated on each decode.
             tc.timestamp = self._ms_since_boot()
 
-        # internally_disabled is the hardware read error OR a latched
-        # sensor-sanity reject; re-derived every tick so a recovered sensor
-        # self-clears (matches firmware tempctrl_update_sensor_drive).
-        tc.internally_disabled = tc._sensor_error or (
-            tc.sensor_rejects >= MAX_REJECTS
-        )
+        # internally_disabled is the hardware read error OR the latched
+        # sensor-sanity trip. The bus error self-clears when the sensor
+        # recovers; the rate-sanity latch is sticky once sensor_rejects hits
+        # MAX_REJECTS and only the enable ack clears it (matches firmware
+        # tempctrl_update_sensor_drive / tempctrl_apply_enable).
+        if tc.sensor_rejects >= MAX_REJECTS:
+            tc.sensor_tripped = True
+        tc.internally_disabled = tc._sensor_error or tc.sensor_tripped
 
         if self._drive_allowed(tc):
             if fresh:

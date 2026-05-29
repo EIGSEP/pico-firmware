@@ -803,6 +803,97 @@ class TestTempCtrlSensorSanity:
         emu.server({"LNA_enable": True})
         assert emu.lna.sensor_rejects == 0
         assert emu.lna.rate_ref_valid is False
+        assert emu.lna.seed_pending is False
+
+    def test_latched_fault_does_not_self_recover(self):
+        """A latched sensor fault is sticky: once tripped, plausible
+        readings alone must not silently re-enable the channel. Recovery
+        requires an explicit *_enable=true host ack (mirrors firmware
+        sensor_tripped). Auto-recovery would re-drive the Peltier on a
+        sensor that just produced a burst of garbage.
+        """
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS)
+        for _ in range(mod.MAX_REJECTS):
+            _run_to_pi_tick(emu)
+        assert emu.lna.internally_disabled is True
+        # Glitch queue is now empty, so subsequent fresh ticks read the true
+        # T_now and pass the rate guard — yet the latch must hold.
+        for _ in range(3):
+            _run_to_pi_tick(emu)
+        assert emu.lna.internally_disabled is True
+        assert emu.get_status()["LNA_status"] == "error"
+        # Only the host ack clears the latch and re-seeds the reference.
+        emu.server({"LNA_enable": True})
+        _run_to_pi_tick(emu)
+        assert emu.lna.internally_disabled is False
+
+    def test_seed_requires_two_samples(self):
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        # First fresh sample is only a candidate — the reference is not yet
+        # anchored, so there is nothing to rate-check the next sample against.
+        _run_to_pi_tick(emu)
+        assert emu.lna.seed_pending is True
+        assert emu.lna.rate_ref_valid is False
+        # A second consistent sample confirms and anchors the reference.
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is True
+        assert emu.lna.seed_pending is False
+
+    def test_bogus_seed_self_heals(self):
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        # First raw reading is a lone transient (e.g. the 85 C power-on
+        # default after a brownout); the true temperature is ~25. Two-to-anchor
+        # discards the transient and anchors on the consistent pair that
+        # follows, so the channel never latches.
+        emu.lna.inject_sensor_glitch(85.0)
+        emu.lna.inject_sensor_glitch(25.0, count=2)
+        for _ in range(3):
+            _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is True
+        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_rejects == 0
+        assert emu.lna.T_now == pytest.approx(25.0)
+
+    def test_persistent_disagreement_latches(self):
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.thermal_frozen = True
+        # A sensor that never produces two consecutive consistent readings
+        # never anchors; each failed confirmation counts toward the same latch.
+        for value in (85.0, 25.0, 85.0, 25.0):
+            emu.lna.inject_sensor_glitch(value)
+        for _ in range(4):
+            _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is False
+        assert emu.lna.sensor_rejects == mod.MAX_REJECTS
+        assert emu.lna.internally_disabled is True
+        assert emu.get_status()["LNA_status"] == "error"
+
+    def test_no_drive_until_anchored(self):
+        emu = TempCtrlEmulator()
+        emu.lna.T_now = 25.0
+        emu.lna.T_target = 40.0
+        emu.lna.thermal_frozen = True
+        emu.lna.enabled = True
+        # Still seeding: the channel must stay idle even though it is enabled
+        # and far from target — driving on an unconfirmed reading is the bug.
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is False
+        assert emu.lna.drive == 0.0
+        # Anchored on the second consistent sample → control engages.
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is True
+        assert emu.lna.drive != 0.0
 
 
 class TestImuEmulator:
