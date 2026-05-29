@@ -298,7 +298,9 @@ class TestFlashAndDiscover:
 
         events = []
         monkeypatch.setattr(
-            fp, "flash_uf2", lambda path, serial: events.append(("flash", serial))
+            fp,
+            "flash_uf2",
+            lambda path, serial: events.append(("flash", serial)),
         )
         monkeypatch.setattr(
             fp,
@@ -311,8 +313,9 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "read_json_from_serial",
-            lambda port, baud, timeout: events.append(("read", port))
-            or {"app_id": 0},
+            lambda port, baud, timeout: (
+                events.append(("read", port)) or {"app_id": 0}
+            ),
         )
         monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         monkeypatch.setattr(
