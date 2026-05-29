@@ -279,7 +279,7 @@ class TestFlashAndDiscover:
         assert devices[0]["usb_serial"] == "SER_B"
         assert devices[0]["port"] == "/dev/ttyACM1"
 
-    def test_inter_device_settle_delay_before_second_flash(
+    def test_inter_device_settle_delay_before_second_and_later_flash(
         self, monkeypatch, tmp_path
     ):
         import picohost.flash_picos as fp
@@ -293,6 +293,7 @@ class TestFlashAndDiscover:
             lambda: {
                 "/dev/ttyACM0": "SER_A",
                 "/dev/ttyACM1": "SER_B",
+                "/dev/ttyACM2": "SER_C",
             },
         )
 
@@ -308,6 +309,7 @@ class TestFlashAndDiscover:
             lambda serial: {
                 "SER_A": "/dev/ttyACM0",
                 "SER_B": "/dev/ttyACM1",
+                "SER_C": "/dev/ttyACM2",
             }[serial],
         )
         monkeypatch.setattr(
@@ -330,6 +332,9 @@ class TestFlashAndDiscover:
             ("sleep", fp._INTER_DEVICE_SETTLE_S),
             ("flash", "SER_B"),
             ("read", "/dev/ttyACM1"),
+            ("sleep", fp._INTER_DEVICE_SETTLE_S),
+            ("flash", "SER_C"),
+            ("read", "/dev/ttyACM2"),
         ]
 
 
