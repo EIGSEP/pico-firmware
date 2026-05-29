@@ -279,6 +279,56 @@ class TestFlashAndDiscover:
         assert devices[0]["usb_serial"] == "SER_B"
         assert devices[0]["port"] == "/dev/ttyACM1"
 
+    def test_inter_device_settle_delay_before_second_flash(
+        self, monkeypatch, tmp_path
+    ):
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+                "/dev/ttyACM1": "SER_B",
+            },
+        )
+
+        events = []
+        monkeypatch.setattr(
+            fp, "flash_uf2", lambda path, serial: events.append(("flash", serial))
+        )
+        monkeypatch.setattr(
+            fp,
+            "_resolve_post_flash_port",
+            lambda serial: {
+                "SER_A": "/dev/ttyACM0",
+                "SER_B": "/dev/ttyACM1",
+            }[serial],
+        )
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: events.append(("read", port))
+            or {"app_id": 0},
+        )
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(
+            fp.time, "sleep", lambda s: events.append(("sleep", s))
+        )
+
+        flash_and_discover(uf2_path=uf2)
+
+        assert events == [
+            ("flash", "SER_A"),
+            ("read", "/dev/ttyACM0"),
+            ("sleep", fp._INTER_DEVICE_SETTLE_S),
+            ("flash", "SER_B"),
+            ("read", "/dev/ttyACM1"),
+        ]
+
 
 class TestFlashUf2:
     """picotool's ``-f`` reboots the target into BOOTSEL and must then
