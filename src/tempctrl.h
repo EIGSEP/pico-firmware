@@ -34,6 +34,33 @@
 #define TEMPCTRL_STALL_WINDOW_MS   60000
 #define TEMPCTRL_STALL_MIN_DELTA   0.5f
 
+// Runaway guard: a channel that is actively driving but whose temperature
+// moves the *opposite* direction of the drive (cooling drive while T rises,
+// or heating drive while T falls) is mis-wired, has lost hot-side
+// dissipation, or has a swapped sensor — a thermal-runaway signature the
+// no-movement stall guard above cannot catch (the temperature is moving, so
+// |delta| stays above TEMPCTRL_STALL_MIN_DELTA). Evaluated on the same
+// stall window: a wrong-direction window scores a strike, and the channel
+// trips (via stall_tripped) after TEMPCTRL_RUNAWAY_STRIKES consecutive
+// strikes. Requiring consecutive windows tolerates the startup transient
+// where T_now lags the junction (heat already in the mass keeps the sensor
+// rising for a window after cooling engages) without false-tripping a
+// channel that is actually controlling.
+#define TEMPCTRL_RUNAWAY_STRIKES   2
+
+// Sensor sanity guard: a DS18B20 that still answers on the bus but returns
+// garbage (a failing thermistor seen cycling 0/40/90 C while the true temp
+// was ~20 C) passes temp_sensor_has_error(), so the raw read would drive the
+// Peltier full-scale on a physically impossible value. Reject any fresh
+// sample whose implied rate of change exceeds TEMPCTRL_MAX_RATE_C_PER_S
+// (well above any real thermal slew — a healthy half-power Peltier moves a
+// few C/min, ~0.1 C/s); hold the last good T_now instead. After
+// TEMPCTRL_MAX_REJECTS consecutive rejects the sensor is treated as failed
+// (internally_disabled), which gates drive and surfaces LNA/LOAD_status as
+// "error". A lone glitch is absorbed without disabling control.
+#define TEMPCTRL_MAX_RATE_C_PER_S  5.0f
+#define TEMPCTRL_MAX_REJECTS       3
+
 // Temperature control structure
 typedef struct {
     uint dir_pin1;
@@ -65,12 +92,25 @@ typedef struct {
     // cooling-mode thermal-runaway failure mode.
     bool cooling_enabled;
     // Stall guard: sticky fault tripped when an active drive fails to move
-    // T_now. Cleared by an explicit *_enable=true command from the host
-    // (mirrors the watchdog ack pattern).
+    // T_now, OR moves it the wrong direction for TEMPCTRL_RUNAWAY_STRIKES
+    // consecutive windows (the runaway signature). Cleared by an explicit
+    // *_enable=true command from the host (mirrors the watchdog ack pattern).
     bool stall_tripped;
     bool stall_window_active;
     float stall_check_T;
+    float stall_check_drive;
     absolute_time_t stall_check_time;
+    // Consecutive wrong-direction windows seen by the runaway guard; reset
+    // by a correct-direction (or no-) movement window, a trip, a disable,
+    // or an enable ack.
+    uint8_t runaway_strikes;
+    // Sensor sanity guard state. rate_ref_ms advances on every fresh sample
+    // (so the rate denominator is one conversion); T_now itself is the value
+    // reference (held on reject). sensor_rejects counts consecutive rejected
+    // samples and latches the channel at TEMPCTRL_MAX_REJECTS.
+    bool rate_ref_valid;
+    uint32_t rate_ref_ms;
+    uint8_t sensor_rejects;
 } TempControl;
 
 // Standard app interface functions

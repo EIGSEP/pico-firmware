@@ -56,6 +56,7 @@ class TempControlState:
         self.stall_tripped = False
         self.stall_window_active = False
         self.stall_check_T = 0.0
+        self.stall_check_drive = 0.0
         self.stall_check_time = 0.0
         # Test hook: when True, skip the thermal-drift update even with the
         # drive engaged, so the stall guard can be exercised deterministically.
@@ -67,6 +68,31 @@ class TempControlState:
         # Conversion-cycle counter for the fresh-sample gate. PI fires
         # when this rolls over OP_TICKS_PER_CONVERSION.
         self._op_counter = 0
+        # Runaway guard mirror (see tempctrl_check_stall in tempctrl.c):
+        # consecutive wrong-direction windows.
+        self.runaway_strikes = 0
+        # Sensor sanity guard mirror (see tempctrl_update_sensor_drive).
+        # rate_ref_valid gates the first-sample seeding; sensor_rejects
+        # counts consecutive rejected samples and latches at MAX_REJECTS.
+        self.rate_ref_valid = False
+        self.sensor_rejects = 0
+        # Test hook: queued bogus sensor readings, one consumed per fresh
+        # conversion, standing in for a failing thermistor. A normal fresh
+        # tick (empty queue) reads the thermal-model T_now and always
+        # passes the rate guard. See inject_sensor_glitch.
+        self._glitch_queue = []
+
+    def inject_sensor_glitch(self, value, count=1):
+        """Queue ``count`` bogus raw sensor readings of ``value``.
+
+        Each is consumed on a subsequent fresh conversion and run through
+        the rate-of-change guard, mirroring a DS18B20 that answers on the
+        bus with garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
+        rejected (``T_now`` holds, ``sensor_rejects`` increments); after
+        ``MAX_REJECTS`` consecutive rejects the channel latches
+        ``internally_disabled``.
+        """
+        self._glitch_queue.extend([float(value)] * count)
 
 
 def _reset_controller_state(tc):
@@ -125,6 +151,14 @@ def tempctrl_pi_drive(tc, dt=DT_PER_PI_TICK_S):
 STALL_WINDOW_MS = 60000
 STALL_MIN_DELTA = 0.5
 
+# Mirrors TEMPCTRL_RUNAWAY_STRIKES / TEMPCTRL_MAX_RATE_C_PER_S /
+# TEMPCTRL_MAX_REJECTS in tempctrl.h. See the firmware comments for the
+# rationale (wrong-direction runaway trip; physically-impossible-jump
+# sensor rejection with a consecutive-reject latch).
+RUNAWAY_STRIKES = 2
+MAX_RATE_C_PER_S = 5.0
+MAX_REJECTS = 3
+
 
 class TempCtrlEmulator(PicoEmulator):
     """Emulates src/tempctrl.c firmware."""
@@ -179,6 +213,9 @@ class TempCtrlEmulator(PicoEmulator):
                 if new_enabled:
                     tc.stall_tripped = False
                     tc.stall_window_active = False
+                    tc.runaway_strikes = 0
+                    tc.sensor_rejects = 0
+                    tc.rate_ref_valid = False
                     self.watchdog_tripped = False
                 tc.enabled = new_enabled
 
@@ -245,13 +282,50 @@ class TempCtrlEmulator(PicoEmulator):
             and not self.watchdog_tripped
         )
 
+    def _read_sensor(self, tc):
+        """Mirror the sensor read + rate-of-change sanity guard in
+        tempctrl_update_sensor_drive. ``raw`` is the bogus queued reading
+        when a glitch is pending, else the thermal-model ``T_now`` (a
+        normal reading, which equals the current ``T_now`` and so always
+        passes). dt is one conversion (``DT_PER_PI_TICK_S``) because the
+        firmware advances its rate reference on every fresh sample.
+        """
+        if tc._sensor_error:
+            return
+        raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
+        if not tc.rate_ref_valid:
+            tc.T_now = raw
+            tc.rate_ref_valid = True
+            tc.sensor_rejects = 0
+            return
+        rate = abs(raw - tc.T_now) / DT_PER_PI_TICK_S
+        if rate > MAX_RATE_C_PER_S:
+            # Reject: hold the last good T_now, count toward the latch.
+            if tc.sensor_rejects < MAX_REJECTS:
+                tc.sensor_rejects += 1
+        else:
+            tc.T_now = raw
+            tc.sensor_rejects = 0
+
     def _update_channel(self, tc):
         tc._op_counter += 1
         fresh = tc._op_counter % OP_TICKS_PER_CONVERSION == 0
 
-        # Mirror firmware tempctrl_update_sensor_drive: temp_sensor_has_error()
-        # is re-read every op tick, so a recovered sensor self-clears.
-        tc.internally_disabled = tc._sensor_error
+        # Sense first (mirrors firmware order: read + rate guard, then
+        # control on the filtered T_now). Only a fresh conversion produces
+        # a new sample.
+        if fresh:
+            self._read_sensor(tc)
+            # Mirror firmware: tempctrl_status sends
+            # temp_sensor_get_conversion_time(), updated on each decode.
+            tc.timestamp = self._ms_since_boot()
+
+        # internally_disabled is the hardware read error OR a latched
+        # sensor-sanity reject; re-derived every tick so a recovered sensor
+        # self-clears (matches firmware tempctrl_update_sensor_drive).
+        tc.internally_disabled = tc._sensor_error or (
+            tc.sensor_rejects >= MAX_REJECTS
+        )
 
         if self._drive_allowed(tc):
             if fresh:
@@ -260,6 +334,7 @@ class TempCtrlEmulator(PicoEmulator):
         else:
             _reset_controller_state(tc)
             tc.stall_window_active = False
+            tc.runaway_strikes = 0
 
         # Thermal model: drive set by PI is held between PI ticks (mirrors
         # continuous PWM), so the effect accumulates every op tick. When
@@ -269,11 +344,6 @@ class TempCtrlEmulator(PicoEmulator):
         if not tc.thermal_frozen:
             tc.T_now += tc.drive * THERMAL_DRIFT_PER_OP
 
-        # Mirror firmware: tempctrl_status sends temp_sensor_get_conversion_time()
-        # which updates when a new sample is decoded.
-        if fresh:
-            tc.timestamp = self._ms_since_boot()
-
     def _check_stall(self, tc):
         """Mirror tempctrl_check_stall() from tempctrl.c."""
         # `active` alone isn't sufficient: with cooling_enabled=False the PI
@@ -281,24 +351,45 @@ class TempCtrlEmulator(PicoEmulator):
         # drive=0, which is the configured refusal-to-cool, not a stall.
         if not tc.active or tc.drive == 0.0:
             tc.stall_window_active = False
+            tc.runaway_strikes = 0
             return
         now = time.time()
         if not tc.stall_window_active:
             tc.stall_check_T = tc.T_now
+            tc.stall_check_drive = tc.drive
             tc.stall_check_time = now
             tc.stall_window_active = True
             return
         elapsed_ms = (now - tc.stall_check_time) * 1000
         if elapsed_ms < STALL_WINDOW_MS:
             return
-        if abs(tc.T_now - tc.stall_check_T) < STALL_MIN_DELTA:
+        delta = tc.T_now - tc.stall_check_T
+        if abs(delta) < STALL_MIN_DELTA:
+            # No movement — sensor stuck or Peltier ineffective.
             tc.stall_tripped = True
             tc.active = False
             tc.drive = 0.0
             tc.stall_window_active = False
+            tc.runaway_strikes = 0
+            return
+        # Moved the wrong direction for the drive → runaway signature.
+        # Trip only after RUNAWAY_STRIKES consecutive wrong-direction
+        # windows (tolerates the startup/soak transient).
+        if delta * tc.stall_check_drive < 0.0:
+            tc.runaway_strikes += 1
+            if tc.runaway_strikes >= RUNAWAY_STRIKES:
+                tc.stall_tripped = True
+                tc.active = False
+                tc.drive = 0.0
+                tc.stall_window_active = False
+                tc.runaway_strikes = 0
+                return
         else:
-            tc.stall_check_T = tc.T_now
-            tc.stall_check_time = now
+            tc.runaway_strikes = 0
+        # Roll the window forward.
+        tc.stall_check_T = tc.T_now
+        tc.stall_check_drive = tc.drive
+        tc.stall_check_time = now
 
     def op(self):
         # Communication watchdog: trip the app-wide flag if no command has
