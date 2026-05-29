@@ -71,6 +71,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->rate_ref_valid = false;
     tempctrl->rate_ref_ms = 0;
     tempctrl->sensor_rejects = 0;
+    tempctrl->sensor_tripped = false;
 }
 
 void tempctrl_init(uint8_t app_id) {
@@ -263,8 +264,15 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         tempctrl->rate_ref_ms = now_ms;
     }
 
-    tempctrl->internally_disabled =
-        hw_error || (tempctrl->sensor_rejects >= TEMPCTRL_MAX_REJECTS);
+    // hw_error self-clears when the bus read recovers; the rate-sanity latch
+    // is sticky: once sensor_rejects reaches the ceiling, sensor_tripped stays
+    // set until the host acks with *_enable=true (see tempctrl_apply_enable).
+    // A later plausible sample resets sensor_rejects but must not re-enable a
+    // channel whose sensor just produced a burst of garbage.
+    if (tempctrl->sensor_rejects >= TEMPCTRL_MAX_REJECTS) {
+        tempctrl->sensor_tripped = true;
+    }
+    tempctrl->internally_disabled = hw_error || tempctrl->sensor_tripped;
 
     if (tempctrl_drive_allowed(tempctrl)) {
         if (fresh) {
@@ -275,8 +283,13 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     } else {
         tempctrl_reset_controller_state(tempctrl);
         tempctrl_apply_drive(tempctrl);
-        // Not actively driving — no stall window pending.
+        // Not actively driving — no stall window pending, and any
+        // partial runaway strike count is stale once drive is gated
+        // (disable/error/watchdog). Clearing it here keeps the next
+        // wrong-direction window from tripping early and matches the
+        // emulator's not-drive-allowed branch.
         tempctrl->stall_window_active = false;
+        tempctrl->runaway_strikes = 0;
     }
 }
 
@@ -460,6 +473,7 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
         tempctrl->stall_window_active = false;
         tempctrl->runaway_strikes = 0;
         tempctrl->sensor_rejects = 0;
+        tempctrl->sensor_tripped = false;
         tempctrl->rate_ref_valid = false;
         watchdog_tripped = false;
     }

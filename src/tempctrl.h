@@ -107,10 +107,23 @@ typedef struct {
     // Sensor sanity guard state. rate_ref_ms advances on every fresh sample
     // (so the rate denominator is one conversion); T_now itself is the value
     // reference (held on reject). sensor_rejects counts consecutive rejected
-    // samples and latches the channel at TEMPCTRL_MAX_REJECTS.
+    // samples; when it reaches TEMPCTRL_MAX_REJECTS the channel latches via
+    // the sticky sensor_tripped flag. sensor_tripped is cleared only by an
+    // explicit *_enable=true host ack (like stall_tripped), so a sensor that
+    // produced a burst of garbage cannot silently re-enable drive when a
+    // later reading happens to fall back within the rate budget.
+    //
+    // Two-to-anchor seeding: until rate_ref_valid is set, the rate guard has no
+    // reference to check against, so the reference is only trusted once two
+    // consecutive samples agree within the rate budget. seed_pending marks that
+    // a first (candidate) sample has been taken and is awaiting confirmation;
+    // the candidate value lives in T_now and its timestamp in rate_ref_ms (both
+    // unused for control while unanchored). This stops a single transient (e.g.
+    // the 85 C power-on default after a brownout) from poisoning the anchor.
     bool rate_ref_valid;
     uint32_t rate_ref_ms;
     uint8_t sensor_rejects;
+    bool sensor_tripped;
 } TempControl;
 
 // Standard app interface functions
