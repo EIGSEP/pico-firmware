@@ -1,10 +1,13 @@
 """Tests for picohost.flash_picos.flash_and_discover."""
 
+import types
+
 import pytest
 
 from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
+    flash_uf2,
 )
 
 
@@ -275,6 +278,121 @@ class TestFlashAndDiscover:
         assert len(devices) == 1
         assert devices[0]["usb_serial"] == "SER_B"
         assert devices[0]["port"] == "/dev/ttyACM1"
+
+    def test_inter_device_settle_delay_before_second_and_later_flash(
+        self, monkeypatch, tmp_path
+    ):
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+                "/dev/ttyACM1": "SER_B",
+                "/dev/ttyACM2": "SER_C",
+            },
+        )
+
+        events = []
+        monkeypatch.setattr(
+            fp,
+            "flash_uf2",
+            lambda path, serial: events.append(("flash", serial)),
+        )
+        monkeypatch.setattr(
+            fp,
+            "_resolve_post_flash_port",
+            lambda serial: {
+                "SER_A": "/dev/ttyACM0",
+                "SER_B": "/dev/ttyACM1",
+                "SER_C": "/dev/ttyACM2",
+            }[serial],
+        )
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: (
+                events.append(("read", port)) or {"app_id": 0}
+            ),
+        )
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(
+            fp.time, "sleep", lambda s: events.append(("sleep", s))
+        )
+
+        flash_and_discover(uf2_path=uf2)
+
+        assert events == [
+            ("flash", "SER_A"),
+            ("read", "/dev/ttyACM0"),
+            ("sleep", fp._INTER_DEVICE_SETTLE_S),
+            ("flash", "SER_B"),
+            ("read", "/dev/ttyACM1"),
+            ("sleep", fp._INTER_DEVICE_SETTLE_S),
+            ("flash", "SER_C"),
+            ("read", "/dev/ttyACM2"),
+        ]
+
+
+class TestFlashUf2:
+    """picotool's ``-f`` reboots the target into BOOTSEL and must then
+    re-discover it before loading; on a busy hub that re-enumeration
+    can fall outside picotool's window and fail intermittently. The
+    flash step retries with backoff so a transient miss does not
+    abandon the device.
+    """
+
+    def _patch_run(self, monkeypatch, returncodes):
+        """Make subprocess.run return the given codes in sequence."""
+        import picohost.flash_picos as fp
+
+        calls = {"n": 0, "cmds": []}
+
+        def fake_run(cmd, **kwargs):
+            calls["cmds"].append(cmd)
+            rc = returncodes[calls["n"]]
+            calls["n"] += 1
+            return types.SimpleNamespace(returncode=rc, stdout="picotool out")
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        return calls
+
+    def test_succeeds_on_first_attempt(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [0])
+        flash_uf2("x.uf2", "SER_A")
+        assert calls["n"] == 1
+
+    def test_retries_then_succeeds(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [1, 1, 0])
+        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
+        assert calls["n"] == 3
+
+    def test_raises_after_exhausting_attempts(self, monkeypatch):
+        calls = self._patch_run(monkeypatch, [1, 1, 1])
+        with pytest.raises(RuntimeError, match="after 3 attempts"):
+            flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
+        assert calls["n"] == 3
+
+    def test_backoff_between_attempts(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        codes = iter([1, 0])
+        monkeypatch.setattr(
+            fp.subprocess,
+            "run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=next(codes), stdout=""
+            ),
+        )
+        sleeps = []
+        monkeypatch.setattr(fp.time, "sleep", lambda s: sleeps.append(s))
+        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=2.0)
+        assert sleeps == [2.0]
 
 
 class TestResolvePostFlashPort:
