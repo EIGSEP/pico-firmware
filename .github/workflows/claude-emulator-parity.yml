@@ -27,6 +27,8 @@ jobs:
           fetch-depth: 1
 
       - name: Claude firmware/emulator parity review
+        if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        continue-on-error: true
         id: claude-emulator-parity
         uses: anthropics/claude-code-action@v1
         with:
