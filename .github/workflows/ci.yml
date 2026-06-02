@@ -97,3 +97,93 @@ jobs:
             exit 1
           fi
           echo "All apps have corresponding emulators."
+
+  emulator-staleness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BEFORE_SHA: ${{ github.event.before }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so we can diff against the PR base / pushed range.
+          fetch-depth: 0
+      - name: Warn when firmware changed without emulator/conformance updates
+        # Advisory only: this step emits ::warning:: annotations and never
+        # exits non-zero, so it can never block a merge. Flip a warning to a
+        # gate later by adding `exit 1` after the echo.
+        run: |
+          # Compute the changed-file set for this PR or push. Guard the diffs
+          # with `|| true` so a missing base ref degrades to "no changes"
+          # rather than failing the (advisory) job under bash -e.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            changed=$(git diff --name-only "$BASE_SHA"...HEAD || true)
+          else
+            before="$BEFORE_SHA"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              before=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+            fi
+            if [ -n "$before" ]; then
+              changed=$(git diff --name-only "$before" HEAD || true)
+            else
+              changed=""
+            fi
+          fi
+
+          changed_has() {
+            printf '%s\n' "$changed" | grep -qxF "$1"
+          }
+
+          # Resolve the distinct emulator targets using the same app->emulator
+          # resolution as the emulator-coverage job, including the
+          # "// emulator: <name>" alias annotations in src/pico_multi.h.
+          apps=$(grep -oP '(?<=#define APP_)\w+' src/pico_multi.h | tr '[:upper:]' '[:lower:]')
+          targets=""
+          for app in $apps; do
+            alias=$(grep -iP "#define APP_${app}\b" src/pico_multi.h | grep -oP '//\s*emulator:\s*\K\w+' || true)
+            target=${alias:-$app}
+            case " $targets " in
+              *" $target "*) ;;
+              *) targets="$targets $target" ;;
+            esac
+          done
+
+          tests="picohost/tests/test_protocol_conformance.py picohost/tests/test_emulators.py"
+          warned=0
+          for target in $targets; do
+            # Firmware files for this target, plus documented shared deps.
+            fw="src/${target}.c src/${target}.h"
+            if [ "$target" = "tempctrl" ]; then
+              fw="$fw src/temp_simple.c src/temp_simple.h src/ds18b20.h"
+            fi
+            emu="picohost/src/picohost/emulators/${target}.py"
+
+            fw_changed=0
+            for f in $fw; do
+              if changed_has "$f"; then fw_changed=1; break; fi
+            done
+            if [ "$fw_changed" -eq 0 ]; then
+              continue
+            fi
+
+            if changed_has "$emu"; then
+              continue
+            fi
+
+            tests_changed=0
+            for f in $tests; do
+              if changed_has "$f"; then tests_changed=1; break; fi
+            done
+            if [ "$tests_changed" -eq 1 ]; then
+              continue
+            fi
+
+            echo "::warning::Firmware '${target}' changed but its emulator and conformance tests are untouched — verify parity."
+            warned=1
+          done
+
+          if [ "$warned" -eq 0 ]; then
+            echo "No firmware/emulator staleness detected."
+          fi

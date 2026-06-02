@@ -220,6 +220,7 @@ The boundary between `picohost` and the sister `eigsep_observing` repo is drawn 
 ## CI / Release
 
 - **CI**: GitHub Actions runs pytest across Python 3.9-3.12 on every push/PR, plus a check that every firmware app has a corresponding emulator
+- **Emulator parity (advisory, never blocks)**: two complementary checks verify that a firmware app and its emulator stay behaviorally equivalent. The `emulator-staleness` job in `ci.yml` emits a `::warning::` when a firmware target changes but its emulator and the conformance tests (`test_protocol_conformance.py`, `test_emulators.py`) are untouched. The `claude-emulator-parity.yml` workflow runs a Claude semantic review on PRs that touch `src/**` or `emulators/**`, posting one PR comment naming concrete divergences (or confirming none)
 - **Release**: release-please automates version bumps and changelogs
 - **Conventional commits**: Use conventional commit prefixes — `fix:`, `feat:`, `chore:`, `test:`, `ci:`, `docs:`, `refactor:`, etc. release-please uses these to determine version bumps and generate changelogs
 

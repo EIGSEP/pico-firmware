@@ -1,0 +1,71 @@
+name: Claude Emulator Parity
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # Only run when firmware or an emulator changes — the two sides of the
+    # equivalence contract.
+    paths:
+      - "src/**"
+      - "picohost/src/picohost/emulators/**"
+
+jobs:
+  emulator-parity:
+    # Advisory review: posts a PR comment, never blocks the merge.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Claude firmware/emulator parity review
+        if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        continue-on-error: true
+        id: claude-emulator-parity
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are reviewing a pull request for the EIGSEP Raspberry Pi Pico
+            firmware project. Your single job is to check whether each firmware
+            app and its Python emulator still behave equivalently.
+
+            Background: every firmware app (`src/<target>.c`) has a Python
+            emulator (`picohost/src/picohost/emulators/<target>.py`) that must
+            reproduce its behavioral contract. The written reference for that
+            contract lives in `picohost/tests/test_protocol_conformance.py`.
+            Several apps can share one emulator via a `// emulator: <name>`
+            annotation in `src/pico_multi.h` (e.g. APP_IMU_EL and APP_IMU_AZ
+            both map to the `imu` emulator).
+
+            Do the following:
+            1. Inspect this PR's diff to determine which emulator target(s) it
+               touches — on either the firmware side (`src/**`) or the emulator
+               side (`picohost/src/picohost/emulators/**`). Resolve any
+               `// emulator:` aliases in `src/pico_multi.h`.
+            2. For each touched target, read `src/<target>.c` (plus any shared
+               firmware deps it relies on — e.g. `tempctrl` also uses
+               `src/temp_simple.c` and `src/ds18b20.h`) and
+               `picohost/src/picohost/emulators/<target>.py` side by side.
+            3. Compare their behavioral contract: command handling, status
+               field names/values, defaults, clamps/validation, and edge
+               cases. Use `picohost/tests/test_protocol_conformance.py` as the
+               written reference for what parity means.
+            4. Post exactly ONE concise PR comment summarizing your findings:
+               - list concrete divergences, each with a `file:line` reference,
+                 OR
+               - state explicitly that no divergences were found.
+               When firmware behavior changed, also note whether
+               `picohost/tests/test_protocol_conformance.py` needs a matching
+               update, so the comment is actionable.
+
+            Keep the comment focused and short. Do not modify any files. This is
+            an advisory review — do not fail the build.
