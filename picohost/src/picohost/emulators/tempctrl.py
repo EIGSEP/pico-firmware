@@ -73,7 +73,7 @@ class TempControlState:
         # consecutive wrong-direction windows.
         self.runaway_strikes = 0
         # Sensor sanity guard mirror (see tempctrl_update_sensor_drive).
-        # rate_ref_valid gates the first-sample seeding; sensor_rejects
+        # rate_ref_valid gates control and the rate guard; sensor_rejects
         # counts consecutive rejected samples and latches at MAX_REJECTS.
         # seed_pending marks a first (candidate) sample awaiting confirmation:
         # the reference anchors only when two consecutive samples agree within
@@ -83,6 +83,7 @@ class TempControlState:
         # so a sensor that produced a burst of garbage cannot silently
         # re-enable drive when a later reading happens to look plausible.
         self.rate_ref_valid = False
+        self.seed_pending = False
         self.sensor_rejects = 0
         self.sensor_tripped = False
         # Test hook: queued bogus sensor readings, one consumed per fresh
@@ -226,6 +227,7 @@ class TempCtrlEmulator(PicoEmulator):
                     tc.sensor_rejects = 0
                     tc.sensor_tripped = False
                     tc.rate_ref_valid = False
+                    tc.seed_pending = False
                     self.watchdog_tripped = False
                 tc.enabled = new_enabled
 
@@ -299,14 +301,35 @@ class TempCtrlEmulator(PicoEmulator):
         normal reading, which equals the current ``T_now`` and so always
         passes). dt is one conversion (``DT_PER_PI_TICK_S``) because the
         firmware advances its rate reference on every fresh sample.
+
+        Two-to-anchor: until rate_ref_valid is set, the first sample is only a
+        candidate (held in T_now) and the reference anchors only when a second
+        sample confirms it within the rate budget. An unconfirmed candidate is
+        replaced and counts toward the latch, so a sensor that never produces
+        two consistent readings still latches.
         """
         if tc._sensor_error:
             return
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
         if not tc.rate_ref_valid:
-            tc.T_now = raw
-            tc.rate_ref_valid = True
-            tc.sensor_rejects = 0
+            if not tc.seed_pending:
+                # First sample: hold as candidate, await confirmation.
+                tc.T_now = raw
+                tc.seed_pending = True
+                tc.sensor_rejects = 0
+                return
+            rate = abs(raw - tc.T_now) / DT_PER_PI_TICK_S
+            if rate > MAX_RATE_C_PER_S:
+                # Candidate unconfirmed: replace it, count toward the latch.
+                tc.T_now = raw
+                if tc.sensor_rejects < MAX_REJECTS:
+                    tc.sensor_rejects += 1
+            else:
+                # Two consecutive consistent samples: anchor the reference.
+                tc.T_now = raw
+                tc.rate_ref_valid = True
+                tc.seed_pending = False
+                tc.sensor_rejects = 0
             return
         rate = abs(raw - tc.T_now) / DT_PER_PI_TICK_S
         if rate > MAX_RATE_C_PER_S:
@@ -339,7 +362,10 @@ class TempCtrlEmulator(PicoEmulator):
             tc.sensor_tripped = True
         tc.internally_disabled = tc._sensor_error or tc.sensor_tripped
 
-        if self._drive_allowed(tc):
+        # rate_ref_valid gates control too: until the reference anchors T_now
+        # is only a candidate, so the channel stays idle (drive held at 0)
+        # rather than driving on an unconfirmed reading (matches firmware).
+        if self._drive_allowed(tc) and tc.rate_ref_valid:
             if fresh:
                 tempctrl_pi_drive(tc)
             self._check_stall(tc)

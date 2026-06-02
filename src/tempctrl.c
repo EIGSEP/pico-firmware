@@ -69,6 +69,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->stall_check_time = get_absolute_time();
     tempctrl->runaway_strikes = 0;
     tempctrl->rate_ref_valid = false;
+    tempctrl->seed_pending = false;
     tempctrl->rate_ref_ms = 0;
     tempctrl->sensor_rejects = 0;
     tempctrl->sensor_tripped = false;
@@ -241,13 +242,40 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // T_now; latch the channel after TEMPCTRL_MAX_REJECTS consecutive
     // rejects. rate_ref_ms advances on every fresh sample so the rate
     // denominator stays ~one conversion; T_now is the value reference.
+    //
+    // Before the reference is anchored there is nothing to rate-check
+    // against, so the first sample is only a candidate (held in T_now,
+    // timestamp in rate_ref_ms): it becomes the trusted reference once a
+    // second sample confirms it within the rate budget. A candidate that
+    // fails confirmation is replaced and counts toward the same latch
+    // ceiling, so a sensor that can never produce two consistent readings
+    // still latches instead of seeding control from a lone transient.
     if (fresh && !hw_error) {
         float raw = temp_sensor_get_temp(&tempctrl->temp_sensor);
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         if (!tempctrl->rate_ref_valid) {
-            tempctrl->T_now = raw;
-            tempctrl->rate_ref_valid = true;
-            tempctrl->sensor_rejects = 0;
+            if (!tempctrl->seed_pending) {
+                // First sample: hold as candidate, await confirmation.
+                tempctrl->T_now = raw;
+                tempctrl->seed_pending = true;
+                tempctrl->sensor_rejects = 0;
+            } else {
+                float dt = (float)(now_ms - tempctrl->rate_ref_ms) / 1000.0f;
+                if (dt > 0.0f &&
+                    fabsf(raw - tempctrl->T_now) / dt > TEMPCTRL_MAX_RATE_C_PER_S) {
+                    // Candidate unconfirmed: replace it, count toward the latch.
+                    tempctrl->T_now = raw;
+                    if (tempctrl->sensor_rejects < TEMPCTRL_MAX_REJECTS) {
+                        tempctrl->sensor_rejects++;
+                    }
+                } else {
+                    // Two consecutive consistent samples: anchor the reference.
+                    tempctrl->T_now = raw;
+                    tempctrl->rate_ref_valid = true;
+                    tempctrl->seed_pending = false;
+                    tempctrl->sensor_rejects = 0;
+                }
+            }
         } else {
             float dt = (float)(now_ms - tempctrl->rate_ref_ms) / 1000.0f;
             if (dt > 0.0f &&
@@ -274,7 +302,11 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     }
     tempctrl->internally_disabled = hw_error || tempctrl->sensor_tripped;
 
-    if (tempctrl_drive_allowed(tempctrl)) {
+    // rate_ref_valid gates control as well as the guard: until the reference
+    // is anchored T_now is only a candidate, so the channel stays idle (the
+    // not-allowed branch holds drive at 0) rather than driving on an
+    // unconfirmed reading. Costs at most one extra conversion after enable.
+    if (tempctrl_drive_allowed(tempctrl) && tempctrl->rate_ref_valid) {
         if (fresh) {
             tempctrl_pi_drive(tempctrl);
         }
@@ -475,6 +507,7 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
         tempctrl->sensor_rejects = 0;
         tempctrl->sensor_tripped = false;
         tempctrl->rate_ref_valid = false;
+        tempctrl->seed_pending = false;
         watchdog_tripped = false;
     }
     tempctrl->enabled = new_enabled;

@@ -30,6 +30,18 @@ def _run_to_pi_tick(emu):
         emu.op()
 
 
+def _run_to_drive(emu):
+    """Advance to the first conversion that actually engages drive.
+
+    Two-to-anchor (tempctrl_update_sensor_drive): the first fresh
+    conversion only takes a candidate reference and control stays gated,
+    so drive engages on the second consistent conversion. Tests that need
+    a channel up and controlling step through both.
+    """
+    _run_to_pi_tick(emu)  # seed the candidate reference
+    _run_to_pi_tick(emu)  # confirm + anchor → control engages
+
+
 class TestMotorEmulator:
     def test_initial_state(self):
         emu = MotorEmulator()
@@ -418,7 +430,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)  # opens the stall window with active=True
+        _run_to_drive(emu)  # anchor, then open the stall window (active=True)
         assert emu.lna.active is True
         assert emu.lna.stall_window_active is True
         self._force_window_elapsed(emu.lna)
@@ -436,7 +448,7 @@ class TestTempCtrlStallGuard:
         emu = TempCtrlEmulator()
         emu.lna.T_now = 25.0
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         self._force_window_elapsed(emu.lna)
         emu.lna.T_now += 1.0  # well above STALL_MIN_DELTA
         emu.op()
@@ -455,7 +467,7 @@ class TestTempCtrlStallGuard:
                 "LNA_hysteresis": 0.5,
             }
         )
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         assert emu.lna.active is False
         assert emu.lna.stall_window_active is False
         self._force_window_elapsed(emu.lna)
@@ -468,7 +480,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
@@ -483,7 +495,7 @@ class TestTempCtrlStallGuard:
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         self._force_window_elapsed(emu.lna)
         emu.op()
         assert emu.lna.stall_tripped is True
@@ -504,7 +516,7 @@ class TestTempCtrlStallGuard:
                 "LOAD_enable": True,
             }
         )
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         self._force_window_elapsed(emu.load)
         emu.op()
         assert emu.load.stall_tripped is True
@@ -627,7 +639,7 @@ class TestTempCtrlCoolingGuard:
                 "LNA_cooling_enabled": False,
             }
         )
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         assert emu.lna.active is True
         assert emu.lna.drive == 0.0
         # Force-elapse the stall window and run another op cycle: with
@@ -658,7 +670,7 @@ class TestTempCtrlRunawayGuard:
         emu.lna.T_now = 30.0
         emu.lna.thermal_frozen = True  # drive T_now by hand
         emu.server({"LNA_temp_target": 20.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         assert emu.lna.drive < 0.0
         assert emu.lna.stall_window_active is True
 
@@ -706,7 +718,7 @@ class TestTempCtrlRunawayGuard:
         emu.lna.T_now = 20.0
         emu.lna.thermal_frozen = True
         emu.server({"LNA_temp_target": 30.0, "LNA_enable": True})
-        _run_to_pi_tick(emu)
+        _run_to_drive(emu)
         assert emu.lna.drive > 0.0
         for _ in range(mod.RUNAWAY_STRIKES):
             self._force_window_elapsed(emu.lna)
@@ -746,9 +758,14 @@ class TestTempCtrlSensorSanity:
     """
 
     def _seed(self, emu):
-        """Run one good fresh conversion so the rate reference is valid."""
+        """Anchor the rate reference. Two-to-anchor needs two consistent
+        fresh conversions: the first is a candidate, the second confirms it.
+        """
         emu.lna.T_now = 25.0
         emu.lna.thermal_frozen = True
+        _run_to_pi_tick(emu)
+        assert emu.lna.seed_pending is True
+        assert emu.lna.rate_ref_valid is False
         _run_to_pi_tick(emu)
         assert emu.lna.rate_ref_valid is True
 

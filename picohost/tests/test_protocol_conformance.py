@@ -256,10 +256,10 @@ class TestTempCtrlProtocol:
         emu.server(
             {"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1}
         )
-        # Need a full conversion cycle so PI fires at least once and drive
-        # leaves zero (matches firmware: PI only runs on the op tick a
-        # DS18B20 conversion completes).
-        for _ in range(OP_TICKS_PER_CONVERSION + 1):
+        # Two conversion cycles so PI fires and drive leaves zero. The first
+        # fresh conversion only seeds the candidate reference (two-to-anchor);
+        # control engages on the second, mirroring firmware.
+        for _ in range(2 * OP_TICKS_PER_CONVERSION):
             emu.op()
         assert emu.lna.drive != 0.0
         emu.inject_sensor_error("LNA")
@@ -334,7 +334,9 @@ class TestTempCtrlProtocol:
                 "LNA_hysteresis": 0.5,
             }
         )
-        for _ in range(OP_TICKS_PER_CONVERSION):
+        # Two conversions: the first seeds the candidate reference
+        # (two-to-anchor), the second anchors and runs the first PI step.
+        for _ in range(2 * OP_TICKS_PER_CONVERSION):
             emu.op()
         # With Kp=0.2 and T_delta=0.6, drive should be ~0.12 (12 % PWM),
         # not >=0.4 like the old baseline-kick law.

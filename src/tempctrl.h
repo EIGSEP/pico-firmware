@@ -121,6 +121,7 @@ typedef struct {
     // unused for control while unanchored). This stops a single transient (e.g.
     // the 85 C power-on default after a brownout) from poisoning the anchor.
     bool rate_ref_valid;
+    bool seed_pending;
     uint32_t rate_ref_ms;
     uint8_t sensor_rejects;
     bool sensor_tripped;
