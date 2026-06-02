@@ -3,6 +3,7 @@
 #include "onewire_library.pio.h"
 #include "ow_rom.h"
 #include <math.h>
+#include <stddef.h>
 
 void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset) {
     sensor->gpio_pin = gpio_pin;
@@ -28,6 +29,24 @@ void temp_sensor_start_conversion(TempSensor *sensor) {
     }
 }
 
+// Dallas/Maxim 1-Wire CRC-8 (polynomial X^8 + X^5 + X^4 + 1, reflected 0x8C,
+// processed LSB-first). The DS18B20 stores the CRC of scratchpad bytes 0..7 in
+// byte 8, so a frame corrupted on the wire (marginal pull-up, line noise) is
+// caught here even though its decoded value may land inside the valid range.
+static uint8_t ow_crc8(const uint8_t *data, size_t len) {
+    uint8_t crc = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t byte = data[i];
+        for (int b = 0; b < 8; b++) {
+            uint8_t mix = (crc ^ byte) & 0x01;
+            crc >>= 1;
+            if (mix) crc ^= 0x8C;
+            byte >>= 1;
+        }
+    }
+    return crc;
+}
+
 bool temp_sensor_read(TempSensor *sensor) {
     // Check if enough time has passed since conversion start
     uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -50,6 +69,23 @@ bool temp_sensor_read(TempSensor *sensor) {
         data[i] = ow_read(&sensor->ow);
     }
 
+    // An all-zero scratchpad has a valid (zero) CRC and decodes to a plausible
+    // 0.0 C, so a stuck-low bus would slip past the CRC check below. Reject it
+    // explicitly before trusting any byte.
+    bool all_zero = true;
+    for (int i = 0; i < 9; i++) {
+        if (data[i] != 0x00) { all_zero = false; break; }
+    }
+    if (all_zero) {
+        sensor->read_error = true;
+        return false;
+    }
+
+    // Reject frames corrupted in transit before trusting any byte.
+    if (ow_crc8(data, 8) != data[8]) {
+        sensor->read_error = true;
+        return false;
+    }
 
     // Convert to temperature
     int16_t raw_temp = (data[1] << 8) | data[0];
