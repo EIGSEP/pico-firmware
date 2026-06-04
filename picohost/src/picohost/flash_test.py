@@ -2,7 +2,7 @@
 """`flash-test`: load the heartbeat test UF2 onto Pico(s) in BOOTSEL mode.
 
 `flash-picos` discovers Picos by enumerating CDC serial ports, which
-means a fresh / wiped Pico (USB PID 0x0003, mass-storage) is invisible
+means a fresh / wiped Pico (USB PID 0x000f on RP2350, mass-storage) is invisible
 to it. This CLI wraps ``picotool load`` to target BOOTSEL-mode Picos so
 the test image can be installed, USB-CDC comes up, and the normal
 ``flash-picos`` workflow becomes available.
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 PICO_VID = "2e8a"
-PICO_PID_BOOTSEL = "0003"
+PICO_PID_BOOTSEL = "000f"  # RP2350 BOOTSEL PID (RP2040 was 0003)
 SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
 
 
@@ -26,7 +26,7 @@ def find_bootsel_devices(sysfs_root=None):
     """Enumerate Picos currently in BOOTSEL mode by scanning Linux sysfs.
 
     Returns a list of ``{"usb_serial", "bus", "address"}`` dicts, one per
-    attached Pico with VID:PID 2e8a:0003. BOOTSEL Picos are USB
+    attached Pico with VID:PID 2e8a:000f. BOOTSEL Picos are USB
     mass-storage devices and don't appear in pyserial's port list, so
     sysfs is the cheapest discovery path that avoids parsing picotool's
     free-form output or pulling in libusb bindings.

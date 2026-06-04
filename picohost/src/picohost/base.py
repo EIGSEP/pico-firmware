@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # USB IDs for Raspberry Pi Pico
 PICO_VID = 0x2E8A
 PICO_PID_CDC = 0x0009  # CDC mode (serial)
-PICO_PID_BOOTSEL = 0x0003  # BOOTSEL mode
+PICO_PID_BOOTSEL = 0x000F  # RP2350 BOOTSEL mode (RP2040 was 0x0003)
 
 
 def redis_handler(writer):
