@@ -7,7 +7,6 @@ import pytest
 from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
-    flash_uf2,
 )
 
 
@@ -339,51 +338,114 @@ class TestFlashAndDiscover:
 
 
 class TestFlashUf2:
-    """picotool's ``-f`` reboots the target into BOOTSEL and must then
-    re-discover it before loading; on a busy hub that re-enumeration
-    can fall outside picotool's window and fail intermittently. The
-    flash step retries with backoff so a transient miss does not
-    abandon the device.
+    """flash_uf2 reboots a CDC Pico into BOOTSEL with ``picotool reboot``
+    — which, unlike ``load -f``, does not re-acquire the device by a live
+    serial-descriptor read (that read corrupts under bus contention on
+    the deep hub) — waits for it to re-enumerate in BOOTSEL via sysfs,
+    then loads it by ``--bus/--address`` without ``-f``. Retries with
+    backoff.
     """
 
-    def _patch_run(self, monkeypatch, returncodes):
-        """Make subprocess.run return the given codes in sequence."""
+    def test_cdc_device_rebooted_then_loaded(self, monkeypatch):
         import picohost.flash_picos as fp
 
-        calls = {"n": 0, "cmds": []}
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 104, False)
+        )
+        monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s: (1, 107))
+        cmds = []
 
-        def fake_run(cmd, **kwargs):
-            calls["cmds"].append(cmd)
-            rc = returncodes[calls["n"]]
-            calls["n"] += 1
-            return types.SimpleNamespace(returncode=rc, stdout="picotool out")
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout="")
 
         monkeypatch.setattr(fp.subprocess, "run", fake_run)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        fp.flash_uf2("x.uf2", "SER_A")
+        assert cmds == [
+            ["picotool", "reboot", "-u", "-f",
+             "--bus", "1", "--address", "104"],
+            ["picotool", "load",
+             "--bus", "1", "--address", "107", "-x", "x.uf2"],
+        ]
+        assert "--ser" not in cmds[0] and "--ser" not in cmds[1]
+        assert "-f" not in cmds[1]
+
+    def test_bootsel_device_loaded_directly(self, monkeypatch):
+        # A device already in BOOTSEL is loaded straight away — no reboot.
+        import picohost.flash_picos as fp
+
         monkeypatch.setattr(
-            fp, "_resolve_bus_address", lambda s: (1, 35, False)
+            fp, "_resolve_bus_address", lambda s: (1, 50, True)
         )
-        return calls
+        monkeypatch.setattr(
+            fp,
+            "_wait_for_bootsel",
+            lambda s: pytest.fail("must not reboot a BOOTSEL device"),
+        )
+        cmds = []
 
-    def test_succeeds_on_first_attempt(self, monkeypatch):
-        calls = self._patch_run(monkeypatch, [0])
-        flash_uf2("x.uf2", "SER_A")
-        assert calls["n"] == 1
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout="")
 
-    def test_retries_then_succeeds(self, monkeypatch):
-        calls = self._patch_run(monkeypatch, [1, 1, 0])
-        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
-        assert calls["n"] == 3
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        fp.flash_uf2("x.uf2", "SER_A")
+        assert cmds == [
+            ["picotool", "load",
+             "--bus", "1", "--address", "50", "-x", "x.uf2"],
+        ]
+
+    def test_retries_load_then_succeeds(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 50, True)
+        )
+        codes = iter([1, 0])
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return types.SimpleNamespace(returncode=next(codes), stdout="")
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
+        assert [c for c in cmds if c[1] == "load"] == [
+            ["picotool", "load",
+             "--bus", "1", "--address", "50", "-x", "x.uf2"],
+            ["picotool", "load",
+             "--bus", "1", "--address", "50", "-x", "x.uf2"],
+        ]
 
     def test_raises_after_exhausting_attempts(self, monkeypatch):
-        calls = self._patch_run(monkeypatch, [1, 1, 1])
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 50, True)
+        )
+        monkeypatch.setattr(
+            fp.subprocess,
+            "run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="boom"
+            ),
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         with pytest.raises(RuntimeError, match="after 3 attempts"):
-            flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
-        assert calls["n"] == 3
+            fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
 
     def test_backoff_between_attempts(self, monkeypatch):
         import picohost.flash_picos as fp
 
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 50, True)
+        )
         codes = iter([1, 0])
         monkeypatch.setattr(
             fp.subprocess,
@@ -394,85 +456,66 @@ class TestFlashUf2:
         )
         sleeps = []
         monkeypatch.setattr(fp.time, "sleep", lambda s: sleeps.append(s))
-        monkeypatch.setattr(
-            fp, "_resolve_bus_address", lambda s: (1, 35, False)
-        )
-        flash_uf2("x.uf2", "SER_A", attempts=3, backoff=2.0)
+        fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=2.0)
         assert sleeps == [2.0]
 
-    def test_selects_cdc_by_bus_address_with_force(self, monkeypatch):
+    def test_recovers_bootsel_device_on_retry(self, monkeypatch):
+        # Attempt 1: reboot CDC->BOOTSEL, load fails. Attempt 2: device
+        # is now already in BOOTSEL, so it loads directly (no reboot).
         import picohost.flash_picos as fp
 
+        resolves = iter([(1, 104, False), (1, 107, True)])
         monkeypatch.setattr(
-            fp, "_resolve_bus_address", lambda s: (2, 9, False)
+            fp, "_resolve_bus_address", lambda s: next(resolves)
         )
-        captured = {}
-
-        def fake_run(cmd, **kw):
-            captured["cmd"] = cmd
-            return types.SimpleNamespace(returncode=0, stdout="")
-
-        monkeypatch.setattr(fp.subprocess, "run", fake_run)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-        fp.flash_uf2("x.uf2", "SER_A")
-        assert captured["cmd"] == [
-            "picotool", "load", "-f",
-            "--bus", "2", "--address", "9",
-            "-x", "x.uf2",
-        ]
-        assert "--ser" not in captured["cmd"]
-
-    def test_loads_bootsel_device_without_force(self, monkeypatch):
-        # A device already in BOOTSEL needs no reboot, so -f is omitted
-        # and picotool loads it straight away.
-        import picohost.flash_picos as fp
-
-        monkeypatch.setattr(
-            fp, "_resolve_bus_address", lambda s: (2, 9, True)
-        )
-        captured = {}
-
-        def fake_run(cmd, **kw):
-            captured["cmd"] = cmd
-            return types.SimpleNamespace(returncode=0, stdout="")
-
-        monkeypatch.setattr(fp.subprocess, "run", fake_run)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-        fp.flash_uf2("x.uf2", "SER_A")
-        assert captured["cmd"] == [
-            "picotool", "load",
-            "--bus", "2", "--address", "9",
-            "-x", "x.uf2",
-        ]
-        assert "-f" not in captured["cmd"]
-
-    def test_reresolves_address_each_attempt(self, monkeypatch):
-        # Attempt 1 reboots the CDC device into BOOTSEL but the load
-        # fails; attempt 2 must re-resolve, find it now in BOOTSEL at a
-        # new address, and finish the load without -f.
-        import picohost.flash_picos as fp
-
-        addrs = iter([(1, 10, False), (1, 22, True)])
-        monkeypatch.setattr(
-            fp, "_resolve_bus_address", lambda s: next(addrs)
-        )
+        monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s: (1, 107))
         codes = iter([1, 0])
-        seen = []
+        cmds = []
 
         def fake_run(cmd, **kw):
-            seen.append(cmd)
-            return types.SimpleNamespace(returncode=next(codes), stdout="")
+            cmds.append(cmd)
+            rc = next(codes) if cmd[1] == "load" else 0
+            return types.SimpleNamespace(returncode=rc, stdout="")
 
         monkeypatch.setattr(fp.subprocess, "run", fake_run)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
 
         fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
-        assert seen[0][seen[0].index("--address") + 1] == "10"
-        assert "-f" in seen[0]
-        assert seen[1][seen[1].index("--address") + 1] == "22"
-        assert "-f" not in seen[1]
+        assert cmds == [
+            ["picotool", "reboot", "-u", "-f",
+             "--bus", "1", "--address", "104"],
+            ["picotool", "load",
+             "--bus", "1", "--address", "107", "-x", "x.uf2"],
+            ["picotool", "load",
+             "--bus", "1", "--address", "107", "-x", "x.uf2"],
+        ]
+
+    def test_reboot_not_entering_bootsel_retries_then_raises(
+        self, monkeypatch
+    ):
+        # The reboot request is lost on the congested hub: the device
+        # never enters BOOTSEL, so no load is attempted and it retries.
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 104, False)
+        )
+        monkeypatch.setattr(
+            fp, "_wait_for_bootsel", lambda s: (None, None)
+        )
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout="")
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        with pytest.raises(RuntimeError, match="after 2 attempts"):
+            fp.flash_uf2("x.uf2", "SER_A", attempts=2, backoff=0.0)
+        assert all(c[1] == "reboot" for c in cmds)
+        assert len(cmds) == 2
 
     def test_unresolvable_attempt_skips_picotool_then_raises(
         self, monkeypatch
@@ -491,6 +534,37 @@ class TestFlashUf2:
         with pytest.raises(RuntimeError, match="after 3 attempts"):
             fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
         assert ran == []
+
+
+class TestWaitForBootsel:
+    def test_returns_address_when_in_bootsel(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 107, True)
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert fp._wait_for_bootsel("SER_A", timeout=0.1) == (1, 107)
+
+    def test_returns_none_on_timeout(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        # Never enters BOOTSEL (stays CDC) -> times out.
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 104, False)
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert fp._wait_for_bootsel("SER_A", timeout=0.05) == (None, None)
+
+    def test_waits_through_cdc_then_bootsel(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        seq = iter([(1, 104, False), (1, 104, False), (1, 107, True)])
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: next(seq)
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        assert fp._wait_for_bootsel("SER_A", timeout=1.0) == (1, 107)
 
 
 class TestResolvePostFlashPort:
@@ -614,3 +688,183 @@ class TestResolveBusAddress:
         assert _resolve_bus_address(
             "SER_A", sysfs_root=tmp_path / "nope"
         ) == (None, None, None)
+
+
+def _make_usb_dev(
+    root, name, vid, pid, *, serial=None, bus=None, devnum=None
+):
+    """Create a fake sysfs USB device directory under *root*."""
+    dev = root / name
+    dev.mkdir()
+    (dev / "idVendor").write_text(vid + "\n")
+    (dev / "idProduct").write_text(pid + "\n")
+    if serial is not None:
+        (dev / "serial").write_text(serial + "\n")
+    if bus is not None:
+        (dev / "busnum").write_text(f"{bus}\n")
+    if devnum is not None:
+        (dev / "devnum").write_text(f"{devnum}\n")
+    return dev
+
+
+class TestPicotoolLoad:
+    def _capture_run(self, monkeypatch, returncode=0):
+        import picohost.flash_picos as fp
+
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return types.SimpleNamespace(
+                returncode=returncode, stdout="picotool out"
+            )
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        return captured
+
+    def test_execute_appends_x(self, monkeypatch):
+        from picohost.flash_picos import _picotool_load
+
+        captured = self._capture_run(monkeypatch)
+        _picotool_load(2, 9, "x.uf2", execute=True)
+        assert captured["cmd"] == [
+            "picotool", "load",
+            "--bus", "2", "--address", "9",
+            "-x", "x.uf2",
+        ]
+
+    def test_no_execute_omits_x(self, monkeypatch):
+        # The GPIO mass-flash path loads without -x: the device stays in
+        # BOOTSEL (no re-enumeration) and a single mass reset at the end
+        # boots every pico. -f must never appear either — its reboot
+        # path does the live serial-descriptor read that corrupts under
+        # hub contention.
+        from picohost.flash_picos import _picotool_load
+
+        captured = self._capture_run(monkeypatch)
+        _picotool_load(1, 42, "y.uf2", execute=False)
+        assert captured["cmd"] == [
+            "picotool", "load",
+            "--bus", "1", "--address", "42",
+            "y.uf2",
+        ]
+        assert "-x" not in captured["cmd"]
+        assert "-f" not in captured["cmd"]
+
+    def test_returns_completed_process(self, monkeypatch):
+        from picohost.flash_picos import _picotool_load
+
+        self._capture_run(monkeypatch, returncode=1)
+        res = _picotool_load(1, 42, "y.uf2", execute=False)
+        assert res.returncode == 1
+        assert res.stdout == "picotool out"
+
+
+class TestFindBootselDevices:
+    def test_finds_all_bootsel_devices_sorted(self, tmp_path):
+        from picohost.flash_picos import _find_bootsel_devices
+
+        _make_usb_dev(
+            tmp_path, "1-4", "2e8a", "000f",
+            serial="SER_B", bus=1, devnum=51,
+        )
+        _make_usb_dev(
+            tmp_path, "1-3", "2e8a", "000f",
+            serial="SER_A", bus=1, devnum=50,
+        )
+        # CDC pico and non-pico devices must be ignored.
+        _make_usb_dev(
+            tmp_path, "1-5", "2e8a", "0009",
+            serial="SER_C", bus=1, devnum=52,
+        )
+        _make_usb_dev(
+            tmp_path, "1-6", "1234", "5678",
+            serial="SER_D", bus=1, devnum=53,
+        )
+        assert _find_bootsel_devices(sysfs_root=tmp_path) == [
+            {"usb_serial": "SER_A", "bus": 1, "address": 50},
+            {"usb_serial": "SER_B", "bus": 1, "address": 51},
+        ]
+
+    def test_serial_optional(self, tmp_path):
+        # A wiped board can enumerate in BOOTSEL without a serial; it
+        # must still be flashable (keyed by bus/address).
+        from picohost.flash_picos import _find_bootsel_devices
+
+        _make_usb_dev(tmp_path, "1-3", "2e8a", "000f", bus=1, devnum=50)
+        assert _find_bootsel_devices(sysfs_root=tmp_path) == [
+            {"usb_serial": None, "bus": 1, "address": 50},
+        ]
+
+    def test_skips_device_missing_busnum(self, tmp_path):
+        from picohost.flash_picos import _find_bootsel_devices
+
+        _make_usb_dev(tmp_path, "1-3", "2e8a", "000f", serial="SER_A")
+        assert _find_bootsel_devices(sysfs_root=tmp_path) == []
+
+    def test_empty_when_sysfs_missing(self, tmp_path):
+        from picohost.flash_picos import _find_bootsel_devices
+
+        assert _find_bootsel_devices(sysfs_root=tmp_path / "nope") == []
+
+
+class TestWaitForStableBootselSet:
+    def _scanner(self, monkeypatch, frames):
+        """Patch _find_bootsel_devices to step through *frames*, then
+        repeat the last frame forever."""
+        import picohost.flash_picos as fp
+
+        calls = {"n": 0}
+
+        def fake_find():
+            idx = min(calls["n"], len(frames) - 1)
+            calls["n"] += 1
+            return frames[idx]
+
+        monkeypatch.setattr(fp, "_find_bootsel_devices", fake_find)
+        return calls
+
+    def test_returns_after_set_stabilizes(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        d1 = {"usb_serial": "SER_A", "bus": 1, "address": 50}
+        d2 = {"usb_serial": "SER_B", "bus": 1, "address": 51}
+        self._scanner(monkeypatch, [[], [d1], [d1, d2]])
+        result = fp._wait_for_stable_bootsel_set(
+            timeout=5.0, stable=0.05, poll=0.005
+        )
+        assert result == [d1, d2]
+
+    def test_waits_through_growing_set(self, monkeypatch):
+        # Devices enumerate one by one; the wait must not latch onto
+        # the first non-empty set it sees.
+        import picohost.flash_picos as fp
+
+        d1 = {"usb_serial": "SER_A", "bus": 1, "address": 50}
+        d2 = {"usb_serial": "SER_B", "bus": 1, "address": 51}
+        self._scanner(monkeypatch, [[d1], [d1], [d1], [d1, d2]])
+        result = fp._wait_for_stable_bootsel_set(
+            timeout=5.0, stable=0.3, poll=0.005
+        )
+        assert result == [d1, d2]
+
+    def test_empty_on_timeout_when_nothing_appears(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        self._scanner(monkeypatch, [[]])
+        result = fp._wait_for_stable_bootsel_set(
+            timeout=0.05, stable=0.5, poll=0.005
+        )
+        assert result == []
+
+    def test_returns_last_seen_on_timeout(self, monkeypatch):
+        # The set never stabilizes within the timeout; the last
+        # observation is returned so the caller can proceed/warn.
+        import picohost.flash_picos as fp
+
+        d1 = {"usb_serial": "SER_A", "bus": 1, "address": 50}
+        self._scanner(monkeypatch, [[d1]])
+        result = fp._wait_for_stable_bootsel_set(
+            timeout=0.05, stable=10.0, poll=0.005
+        )
+        assert result == [d1]
