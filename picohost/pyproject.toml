@@ -21,6 +21,12 @@ dependencies = [
   "numpy",
   "pyserial",
   "eigsep_redis>=2.3.0",
+  # Pi-side GPIO control. Pure-python; the pin factory backend (lgpio
+  # on the field image, via eigsep-field's [hardware.lgpio]) is
+  # supplied by the deployment, not declared here — PyPI lgpio ships
+  # no cp313 wheel, so declaring it would break eigsep-field's
+  # wheelhouse build. For tests/dev on non-Pi systems, set GPIOZERO_PIN_FACTORY=mock.
+  "gpiozero>=2",
 ]
 
 [project.scripts]
