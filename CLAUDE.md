@@ -180,12 +180,16 @@ with MotorDevice() as motor:
 
 ### flash-picos
 
-CLI tool (installed as `flash-picos` entry point from picohost package) for flashing and configuring multiple Picos:
-- Uses `picotool` to flash via USB serial number
-- Reads JSON device info from each Pico after flashing
-- Updates `devices_info.json` with device configurations
-- Supports both BOOTSEL and CDC serial mode Picos
-- Automatically discovers connected Picos
+CLI tool (installed as `flash-picos` entry point from picohost package) for flashing and configuring multiple Picos. Two flash paths:
+- **GPIO mass-BOOTSEL (default)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. One GPIO sequence (reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then one mass reset boots everything. Fails fast with a pointer to `--no-gpio` if no GPIO backend is available
+- **USB per-device (`--no-gpio`, or automatic with `--port`/`--usb-serial`)**: reboots each CDC Pico into BOOTSEL via `picotool reboot --bus/--address`, then loads — for hosts without the GPIO wiring
+- `picotool` targets devices by USB bus/address resolved from sysfs (never `--ser`, whose descriptor read corrupts under hub contention)
+- Reads JSON device info from each Pico after flashing and publishes the device list to Redis (optionally `--output-file`)
+- Automatically discovers connected Picos (CDC via pyserial, BOOTSEL via sysfs)
+
+### pico-gpio
+
+Standalone CLI over the same GPIO module: `pico-gpio bootsel` puts all bussed Picos into BOOTSEL, `pico-gpio reset` mass-reboots them.
 
 ### Python Host Library (picohost)
 
