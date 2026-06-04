@@ -2,7 +2,7 @@
 """`flash-test`: load the heartbeat test UF2 onto Pico(s) in BOOTSEL mode.
 
 `flash-picos` discovers Picos by enumerating CDC serial ports, which
-means a fresh / wiped Pico (USB PID 0x000f on RP2350, mass-storage) is invisible
+means a fresh / wiped Pico (USB PID 0x000f, mass-storage) is invisible
 to it. This CLI wraps ``picotool load`` to target BOOTSEL-mode Picos so
 the test image can be installed, USB-CDC comes up, and the normal
 ``flash-picos`` workflow becomes available.
