@@ -94,6 +94,33 @@ def _resolve_bus_address(usb_serial, sysfs_root=None):
     return (None, None, None)
 
 
+_BOOTSEL_REENUM_TIMEOUT_S = 10.0
+_BOOTSEL_REENUM_POLL_S = 0.2
+
+
+def _wait_for_bootsel(
+    usb_serial,
+    timeout=_BOOTSEL_REENUM_TIMEOUT_S,
+    poll=_BOOTSEL_REENUM_POLL_S,
+):
+    """Poll sysfs until *usb_serial* re-enumerates in BOOTSEL.
+
+    Returns the BOOTSEL ``(bus, address)`` once the device appears as
+    ``2e8a:000f``, or ``(None, None)`` if it does not within *timeout*
+    (e.g. the reboot request was lost on the congested hub). The kernel's
+    sysfs serial is reliable; only picotool's *live* descriptor reads
+    corrupt under contention, which is why we re-find via sysfs rather
+    than letting ``picotool load -f`` track the device itself.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        bus, address, in_bootsel = _resolve_bus_address(usb_serial)
+        if in_bootsel:
+            return (bus, address)
+        time.sleep(poll)
+    return (None, None)
+
+
 _FLASH_MAX_ATTEMPTS = 3
 _FLASH_RETRY_BACKOFF_S = 2.0
 
@@ -106,21 +133,25 @@ def flash_uf2(
 ):
     """Flash the UF2 onto the Pico with USB serial *usb_serial*.
 
-    Selects the target by USB ``--bus``/``--address`` (resolved from
-    sysfs via :func:`_resolve_bus_address`) rather than picotool's
-    ``--ser``. On the observatory's deep USB hub, ``--ser`` matching
-    forces a serial-string descriptor read that intermittently fails, so
-    ``picotool load -f --ser`` cannot find the device to reboot into
-    BOOTSEL — the original cause of the "random which Pico flashes"
-    failures. ``--bus``/``--address`` needs no descriptor read.
+    Targets the device by USB ``--bus``/``--address`` (resolved from
+    sysfs) rather than picotool's ``--ser``. A CDC device is flashed in
+    two steps:
 
-    When the device is in CDC mode, ``picotool load -f`` reboots it into
-    BOOTSEL (RP2350 enumerates as ``2e8a:000f``), loads, and reboots back
-    to the app — re-enumerating to a *new* USB address each time. The
-    address is therefore re-resolved before every attempt. If a prior
-    attempt left the device in BOOTSEL, it is loaded directly (without
-    ``-f``); a target momentarily mid-reboot (no sysfs node) is treated
-    as a failed attempt and retried with linear backoff.
+    1. ``picotool reboot -u -f --bus B --address A`` resets it into
+       BOOTSEL (RP2350 enumerates as ``2e8a:000f``).
+    2. After it re-enumerates (a *new* address), ``picotool load
+       --bus B' --address A' -x`` loads and runs the image.
+
+    This deliberately avoids ``picotool load -f``: its ``-f`` reboot path
+    re-acquires the device by a *live* USB serial-string descriptor read,
+    which intermittently returns garbage under bus contention on the
+    observatory's deep hub (``Tracking device serial number ... for
+    reboot`` → ``no accessible RP-series devices in BOOTSEL``) — the
+    cause of the "random which Pico flashes" failures. ``reboot`` sends
+    the reset and exits (no tracking read); the device is then re-found
+    in BOOTSEL via sysfs, whose kernel-read serial is reliable. A device
+    already in BOOTSEL is loaded directly (no reboot). Each step retries
+    with linear backoff.
     """
     print(f"Flashing {uf2_path} → serial={usb_serial}")
     detail = ""
@@ -133,35 +164,52 @@ def flash_uf2(
             )
             logger.warning("%s (attempt %d/%d)", detail, attempt, attempts)
         else:
-            cmd = ["picotool", "load"]
             if not in_bootsel:
-                cmd.append("-f")
-            cmd += [
-                "--bus", str(bus),
-                "--address", str(address),
-                "-x", str(uf2_path),
-            ]
-            res = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
-            )
-            if res.returncode == 0:
-                print(res.stdout, end="")
-                return
-            detail = (res.stdout or "").strip()
-            logger.warning(
-                "picotool failed on serial=%s (bus=%d address=%d "
-                "in_bootsel=%s) (attempt %d/%d)",
-                usb_serial,
-                bus,
-                address,
-                in_bootsel,
-                attempt,
-                attempts,
-            )
+                rb = subprocess.run(
+                    [
+                        "picotool", "reboot", "-u", "-f",
+                        "--bus", str(bus),
+                        "--address", str(address),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    errors="replace",
+                )
+                bus, address = _wait_for_bootsel(usb_serial)
+                if bus is None:
+                    detail = (rb.stdout or "").strip() or (
+                        f"serial={usb_serial} did not reboot into BOOTSEL"
+                    )
+                    logger.warning(
+                        "%s (attempt %d/%d)", detail, attempt, attempts
+                    )
+            if bus is not None:
+                res = subprocess.run(
+                    [
+                        "picotool", "load",
+                        "--bus", str(bus),
+                        "--address", str(address),
+                        "-x", str(uf2_path),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    errors="replace",
+                )
+                if res.returncode == 0:
+                    print(res.stdout, end="")
+                    return
+                detail = (res.stdout or "").strip()
+                logger.warning(
+                    "picotool load failed on serial=%s (bus=%d "
+                    "address=%d) (attempt %d/%d)",
+                    usb_serial,
+                    bus,
+                    address,
+                    attempt,
+                    attempts,
+                )
         if attempt < attempts:
             time.sleep(backoff * attempt)
     if detail:
