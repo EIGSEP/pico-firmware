@@ -1,96 +1,130 @@
-"""Tests for picohost.gpio — mass BOOTSEL/reset via bussed GPIO lines.
+"""Tests for picohost.gpio — mass BOOTSEL/reset via the ``pinctrl`` CLI.
 
-All assertions run against gpiozero's mock pin factory (installed by
-the ``mock_pins`` conftest fixture). The wiring uses inverting
-drivers: driving a Pi pin HIGH pulls the bussed pico line to ground
-(assert); driving it LOW releases the line. The ordering tests record
-``OutputDevice.on``/``off`` and ``_set_function`` events to prove the
-sequence and that every line is released even on error.
+The bussed control lines use inverting drivers: ``pinctrl set <gpio> op
+dh`` (drive-high) grounds the bussed pico line (assert), and ``dl``
+(drive-low) releases it. These tests mock ``subprocess.run`` so no real
+GPIO is ever touched, and assert the exact ``(gpio, level)`` sequence
+plus that both lines are released even on error.
 """
 
+import subprocess
+
 import pytest
-from gpiozero import OutputDevice
-from gpiozero.pins.mock import MockPin
 
 import picohost.gpio as gpio
 
+ASSERT = gpio._ASSERT
+RELEASE = gpio._RELEASE
+
 
 @pytest.fixture
-def events(monkeypatch, mock_pins):
-    """Record OutputDevice.on/off calls and pin function changes.
+def pinctrl(monkeypatch):
+    """Record pinctrl invocations as ``(gpio, level)`` tuples.
 
-    Entries are ``("on", pin)``, ``("off", pin)`` and
-    ``("func", pin, value)`` tuples; pins compare by identity, and the
-    mock factory caches instances, so they can be matched against
-    ``mock_pins.pin(n)``.
+    Patches ``subprocess.run`` in :mod:`picohost.gpio` (so nothing
+    touches real hardware) and no-ops ``time.sleep``. Returns the list
+    of recorded calls in order; tests that need ``sleep`` to raise can
+    re-monkeypatch it (their override wins over this fixture's).
     """
-    log = []
+    calls = []
 
-    orig_on = OutputDevice.on
+    def fake_run(cmd, **kwargs):
+        assert cmd[:2] == ["pinctrl", "set"]
+        assert cmd[3] == "op"
+        calls.append((int(cmd[2]), cmd[4]))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def spy_on(self):
-        log.append(("on", self.pin))
-        orig_on(self)
+    monkeypatch.setattr(gpio.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpio.time, "sleep", lambda s: None)
+    return calls
 
-    monkeypatch.setattr(OutputDevice, "on", spy_on)
 
-    orig_off = OutputDevice.off
+def _last_level_per_gpio(calls):
+    last = {}
+    for g, level in calls:
+        last[g] = level
+    return last
 
-    def spy_off(self):
-        log.append(("off", self.pin))
-        orig_off(self)
 
-    monkeypatch.setattr(OutputDevice, "off", spy_off)
+class TestPinctrl:
+    def test_invokes_subprocess_with_check(self, monkeypatch):
+        """`pinctrl set <gpio> op <level>`, with check=True so a
+        nonzero exit raises rather than silently no-op'ing the line."""
+        seen = {}
 
-    orig_set = MockPin._set_function
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen["check"] = kwargs.get("check")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def spy_set(self, value):
-        log.append(("func", self, value))
-        orig_set(self, value)
+        monkeypatch.setattr(gpio.subprocess, "run", fake_run)
 
-    monkeypatch.setattr(MockPin, "_set_function", spy_set)
-    return log
+        gpio._pinctrl(17, "dh")
+
+        assert seen["cmd"] == ["pinctrl", "set", "17", "op", "dh"]
+        assert seen["check"] is True
+
+    def test_raises_on_nonzero_exit(self, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            raise subprocess.CalledProcessError(1, cmd, "", "boom")
+
+        monkeypatch.setattr(gpio.subprocess, "run", fake_run)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            gpio._pinctrl(17, "dh")
 
 
 class TestEnterBootsel:
-    def test_sequence_order(self, events, mock_pins, monkeypatch):
-        """Reset first, BOOTSEL while held in reset, release in order.
+    def test_sequence_order(self, pinctrl):
+        """17 dh, 18 dh, 17 dl, 18 dl — the verified-reliable order.
 
-        Asserting RESET before BOOTSEL means the shared QSPI-CS line is
-        only pulled low while the picos are already halted; the bootrom
-        samples BOOTSEL as RUN is released, so RUN must be released
-        before BOOTSEL.
+        Asserting RUN before BOOTSEL keeps the shared QSPI-CS line
+        pulled only while the picos are halted; releasing RUN before
+        BOOTSEL lets the bootrom sample BOOTSEL as they exit reset.
         """
+        gpio.enter_bootsel()
+
+        assert pinctrl == [
+            (gpio.RUN_GPIO, ASSERT),
+            (gpio.BOOTSEL_GPIO, ASSERT),
+            (gpio.RUN_GPIO, RELEASE),
+            (gpio.BOOTSEL_GPIO, RELEASE),
+        ]
+
+    def test_exact_argv(self, monkeypatch):
+        """Each step shells out as ``pinctrl set <gpio> op <dh|dl>``."""
+        argvs = []
+
+        def fake_run(cmd, **kwargs):
+            argvs.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(gpio.subprocess, "run", fake_run)
         monkeypatch.setattr(gpio.time, "sleep", lambda s: None)
 
         gpio.enter_bootsel()
 
-        bootsel = mock_pins.pin(gpio.BOOTSEL_GPIO)
-        run = mock_pins.pin(gpio.RUN_GPIO)
-        # list.index finds the first occurrence of each event.
-        assert (
-            events.index(("on", run))
-            < events.index(("on", bootsel))
-            < events.index(("off", run))
-            < events.index(("off", bootsel))
-        )
+        assert argvs[:4] == [
+            ["pinctrl", "set", "17", "op", "dh"],
+            ["pinctrl", "set", "18", "op", "dh"],
+            ["pinctrl", "set", "17", "op", "dl"],
+            ["pinctrl", "set", "18", "op", "dl"],
+        ]
 
-    def test_pins_end_released(self, mock_pins, monkeypatch):
-        # Both Pi pins end LOW (drivers off) and re-muxed to input,
-        # where the Pi's default pull-downs keep the drivers off.
-        monkeypatch.setattr(gpio.time, "sleep", lambda s: None)
-
+    def test_lines_end_released(self, pinctrl):
+        """Both lines finish released (dl) — the safe, runnable state."""
         gpio.enter_bootsel()
 
-        for n in (gpio.BOOTSEL_GPIO, gpio.RUN_GPIO):
-            assert mock_pins.pin(n).state is False
-            assert mock_pins.pin(n).function == "input"
+        last = _last_level_per_gpio(pinctrl)
+        assert last[gpio.RUN_GPIO] == RELEASE
+        assert last[gpio.BOOTSEL_GPIO] == RELEASE
 
-    def test_releases_pins_on_exception(self, mock_pins, monkeypatch):
-        """Both drivers switch off even if interrupted mid-sequence.
+    def test_releases_lines_on_exception(self, pinctrl, monkeypatch):
+        """Both lines are released even if interrupted mid-sequence.
 
         A stuck-asserted BOOTSEL driver grounds the picos' shared QSPI
-        flash CS and corrupts every running pico.
+        flash CS and corrupts every running pico, so cleanup must
+        release BOOTSEL (before RUN) no matter what.
         """
         calls = {"n": 0}
 
@@ -104,32 +138,59 @@ class TestEnterBootsel:
         with pytest.raises(RuntimeError, match="boom"):
             gpio.enter_bootsel()
 
-        for n in (gpio.BOOTSEL_GPIO, gpio.RUN_GPIO):
-            assert mock_pins.pin(n).state is False
-            assert mock_pins.pin(n).function == "input"
+        # cleanup releases BOOTSEL before RUN
+        assert pinctrl[-2:] == [
+            (gpio.BOOTSEL_GPIO, RELEASE),
+            (gpio.RUN_GPIO, RELEASE),
+        ]
+        last = _last_level_per_gpio(pinctrl)
+        assert last[gpio.RUN_GPIO] == RELEASE
+        assert last[gpio.BOOTSEL_GPIO] == RELEASE
+
+    def test_cleanup_runs_even_if_a_release_fails(self, monkeypatch):
+        """If releasing BOOTSEL fails, RUN is still released, and the
+        original error propagates — not the cleanup failure."""
+        seq = []
+
+        def fake_run(cmd, **kwargs):
+            seq.append((int(cmd[2]), cmd[4]))
+            # Make every BOOTSEL release fail (incl. the cleanup one).
+            if cmd[2] == str(gpio.BOOTSEL_GPIO) and cmd[4] == RELEASE:
+                raise subprocess.CalledProcessError(1, cmd, "", "no perm")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        sleeps = {"n": 0}
+
+        def boom(seconds):
+            sleeps["n"] += 1
+            if sleeps["n"] == 2:  # interrupt at the run_pulse hold
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(gpio.subprocess, "run", fake_run)
+        monkeypatch.setattr(gpio.time, "sleep", boom)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            gpio.enter_bootsel()
+
+        # RUN still released by cleanup despite the BOOTSEL release error
+        assert (gpio.RUN_GPIO, RELEASE) in seq
 
 
 class TestReset:
-    def test_pulses_run_then_releases(self, events, mock_pins,
-                                      monkeypatch):
-        monkeypatch.setattr(gpio.time, "sleep", lambda s: None)
-
+    def test_pulses_run_then_releases(self, pinctrl):
         gpio.reset()
 
-        run = mock_pins.pin(gpio.RUN_GPIO)
-        assert events.index(("on", run)) < events.index(("off", run))
-        assert run.state is False
-        assert run.function == "input"
+        assert pinctrl == [
+            (gpio.RUN_GPIO, ASSERT),
+            (gpio.RUN_GPIO, RELEASE),
+        ]
 
-    def test_does_not_touch_bootsel(self, events, mock_pins, monkeypatch):
-        monkeypatch.setattr(gpio.time, "sleep", lambda s: None)
-
+    def test_does_not_touch_bootsel(self, pinctrl):
         gpio.reset()
 
-        run = mock_pins.pin(gpio.RUN_GPIO)
-        assert [e for e in events if e[0] == "on"] == [("on", run)]
+        assert all(g == gpio.RUN_GPIO for g, _ in pinctrl)
 
-    def test_releases_on_exception(self, mock_pins, monkeypatch):
+    def test_releases_on_exception(self, pinctrl, monkeypatch):
         def boom(seconds):
             raise RuntimeError("boom")
 
@@ -138,32 +199,8 @@ class TestReset:
         with pytest.raises(RuntimeError, match="boom"):
             gpio.reset()
 
-        run = mock_pins.pin(gpio.RUN_GPIO)
-        assert run.state is False
-        assert run.function == "input"
-
-
-class TestLineDriver:
-    def test_construction_starts_released(self, mock_pins):
-        """Opening a line must start with the driver off (line floats
-        high via the picos' pull-ups), never asserted."""
-        pin = mock_pins.pin(gpio.BOOTSEL_GPIO)
-
-        with gpio._line_driver(gpio.BOOTSEL_GPIO):
-            assert pin.function == "output"
-            assert pin.state is False  # driver off
-
-        assert pin.function == "input"
-
-    def test_drive_semantics(self, mock_pins):
-        """on() drives the Pi pin HIGH — the inverting driver grounds
-        the bussed line (assert); off() releases it."""
-        with gpio._line_driver(gpio.RUN_GPIO) as dev:
-            pin = mock_pins.pin(gpio.RUN_GPIO)
-            dev.on()
-            assert pin.state is True
-            dev.off()
-            assert pin.state is False
+        assert pinctrl[-1] == (gpio.RUN_GPIO, RELEASE)
+        assert (gpio.BOOTSEL_GPIO, ASSERT) not in pinctrl
 
 
 class TestConstants:
@@ -176,7 +213,44 @@ class TestConstants:
         assert gpio.BOOTSEL_GPIO == 18
         assert gpio.RUN_GPIO == 17
 
+    def test_drive_levels(self):
+        """Inverting drivers: dh asserts (grounds the line), dl
+        releases. These pinctrl tokens are the verified ones."""
+        assert gpio._ASSERT == "dh"
+        assert gpio._RELEASE == "dl"
+
 
 class TestAvailable:
-    def test_true_under_mock_factory(self, mock_pins):
+    def test_true_when_pinctrl_present(self, monkeypatch):
+        monkeypatch.setattr(
+            gpio.shutil, "which", lambda name: "/usr/bin/pinctrl"
+        )
         assert gpio.available() is True
+
+    def test_false_when_pinctrl_absent(self, monkeypatch):
+        monkeypatch.setattr(gpio.shutil, "which", lambda name: None)
+        assert gpio.available() is False
+
+
+class TestMain:
+    def test_bootsel_subcommand_invokes_enter_bootsel(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            gpio, "enter_bootsel", lambda: calls.append("bootsel")
+        )
+        monkeypatch.setattr(gpio, "reset", lambda: calls.append("reset"))
+        gpio.main(["bootsel"])
+        assert calls == ["bootsel"]
+
+    def test_reset_subcommand_invokes_reset(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            gpio, "enter_bootsel", lambda: calls.append("bootsel")
+        )
+        monkeypatch.setattr(gpio, "reset", lambda: calls.append("reset"))
+        gpio.main(["reset"])
+        assert calls == ["reset"]
+
+    def test_subcommand_required(self):
+        with pytest.raises(SystemExit):
+            gpio.main([])

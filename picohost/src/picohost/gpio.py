@@ -12,19 +12,22 @@ picos too), and one :func:`reset` pulse boots them all.
 
 BOOTSEL doubles as each pico's QSPI flash chip-select, so its line is
 only ever asserted while the picos are held in reset, and every
-operation switches the drivers off again — including on error —
-before releasing the pins to input (where the Pi's default pull-downs
-on BCM 17/18 keep the drivers off).
+operation releases both drivers again — including on error, releasing
+BOOTSEL before RUN — so a running pico never has its flash CS yanked
+low.
 
-The pin factory backend (lgpio on the field image) is supplied by the
-deployment; tests run against ``GPIOZERO_PIN_FACTORY=mock``.
+The lines are driven through the ``pinctrl`` CLI that ships with
+Raspberry Pi OS (``pinctrl set <gpio> op dh|dl`` sets a pin to output
+and drives it high/low in one call) — no GPIO library or pin-factory
+backend to install. This is the exact mechanism verified reliable on
+the hub.
 """
 
+import argparse
 import logging
+import shutil
+import subprocess
 import time
-from contextlib import contextmanager
-
-from gpiozero import Device, OutputDevice
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +38,52 @@ _SETTLE_S = 0.05  # RUN asserted before BOOTSEL joins it
 _RUN_PULSE_S = 0.1  # RUN+BOOTSEL held together before RUN releases
 _BOOTSEL_SAMPLE_S = 0.4  # BOOTSEL held after RUN release (bootrom samples)
 
+# Inverting drivers: a Pi pin driven HIGH grounds its bussed line
+# (assert); driven LOW switches the driver off and the line floats high
+# via the picos' pull-ups (release). These are the pinctrl drive tokens.
+_ASSERT = "dh"  # pinctrl drive-high
+_RELEASE = "dl"  # pinctrl drive-low
 
-@contextmanager
-def _line_driver(gpio):
-    """Yield an :class:`OutputDevice` driving the bussed line on *gpio*.
 
-    The hardware inverts: Pi pin HIGH grounds the line (``on()`` =
-    assert), Pi pin LOW releases it. Construction starts released
-    (``initial_value=False`` drives LOW), and the ``finally`` always
-    switches the driver off and re-muxes the pin to input before
-    close — on the kernel cdev backend a released output pin keeps
-    driving its last level, and as an input the Pi's default
-    pull-down holds the driver off.
+def _pinctrl(gpio, level):
+    """Drive *gpio* (BCM) to *level* (``_ASSERT``/``_RELEASE``).
+
+    Shells out to ``pinctrl set <gpio> op <dh|dl>``, which configures
+    the pin as an output and sets its level in one call. Raises
+    ``subprocess.CalledProcessError`` if pinctrl exits non-zero (e.g.
+    not installed, or insufficient permission) so a failed transition
+    is never silently ignored.
     """
-    dev = OutputDevice(gpio, active_high=True, initial_value=False)
+    subprocess.run(
+        ["pinctrl", "set", str(gpio), "op", level],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _release(gpio):
+    """Best-effort release of *gpio*; log and swallow failures.
+
+    Used on the cleanup path so a release error cannot mask the
+    original exception, and so one stuck line still lets the others be
+    released.
+    """
     try:
-        yield dev
-    finally:
-        try:
-            dev.off()
-            if dev.pin is not None:
-                dev.pin.function = "input"
-        finally:
-            dev.close()
+        _pinctrl(gpio, _RELEASE)
+    except Exception:
+        logger.warning("failed to release GPIO%d via pinctrl", gpio,
+                       exc_info=True)
+
+
+def _release_lines():
+    """Release BOOTSEL then RUN (best effort).
+
+    BOOTSEL (the shared QSPI flash CS) is released first so the picos
+    never exit reset with their flash CS still grounded.
+    """
+    _release(BOOTSEL_GPIO)
+    _release(RUN_GPIO)
 
 
 def enter_bootsel(
@@ -67,7 +93,9 @@ def enter_bootsel(
 ):
     """Put ALL bussed picos into BOOTSEL via the shared GPIO lines.
 
-    Sequence (inverted drivers; assert = Pi pin HIGH grounds the line):
+    Issues the verified-reliable ``pinctrl`` ordering
+    (``17 dh, 18 dh, 17 dl, 18 dl``); with the inverting drivers that
+    is:
 
     1. assert RUN — hold every pico in reset
     2. wait *settle*, then assert BOOTSEL (the shared QSPI-CS line is
@@ -77,47 +105,82 @@ def enter_bootsel(
     4. hold BOOTSEL low *bootsel_sample* while sampling completes
     5. release BOOTSEL
 
-    Lines are always released, even on exception. After this returns,
-    every pico re-enumerates as a ``2e8a:000f`` mass-storage device.
+    Both lines are always released, even on exception (BOOTSEL before
+    RUN). After this returns, every pico re-enumerates as a
+    ``2e8a:000f`` mass-storage device.
     """
     logger.info(
         "Mass BOOTSEL entry: BOOTSEL=GPIO%d RUN=GPIO%d",
         BOOTSEL_GPIO,
         RUN_GPIO,
     )
-    with _line_driver(RUN_GPIO) as run:
-        run.on()
+    try:
+        _pinctrl(RUN_GPIO, _ASSERT)
         time.sleep(settle)
-        with _line_driver(BOOTSEL_GPIO) as bootsel:
-            bootsel.on()
-            time.sleep(run_pulse)
-            run.off()  # picos boot, bootrom samples BOOTSEL
-            time.sleep(bootsel_sample)
-            bootsel.off()
+        _pinctrl(BOOTSEL_GPIO, _ASSERT)
+        time.sleep(run_pulse)
+        _pinctrl(RUN_GPIO, _RELEASE)  # picos boot, bootrom samples BOOTSEL
+        time.sleep(bootsel_sample)
+        _pinctrl(BOOTSEL_GPIO, _RELEASE)
+    except BaseException:
+        _release_lines()
+        raise
 
 
 def reset(run_pulse=_RUN_PULSE_S):
     """Pulse the shared RUN line low, then release it.
 
     All bussed picos reset and boot their current firmware
-    simultaneously.
+    simultaneously. BOOTSEL is never touched, and RUN is released even
+    if interrupted mid-pulse.
     """
     logger.info("Mass reset: RUN=GPIO%d", RUN_GPIO)
-    with _line_driver(RUN_GPIO) as run:
-        run.on()
+    try:
+        _pinctrl(RUN_GPIO, _ASSERT)
         time.sleep(run_pulse)
-        run.off()
+        _pinctrl(RUN_GPIO, _RELEASE)
+    except BaseException:
+        _release(RUN_GPIO)
+        raise
 
 
 def available():
-    """Return True if gpiozero can construct a usable pin factory.
+    """Return True if the ``pinctrl`` CLI is on PATH.
 
-    False on hosts without GPIO hardware/backends (gpiozero raises
-    ``BadPinFactory`` when no factory loads) — callers should fall back
-    to the USB flash path or tell the user to pass ``--no-gpio``.
+    False on hosts without it (e.g. a dev laptop) — callers should fall
+    back to the USB flash path or tell the user to pass ``--no-gpio``.
     """
-    try:
-        Device.ensure_pin_factory()
-    except Exception:
-        return False
-    return True
+    return shutil.which("pinctrl") is not None
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        description=(
+            "Drive the bussed Pico BOOTSEL/RUN GPIO lines on the "
+            "observatory hub."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser(
+        "bootsel",
+        help="Put ALL bussed Picos into BOOTSEL (2e8a:000f).",
+    )
+    sub.add_parser(
+        "reset",
+        help="Reset (reboot) ALL bussed Picos into their firmware.",
+    )
+    args = p.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    if args.cmd == "bootsel":
+        enter_bootsel()
+    elif args.cmd == "reset":
+        reset()
+
+
+if __name__ == "__main__":
+    main()
