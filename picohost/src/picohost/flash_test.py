@@ -222,10 +222,13 @@ def main():
                 label = serial or f"bus {bus} address {address}"
                 print(f"\n→ Flashing Pico {label}")
                 try:
-                    if serial is not None:
-                        flash_test_image(args.uf2, usb_serial=serial)
-                    else:
+                    # Prefer --bus/--address: --ser forces a serial-string
+                    # descriptor read that intermittently fails under bus
+                    # contention on the observatory's congested USB hub.
+                    if has_bus_address:
                         flash_test_image(args.uf2, bus=bus, address=address)
+                    else:
+                        flash_test_image(args.uf2, usb_serial=serial)
                 except RuntimeError as e:
                     print(str(e), file=sys.stderr)
                     failures += 1
