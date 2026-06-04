@@ -25,7 +25,7 @@ dependencies = [
   # on the field image, via eigsep-field's [hardware.lgpio]) is
   # supplied by the deployment, not declared here — PyPI lgpio ships
   # no cp313 wheel, so declaring it would break eigsep-field's
-  # wheelhouse build. Tests use GPIOZERO_PIN_FACTORY=mock.
+  # wheelhouse build. For tests/dev on non-Pi systems, set GPIOZERO_PIN_FACTORY=mock.
   "gpiozero>=2",
 ]
 
