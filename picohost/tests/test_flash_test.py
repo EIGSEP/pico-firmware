@@ -186,7 +186,7 @@ class TestFindBootselDevices:
             tmp_path,
             "1-3",
             "2e8a",
-            "0003",
+            "000f",
             serial="E66160F4ABCDEF01",
             bus=1,
             devnum=4,
@@ -200,7 +200,7 @@ class TestFindBootselDevices:
             tmp_path,
             "1-4",
             "2E8A",
-            "0003",
+            "000f",
             serial="UPPER1",
             bus=2,
             devnum=5,
@@ -214,7 +214,7 @@ class TestFindBootselDevices:
             tmp_path,
             "1-3",
             "2e8a",
-            "0003",
+            "000f",
             serial="AAA",
             bus=1,
             devnum=3,
@@ -223,7 +223,7 @@ class TestFindBootselDevices:
             tmp_path,
             "1-5",
             "2e8a",
-            "0003",
+            "000f",
             serial="BBB",
             bus=1,
             devnum=6,
@@ -245,7 +245,7 @@ class TestFindBootselDevices:
         dev = tmp_path / "1-6"
         dev.mkdir()
         (dev / "idVendor").write_text("2e8a\n")
-        (dev / "idProduct").write_text("0003\n")
+        (dev / "idProduct").write_text("000f\n")
         # no serial, no busnum, no devnum
         devs = find_bootsel_devices(tmp_path)
         assert devs == [
@@ -305,7 +305,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-1",
             "2e8a",
-            "0003",
+            "000f",
             serial="AAA",
             bus=1,
             devnum=3,
@@ -314,7 +314,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-2",
             "2e8a",
-            "0003",
+            "000f",
             serial="BBB",
             bus=1,
             devnum=4,
@@ -376,7 +376,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-1",
             "2e8a",
-            "0003",
+            "000f",
             serial="AAA",
             bus=1,
             devnum=3,
@@ -385,7 +385,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-2",
             "2e8a",
-            "0003",
+            "000f",
             serial="BBB",
             bus=1,
             devnum=4,
@@ -424,7 +424,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-1",
             "2e8a",
-            "0003",
+            "000f",
             serial="AAA",
             bus=1,
             devnum=3,
@@ -433,7 +433,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-2",
             "2e8a",
-            "0003",
+            "000f",
             serial="BBB",
             bus=1,
             devnum=4,
@@ -466,7 +466,7 @@ class TestMainAutoDiscover:
         dev = sysfs / "1-1"
         dev.mkdir()
         (dev / "idVendor").write_text("2e8a\n")
-        (dev / "idProduct").write_text("0003\n")
+        (dev / "idProduct").write_text("000f\n")
         (dev / "busnum").write_text("1\n")
         (dev / "devnum").write_text("7\n")
         # no serial file
@@ -502,7 +502,7 @@ class TestMainAutoDiscover:
             sysfs,
             "1-1",
             "2e8a",
-            "0003",
+            "000f",
             serial="AAA",
             bus=1,
             devnum=3,
@@ -510,7 +510,7 @@ class TestMainAutoDiscover:
         dev = sysfs / "1-2"
         dev.mkdir()
         (dev / "idVendor").write_text("2e8a\n")
-        (dev / "idProduct").write_text("0003\n")
+        (dev / "idProduct").write_text("000f\n")
         # no serial, no busnum/devnum -> incomplete selector
 
         monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
