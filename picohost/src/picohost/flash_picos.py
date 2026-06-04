@@ -573,7 +573,7 @@ def flash_and_discover_gpio(
     Raises ``FileNotFoundError`` for a missing UF2 and ``RuntimeError``
     when no Pico enters BOOTSEL (bad wiring, or no GPIO access).
     """
-    from . import gpio  # deferred so --no-gpio paths never need gpiozero
+    from . import gpio  # deferred so --no-gpio paths never import gpio
 
     uf2_path = Path(uf2_path)
     if not uf2_path.is_file():
@@ -756,14 +756,14 @@ def main(argv=None):
             "one Pico)"
         )
     if use_gpio:
-        from . import gpio  # deferred so --no-gpio never needs gpiozero
+        from . import gpio  # deferred so --no-gpio paths never import gpio
 
         if not gpio.available():
             print(
-                "GPIO backend unavailable (gpiozero could not load a "
-                "pin factory). On the Pi hub, install lgpio; elsewhere "
-                "re-run with --no-gpio to use the USB per-device flash "
-                "path.",
+                "GPIO backend unavailable: the `pinctrl` CLI was not "
+                "found on PATH. Run on the Pi hub (pinctrl ships with "
+                "Raspberry Pi OS), or re-run with --no-gpio to use the "
+                "USB per-device flash path.",
                 file=sys.stderr,
             )
             sys.exit(1)

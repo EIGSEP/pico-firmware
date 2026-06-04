@@ -35,6 +35,7 @@ flash-test = "picohost.flash_test:main"
 pico-manager = "picohost.manager:main"
 calibrate-pot = "picohost.calibrate_pot:main"
 picohost-resolve = "picohost.resolve:main"
+pico-gpio = "picohost.gpio:main"
 
 [project.optional-dependencies]
 dev = [
