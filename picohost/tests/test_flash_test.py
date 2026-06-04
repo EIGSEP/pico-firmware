@@ -339,12 +339,41 @@ class TestMainAutoDiscover:
 
         main()
 
-        serials = sorted(c["usb_serial"] for c in calls)
-        assert serials == ["AAA", "BBB"]
+        # Both devices expose bus/address, so we flash by those (not
+        # --ser), which is reliable on the congested hub.
+        addrs = sorted((c["bus"], c["address"]) for c in calls)
+        assert addrs == [(1, 3), (1, 4)]
         for c in calls:
-            assert c["bus"] is None
-            assert c["address"] is None
+            assert c["usb_serial"] is None
             assert c["uf2"] == str(uf2)
+
+    def test_prefers_bus_address_over_serial(self, monkeypatch, tmp_path):
+        # A discovered BOOTSEL device with BOTH serial and bus/address is
+        # flashed by bus/address: --ser forces a serial-string descriptor
+        # read that intermittently fails on the congested hub.
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        sysfs = tmp_path / "sysfs"
+        sysfs.mkdir()
+        _make_usb_device(
+            sysfs, "1-1", "2e8a", "000f", serial="AAA", bus=1, devnum=9
+        )
+
+        monkeypatch.setattr(flash_test_mod, "SYSFS_USB_DEVICES", sysfs)
+        calls = []
+
+        def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
+            calls.append(
+                {"bus": bus, "address": address, "usb_serial": usb_serial}
+            )
+
+        monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
+        monkeypatch.setattr("sys.argv", ["flash-test", "--uf2", str(uf2)])
+
+        main()
+        assert calls == [
+            {"bus": 1, "address": 9, "usb_serial": None},
+        ]
 
     def test_no_devices_exits_error(self, monkeypatch, tmp_path):
         uf2 = tmp_path / "test.uf2"
@@ -444,8 +473,9 @@ class TestMainAutoDiscover:
         attempted = []
 
         def fake_flash(uf2_path, bus=None, address=None, usb_serial=None):
-            attempted.append(usb_serial)
-            if usb_serial == "AAA":
+            # Flashed by bus/address now, so key the failure on address.
+            attempted.append(address)
+            if address == 3:
                 raise RuntimeError("picotool failed")
 
         monkeypatch.setattr(flash_test_mod, "flash_test_image", fake_flash)
@@ -454,7 +484,7 @@ class TestMainAutoDiscover:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
-        assert sorted(attempted) == ["AAA", "BBB"]
+        assert sorted(attempted) == [3, 4]
 
     def test_falls_back_to_bus_address_when_no_serial(
         self, monkeypatch, tmp_path
@@ -532,5 +562,5 @@ class TestMainAutoDiscover:
             main()
         assert exc_info.value.code == 1
         assert calls == [
-            {"bus": None, "address": None, "usb_serial": "AAA"},
+            {"bus": 1, "address": 3, "usb_serial": None},
         ]
