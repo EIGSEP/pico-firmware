@@ -17,8 +17,10 @@ from .keys import PICO_CONFIG_KEY
 logger = logging.getLogger(__name__)
 
 PICO_VID = 0x2E8A  # Raspberry Pi Foundation USB vendor ID
-PICO_PID_BOOTSEL = 0x0003  # BOOTSEL-mode PID
+PICO_PID_BOOTSEL = 0x000F  # RP2350 BOOTSEL-mode PID (RP2040 was 0x0003)
 PICO_PID_CDC = 0x0009  # CDC serial mode PID
+
+SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
 
 
 def find_pico_ports():
@@ -27,9 +29,9 @@ def find_pico_ports():
     ports whose USB VID/PID matches a Pico running CDC firmware
     (VID 0x2E8A, PID 0x0009).
 
-    BOOTSEL-mode Picos (PID 0x0003) are mass-storage devices and do
-    not appear in ``list_ports.comports()`` at all — use ``flash-test``
-    to install a CDC-capable image first.
+    BOOTSEL-mode Picos (PID 0x000F on RP2350) are mass-storage devices
+    and do not appear in ``list_ports.comports()`` at all — use
+    ``flash-test`` to install a CDC-capable image first.
     """
     ports = {}
     for info in list_ports.comports():
@@ -38,60 +40,134 @@ def find_pico_ports():
     return ports
 
 
+def _resolve_bus_address(usb_serial, sysfs_root=None):
+    """Return ``(bus, address, in_bootsel)`` for the Pico *usb_serial*.
+
+    Reads USB topology from Linux sysfs and matches the device — in
+    either CDC (``2e8a:0009``) or BOOTSEL (``2e8a:000f``) mode — whose
+    serial equals *usb_serial*. ``in_bootsel`` is ``True`` when the match
+    is a BOOTSEL device.
+
+    picotool's ``--ser`` selector is unreliable on a busy hub: matching
+    by serial forces a USB serial-string descriptor read that
+    intermittently fails under bus contention, so ``picotool load``
+    cannot find the device to flash. Selecting by ``--bus``/``--address``
+    needs no descriptor read and is reliable. Each flash re-enumerates
+    the Pico to a new USB address, so callers must re-resolve before
+    every attempt.
+
+    Matching BOOTSEL devices too lets a retry finish a load on a device a
+    prior attempt left in BOOTSEL (no reboot needed) rather than
+    stranding it: a BOOTSEL device is invisible to :func:`find_pico_ports`
+    and would otherwise need a separate ``flash-test`` pass to recover.
+
+    Returns ``(None, None, None)`` if no matching device is present
+    (e.g. the target is momentarily mid-reboot, or sysfs is absent).
+    """
+    if sysfs_root is None:
+        sysfs_root = SYSFS_USB_DEVICES
+    sysfs_root = Path(sysfs_root)
+    if not sysfs_root.is_dir():
+        return (None, None, None)
+    cdc_pid = f"{PICO_PID_CDC:04x}"
+    bootsel_pid = f"{PICO_PID_BOOTSEL:04x}"
+    for entry in sorted(sysfs_root.iterdir()):
+        try:
+            vid = (entry / "idVendor").read_text().strip().lower()
+            pid = (entry / "idProduct").read_text().strip().lower()
+        except (OSError, ValueError):
+            continue
+        if vid != "2e8a" or pid not in (cdc_pid, bootsel_pid):
+            continue
+        try:
+            serial = (entry / "serial").read_text().strip()
+        except OSError:
+            continue
+        if serial != usb_serial:
+            continue
+        try:
+            bus = int((entry / "busnum").read_text().strip())
+            address = int((entry / "devnum").read_text().strip())
+        except (OSError, ValueError):
+            return (None, None, None)
+        return (bus, address, pid == bootsel_pid)
+    return (None, None, None)
+
+
 _FLASH_MAX_ATTEMPTS = 3
 _FLASH_RETRY_BACKOFF_S = 2.0
 
 
 def flash_uf2(
     uf2_path,
-    serial,
+    usb_serial,
     attempts=_FLASH_MAX_ATTEMPTS,
     backoff=_FLASH_RETRY_BACKOFF_S,
 ):
-    """
-    Flash the UF2 onto the Pico whose USB serial number is `serial`,
-    using picotool's --ser selector.
+    """Flash the UF2 onto the Pico with USB serial *usb_serial*.
 
-    ``picotool load -f`` reboots the target into BOOTSEL and must then
-    re-discover it as a BOOTSEL device before loading. On a busy USB
-    bus — e.g. several Picos behind a hub on a Raspberry Pi — that
-    re-enumeration can land outside picotool's internal discovery
-    window, so the load fails intermittently with "No accessible
-    RP-series devices in BOOTSEL mode were found".
+    Selects the target by USB ``--bus``/``--address`` (resolved from
+    sysfs via :func:`_resolve_bus_address`) rather than picotool's
+    ``--ser``. On the observatory's deep USB hub, ``--ser`` matching
+    forces a serial-string descriptor read that intermittently fails, so
+    ``picotool load -f --ser`` cannot find the device to reboot into
+    BOOTSEL — the original cause of the "random which Pico flashes"
+    failures. ``--bus``/``--address`` needs no descriptor read.
 
-    We retry with linear backoff. On a retry the target is already
-    sitting in BOOTSEL (the earlier attempt's reset took effect), so
-    picotool only has to *find* it — which usually succeeds once the
-    bus has quieted, without another reset round-trip.
+    When the device is in CDC mode, ``picotool load -f`` reboots it into
+    BOOTSEL (RP2350 enumerates as ``2e8a:000f``), loads, and reboots back
+    to the app — re-enumerating to a *new* USB address each time. The
+    address is therefore re-resolved before every attempt. If a prior
+    attempt left the device in BOOTSEL, it is loaded directly (without
+    ``-f``); a target momentarily mid-reboot (no sysfs node) is treated
+    as a failed attempt and retried with linear backoff.
     """
-    cmd = f"picotool load -f --ser {serial} -x {uf2_path}".split()
-    print(f"Flashing {uf2_path} → serial={serial}")
-    res = None
+    print(f"Flashing {uf2_path} → serial={usb_serial}")
+    detail = ""
     for attempt in range(1, attempts + 1):
-        res = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-        )
-        if res.returncode == 0:
-            print(res.stdout, end="")
-            return
-        if attempt < attempts:
-            delay = backoff * attempt
+        bus, address, in_bootsel = _resolve_bus_address(usb_serial)
+        if bus is None:
+            detail = (
+                f"serial={usb_serial} not visible as a "
+                f"Pico (2e8a) USB device"
+            )
+            logger.warning("%s (attempt %d/%d)", detail, attempt, attempts)
+        else:
+            cmd = ["picotool", "load"]
+            if not in_bootsel:
+                cmd.append("-f")
+            cmd += [
+                "--bus", str(bus),
+                "--address", str(address),
+                "-x", str(uf2_path),
+            ]
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+            )
+            if res.returncode == 0:
+                print(res.stdout, end="")
+                return
+            detail = (res.stdout or "").strip()
             logger.warning(
-                "picotool failed on serial=%s (attempt %d/%d); "
-                "retrying in %.1fs",
-                serial,
+                "picotool failed on serial=%s (bus=%d address=%d "
+                "in_bootsel=%s) (attempt %d/%d)",
+                usb_serial,
+                bus,
+                address,
+                in_bootsel,
                 attempt,
                 attempts,
-                delay,
             )
-            time.sleep(delay)
-    print(res.stdout, file=sys.stderr)
+        if attempt < attempts:
+            time.sleep(backoff * attempt)
+    if detail:
+        print(detail, file=sys.stderr)
     raise RuntimeError(
-        f"picotool failed on serial={serial} after {attempts} attempts"
+        f"picotool failed on serial={usb_serial} after {attempts} attempts"
     )
 
 
