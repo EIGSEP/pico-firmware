@@ -505,6 +505,154 @@ def flash_and_discover(
     return all_devices
 
 
+def _load_bootsel_device(
+    dev,
+    uf2_path,
+    attempts=_FLASH_MAX_ATTEMPTS,
+    backoff=_FLASH_RETRY_BACKOFF_S,
+):
+    """Load *uf2_path* onto the BOOTSEL device *dev* (no execute).
+
+    Plain ``picotool load`` does not re-enumerate the device, so the
+    bus/address normally stay valid; between retries the address is
+    nonetheless re-resolved from sysfs (by serial, when the device has
+    one) in case the device dropped and re-enumerated meanwhile.
+
+    Returns True on success, False once *attempts* are exhausted.
+    """
+    bus, address = dev["bus"], dev["address"]
+    serial = dev["usb_serial"]
+    for attempt in range(1, attempts + 1):
+        res = _picotool_load(bus, address, uf2_path, execute=False)
+        if res.returncode == 0:
+            return True
+        logger.warning(
+            "picotool load failed on serial=%s (bus=%d address=%d) "
+            "(attempt %d/%d): %s",
+            serial,
+            bus,
+            address,
+            attempt,
+            attempts,
+            (res.stdout or "").strip(),
+        )
+        if attempt < attempts:
+            time.sleep(backoff * attempt)
+            if serial is not None:
+                for d in _find_bootsel_devices():
+                    if d["usb_serial"] == serial:
+                        bus, address = d["bus"], d["address"]
+                        break
+    return False
+
+
+def flash_and_discover_gpio(
+    uf2_path="build/pico_multi.uf2",
+    baud=115200,
+    timeout=10,
+):
+    """Mass-flash all Picos via the bussed GPIO BOOTSEL/RUN lines.
+
+    Unlike :func:`flash_and_discover`, this never reboots devices over
+    USB — the per-device ``picotool reboot`` round-trips are what fall
+    over on the observatory's contended hub. Three phases:
+
+    1. Snapshot CDC Picos (best effort, for a missing-device warning),
+       drive every Pico into BOOTSEL at once via the shared GPIO lines
+       (works even for wedged/bricked firmware), and wait for the
+       BOOTSEL set to settle in sysfs.
+    2. ``picotool load`` each device by bus/address — without ``-x``,
+       so nothing re-enumerates and the bus stays quiet while every
+       device is idle mass-storage.
+    3. One mass GPIO reset boots all Picos into the new firmware
+       simultaneously; then read each device's JSON over serial.
+
+    Returns the device info dicts (``app_id``, ``port``,
+    ``usb_serial``) for every Pico that flashed and re-enumerated.
+
+    Raises ``FileNotFoundError`` for a missing UF2 and ``RuntimeError``
+    when no Pico enters BOOTSEL (bad wiring, or no GPIO access).
+    """
+    from . import gpio  # deferred so --no-gpio paths never need gpiozero
+
+    uf2_path = Path(uf2_path)
+    if not uf2_path.is_file():
+        raise FileNotFoundError(f"UF2 file not found: {uf2_path}")
+
+    # Phase 1: everyone into BOOTSEL via the shared lines.
+    snapshot = find_pico_ports()
+    gpio.enter_bootsel()
+    bootsel_devices = _wait_for_stable_bootsel_set()
+    if not bootsel_devices:
+        raise RuntimeError(
+            "no Picos entered BOOTSEL after the mass GPIO entry; check "
+            "the BOOTSEL/RUN wiring or re-run with --no-gpio"
+        )
+    seen = {d["usb_serial"] for d in bootsel_devices}
+    missing = sorted(set(snapshot.values()) - seen)
+    if missing:
+        logger.warning(
+            "CDC Picos missing from the BOOTSEL set: %s",
+            ", ".join(missing),
+        )
+    logger.info(
+        "Flashing %d Pico(s) in BOOTSEL: %s",
+        len(bootsel_devices),
+        ", ".join(str(d["usb_serial"]) for d in bootsel_devices),
+    )
+
+    # Phase 2: load each device over a quiet bus (no -x: everything
+    # stays in BOOTSEL until the mass reset below).
+    flashed = []
+    for dev in bootsel_devices:
+        if _load_bootsel_device(dev, uf2_path):
+            flashed.append(dev)
+        else:
+            logger.error(
+                "giving up on serial=%s (bus=%d address=%d); it will "
+                "mass-reset with the others — re-run flash-picos to "
+                "retry it",
+                dev["usb_serial"],
+                dev["bus"],
+                dev["address"],
+            )
+
+    # Phase 3: one reset pulse boots the whole fleet, then read device
+    # info from each flashed Pico.
+    gpio.reset()
+    all_devices = []
+    for dev in flashed:
+        serial = dev["usb_serial"]
+        if serial is None:
+            logger.warning(
+                "flashed Pico at bus=%d address=%d has no USB serial; "
+                "cannot map it to a CDC port for the device-info read",
+                dev["bus"],
+                dev["address"],
+            )
+            continue
+        current_port = _resolve_post_flash_port(serial)
+        if current_port is None:
+            logger.error(
+                f"Pico serial={serial} did not re-enumerate within "
+                f"{_REENUMERATE_TIMEOUT_S}s after the mass reset; "
+                "skipping"
+            )
+            continue
+        _udev_settle()
+        try:
+            data = read_json_from_serial(current_port, baud, timeout)
+        except (RuntimeError, OSError) as e:
+            logger.error(f"Serial read failed on {current_port}: {e}")
+            continue
+        data["port"] = current_port
+        data["usb_serial"] = serial
+        all_devices.append(data)
+        logger.info(f"Read device info from {current_port}")
+
+    return all_devices
+
+
 def _publish_to_redis(devices, host, port):
     """Publish *devices* to Redis via :class:`PicoConfigStore`.
 
@@ -518,7 +666,7 @@ def _publish_to_redis(devices, host, port):
     return store
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(
         description=(
             "Flash all attached Picos, read JSON from each, and publish "
@@ -583,22 +731,59 @@ def main():
             "Not required — PicoManager reads from Redis directly."
         ),
     )
-    args = p.parse_args()
+    p.add_argument(
+        "--no-gpio",
+        action="store_true",
+        help=(
+            "Skip the GPIO mass-BOOTSEL flash flow and reboot each "
+            "Pico into BOOTSEL over USB instead. Required on hosts "
+            "without the bussed BOOTSEL/RUN wiring."
+        ),
+    )
+    args = p.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    try:
-        all_devices = flash_and_discover(
-            uf2_path=args.uf2,
-            port=args.port,
-            usb_serial=args.usb_serial,
-            baud=args.baud,
-            timeout=args.timeout,
+    targeting = bool(args.port or args.usb_serial)
+    use_gpio = not args.no_gpio and not targeting
+    if targeting and not args.no_gpio:
+        logger.info(
+            "--port/--usb-serial target a single Pico; using the USB "
+            "per-device flash path (the GPIO mass reset cannot target "
+            "one Pico)"
         )
-    except FileNotFoundError as e:
+    if use_gpio:
+        from . import gpio  # deferred so --no-gpio never needs gpiozero
+
+        if not gpio.available():
+            print(
+                "GPIO backend unavailable (gpiozero could not load a "
+                "pin factory). On the Pi hub, install lgpio; elsewhere "
+                "re-run with --no-gpio to use the USB per-device flash "
+                "path.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    try:
+        if use_gpio:
+            all_devices = flash_and_discover_gpio(
+                uf2_path=args.uf2,
+                baud=args.baud,
+                timeout=args.timeout,
+            )
+        else:
+            all_devices = flash_and_discover(
+                uf2_path=args.uf2,
+                port=args.port,
+                usb_serial=args.usb_serial,
+                baud=args.baud,
+                timeout=args.timeout,
+            )
+    except (FileNotFoundError, RuntimeError) as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 

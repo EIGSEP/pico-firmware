@@ -868,3 +868,285 @@ class TestWaitForStableBootselSet:
             timeout=0.05, stable=10.0, poll=0.005
         )
         assert result == [d1]
+
+
+@pytest.fixture
+def _mock_gpio_flash(monkeypatch, tmp_path):
+    """Patch GPIO actions, sysfs scans, picotool, and serial reads so
+    flash_and_discover_gpio can run without hardware.
+
+    picotool invocations go through a fake subprocess.run so the tests
+    can assert on the *actual* argv (no reboot, no -x, no -f).
+    """
+    import picohost.flash_picos as fp
+    import picohost.gpio as gpio_mod
+
+    uf2 = tmp_path / "test.uf2"
+    uf2.write_bytes(b"\x00")
+
+    events = []
+    monkeypatch.setattr(
+        gpio_mod, "enter_bootsel", lambda: events.append("enter_bootsel")
+    )
+    monkeypatch.setattr(
+        gpio_mod, "reset", lambda: events.append("reset")
+    )
+
+    bootsel = [
+        {"usb_serial": "SER_A", "bus": 1, "address": 50},
+        {"usb_serial": "SER_B", "bus": 1, "address": 51},
+    ]
+    monkeypatch.setattr(
+        fp, "_wait_for_stable_bootsel_set", lambda: list(bootsel)
+    )
+    monkeypatch.setattr(fp, "_find_bootsel_devices", lambda: list(bootsel))
+    monkeypatch.setattr(
+        fp,
+        "find_pico_ports",
+        lambda: {"/dev/ttyACM0": "SER_A", "/dev/ttyACM1": "SER_B"},
+    )
+
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        events.append(("load", cmd[cmd.index("--address") + 1]))
+        return types.SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(fp.subprocess, "run", fake_run)
+
+    monkeypatch.setattr(
+        fp,
+        "_resolve_post_flash_port",
+        lambda s: {"SER_A": "/dev/ttyACM5", "SER_B": "/dev/ttyACM6"}[s],
+    )
+    monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+    monkeypatch.setattr(
+        fp,
+        "read_json_from_serial",
+        lambda port, baud, timeout: {
+            "/dev/ttyACM5": {"app_id": 0},
+            "/dev/ttyACM6": {"app_id": 5},
+        }[port],
+    )
+    monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+    return types.SimpleNamespace(
+        uf2=uf2,
+        events=events,
+        cmds=cmds,
+        bootsel=bootsel,
+        fp=fp,
+        monkeypatch=monkeypatch,
+    )
+
+
+class TestFlashAndDiscoverGpio:
+    def test_happy_path_returns_device_list(self, _mock_gpio_flash):
+        m = _mock_gpio_flash
+        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        by_serial = {d["usb_serial"]: d for d in devices}
+        assert by_serial["SER_A"]["port"] == "/dev/ttyACM5"
+        assert by_serial["SER_A"]["app_id"] == 0
+        assert by_serial["SER_B"]["port"] == "/dev/ttyACM6"
+        assert by_serial["SER_B"]["app_id"] == 5
+
+    def test_never_invokes_picotool_reboot(self, _mock_gpio_flash):
+        # The whole point of the GPIO path: BOOTSEL entry happens on
+        # the shared GPIO lines, never via per-device USB reboots.
+        m = _mock_gpio_flash
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert m.cmds, "expected picotool load invocations"
+        assert all(c[:2] == ["picotool", "load"] for c in m.cmds)
+
+    def test_loads_omit_execute_and_force(self, _mock_gpio_flash):
+        # No -x: devices stay in BOOTSEL until the mass reset. No -f:
+        # its reboot path does the live serial-descriptor read that
+        # corrupts under hub contention.
+        m = _mock_gpio_flash
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        for cmd in m.cmds:
+            assert "-x" not in cmd
+            assert "-f" not in cmd
+
+    def test_phase_ordering(self, _mock_gpio_flash):
+        # enter_bootsel first, then all loads, then exactly one reset.
+        m = _mock_gpio_flash
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert m.events[0] == "enter_bootsel"
+        assert m.events.count("reset") == 1
+        load_idx = [
+            i for i, e in enumerate(m.events) if isinstance(e, tuple)
+        ]
+        assert load_idx, "expected load events"
+        assert m.events.index("reset") > max(load_idx)
+
+    def test_warns_on_snapshot_serial_missing_from_bootsel(
+        self, _mock_gpio_flash, caplog
+    ):
+        # SER_C was a live CDC Pico before the mass entry but never
+        # appeared in BOOTSEL — name it so the operator notices.
+        m = _mock_gpio_flash
+        m.monkeypatch.setattr(
+            m.fp,
+            "find_pico_ports",
+            lambda: {
+                "/dev/ttyACM0": "SER_A",
+                "/dev/ttyACM1": "SER_B",
+                "/dev/ttyACM2": "SER_C",
+            },
+        )
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert "SER_C" in caplog.text
+
+    def test_empty_bootsel_set_raises(self, _mock_gpio_flash):
+        m = _mock_gpio_flash
+        m.monkeypatch.setattr(
+            m.fp, "_wait_for_stable_bootsel_set", lambda: []
+        )
+        with pytest.raises(RuntimeError, match="no Picos entered BOOTSEL"):
+            m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+
+    def test_failed_load_excluded_but_reset_still_fires(
+        self, _mock_gpio_flash
+    ):
+        # SER_A's load never succeeds: it is excluded from the results,
+        # but the mass reset must still run (it cannot target — and the
+        # stragglers reboot into whatever firmware they have).
+        m = _mock_gpio_flash
+
+        def fake_run(cmd, **kw):
+            m.cmds.append(cmd)
+            address = cmd[cmd.index("--address") + 1]
+            m.events.append(("load", address))
+            rc = 1 if address == "50" else 0
+            return types.SimpleNamespace(returncode=rc, stdout="boom")
+
+        m.monkeypatch.setattr(m.fp.subprocess, "run", fake_run)
+        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        assert m.events.count("reset") == 1
+
+    def test_load_retry_reresolves_address(self, _mock_gpio_flash):
+        # A failed load retries against a freshly resolved address in
+        # case the device re-enumerated meanwhile.
+        m = _mock_gpio_flash
+        m.monkeypatch.setattr(
+            m.fp,
+            "_find_bootsel_devices",
+            lambda: [
+                {"usb_serial": "SER_A", "bus": 1, "address": 60},
+                {"usb_serial": "SER_B", "bus": 1, "address": 51},
+            ],
+        )
+        codes = iter([1, 0, 0])
+
+        def fake_run(cmd, **kw):
+            m.cmds.append(cmd)
+            return types.SimpleNamespace(
+                returncode=next(codes), stdout=""
+            )
+
+        m.monkeypatch.setattr(m.fp.subprocess, "run", fake_run)
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        ser_a_addrs = [
+            c[c.index("--address") + 1] for c in m.cmds[:2]
+        ]
+        assert ser_a_addrs == ["50", "60"]
+
+    def test_serialless_device_flashed_but_not_in_results(
+        self, _mock_gpio_flash
+    ):
+        m = _mock_gpio_flash
+        m.bootsel.append({"usb_serial": None, "bus": 1, "address": 52})
+        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        flashed_addrs = {c[c.index("--address") + 1] for c in m.cmds}
+        assert "52" in flashed_addrs
+        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
+
+    def test_missing_uf2_raises_before_any_gpio_action(
+        self, _mock_gpio_flash, tmp_path
+    ):
+        m = _mock_gpio_flash
+        with pytest.raises(FileNotFoundError, match="UF2 file not found"):
+            m.fp.flash_and_discover_gpio(
+                uf2_path=tmp_path / "nonexistent.uf2"
+            )
+        assert m.events == []
+
+
+class TestMainRouting:
+    def _run_main(self, monkeypatch, argv, gpio_available=True):
+        import picohost.flash_picos as fp
+        import picohost.gpio as gpio_mod
+
+        calls = []
+        monkeypatch.setattr(
+            fp,
+            "flash_and_discover",
+            lambda **kw: calls.append(("usb", kw)) or [{"app_id": 0}],
+        )
+        monkeypatch.setattr(
+            fp,
+            "flash_and_discover_gpio",
+            lambda **kw: calls.append(("gpio", kw)) or [{"app_id": 0}],
+        )
+        monkeypatch.setattr(
+            gpio_mod, "available", lambda: gpio_available
+        )
+        fp.main(argv + ["--no-redis"])
+        return calls
+
+    def test_default_routes_to_gpio(self, monkeypatch):
+        calls = self._run_main(monkeypatch, ["--uf2", "x.uf2"])
+        assert [c[0] for c in calls] == ["gpio"]
+
+    def test_no_gpio_flag_routes_to_usb(self, monkeypatch):
+        calls = self._run_main(
+            monkeypatch, ["--uf2", "x.uf2", "--no-gpio"]
+        )
+        assert [c[0] for c in calls] == ["usb"]
+
+    def test_port_targeting_routes_to_usb(self, monkeypatch):
+        # GPIO mass reset cannot target a single Pico.
+        calls = self._run_main(
+            monkeypatch, ["--uf2", "x.uf2", "--port", "/dev/ttyACM0"]
+        )
+        assert [c[0] for c in calls] == ["usb"]
+        assert calls[0][1]["port"] == "/dev/ttyACM0"
+
+    def test_usb_serial_targeting_routes_to_usb(self, monkeypatch):
+        calls = self._run_main(
+            monkeypatch, ["--uf2", "x.uf2", "--usb-serial", "SER_A"]
+        )
+        assert [c[0] for c in calls] == ["usb"]
+        assert calls[0][1]["usb_serial"] == "SER_A"
+
+    def test_gpio_unavailable_fails_fast(self, monkeypatch, capsys):
+        # No silent fallback: tell the operator to fix the backend or
+        # pass --no-gpio explicitly.
+        with pytest.raises(SystemExit) as excinfo:
+            self._run_main(
+                monkeypatch, ["--uf2", "x.uf2"], gpio_available=False
+            )
+        assert excinfo.value.code == 1
+        assert "--no-gpio" in capsys.readouterr().err
+
+    def test_gpio_flow_runtime_error_exits_nonzero(
+        self, monkeypatch, capsys
+    ):
+        import picohost.flash_picos as fp
+        import picohost.gpio as gpio_mod
+
+        monkeypatch.setattr(gpio_mod, "available", lambda: True)
+
+        def boom(**kw):
+            raise RuntimeError(
+                "no Picos entered BOOTSEL after mass GPIO entry"
+            )
+
+        monkeypatch.setattr(fp, "flash_and_discover_gpio", boom)
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(["--uf2", "x.uf2", "--no-redis"])
+        assert excinfo.value.code == 1
+        assert "BOOTSEL" in capsys.readouterr().err
