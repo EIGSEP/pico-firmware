@@ -437,3 +437,82 @@ class TestResolvePostFlashPort:
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         assert _resolve_post_flash_port("SER_Z", timeout=1.0) == "/dev/ttyACM7"
         assert calls["n"] >= 3
+
+
+class TestResolveBusAddress:
+    def _make(
+        self, root, name, vid, pid, *, serial=None, bus=None, devnum=None
+    ):
+        dev = root / name
+        dev.mkdir()
+        (dev / "idVendor").write_text(vid + "\n")
+        (dev / "idProduct").write_text(pid + "\n")
+        if serial is not None:
+            (dev / "serial").write_text(serial + "\n")
+        if bus is not None:
+            (dev / "busnum").write_text(f"{bus}\n")
+        if devnum is not None:
+            (dev / "devnum").write_text(f"{devnum}\n")
+        return dev
+
+    def test_resolves_cdc_device(self, tmp_path):
+        from picohost.flash_picos import _resolve_bus_address
+
+        self._make(
+            tmp_path, "1-3", "2e8a", "0009",
+            serial="SER_A", bus=1, devnum=35,
+        )
+        assert _resolve_bus_address("SER_A", sysfs_root=tmp_path) == (
+            1,
+            35,
+            False,
+        )
+
+    def test_resolves_bootsel_device_flagged_in_bootsel(self, tmp_path):
+        # A device a prior attempt left stranded in BOOTSEL (000f) must
+        # still be found, flagged in_bootsel, so a retry can finish the
+        # load without another reboot rather than abandoning it.
+        from picohost.flash_picos import _resolve_bus_address
+
+        self._make(
+            tmp_path, "1-3", "2e8a", "000f",
+            serial="SER_A", bus=1, devnum=40,
+        )
+        assert _resolve_bus_address("SER_A", sysfs_root=tmp_path) == (
+            1,
+            40,
+            True,
+        )
+
+    def test_returns_none_when_serial_absent(self, tmp_path):
+        from picohost.flash_picos import _resolve_bus_address
+
+        self._make(
+            tmp_path, "1-3", "2e8a", "0009",
+            serial="SER_A", bus=1, devnum=35,
+        )
+        assert _resolve_bus_address("MISSING", sysfs_root=tmp_path) == (
+            None,
+            None,
+            None,
+        )
+
+    def test_ignores_non_pico_with_matching_serial(self, tmp_path):
+        from picohost.flash_picos import _resolve_bus_address
+
+        self._make(
+            tmp_path, "1-4", "1234", "5678",
+            serial="SER_A", bus=1, devnum=41,
+        )
+        assert _resolve_bus_address("SER_A", sysfs_root=tmp_path) == (
+            None,
+            None,
+            None,
+        )
+
+    def test_returns_none_when_sysfs_missing(self, tmp_path):
+        from picohost.flash_picos import _resolve_bus_address
+
+        assert _resolve_bus_address(
+            "SER_A", sysfs_root=tmp_path / "nope"
+        ) == (None, None, None)
