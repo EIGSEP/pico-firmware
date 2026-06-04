@@ -41,8 +41,18 @@ The build produces `build/pico_multi.uf2` which can be flashed to the Pico by co
 # ships with Raspberry Pi OS)
 flash-picos --uf2 build/pico_multi.uf2
 
+# Hosts without the GPIO wiring: per-device USB reboot path
+flash-picos --uf2 build/pico_multi.uf2 --no-gpio
+
+# Target a single Pico (automatically uses the USB path)
+flash-picos --uf2 build/pico_multi.uf2 --usb-serial <ID>
+
 # Flash with custom parameters
 flash-picos --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
+
+# Drive the shared GPIO lines directly (all bussed Picos at once)
+pico-gpio bootsel   # everyone into BOOTSEL (2e8a:000f)
+pico-gpio reset     # mass reboot into current firmware
 
 # Monitor serial output (adjust /dev/ttyACM0 as needed)
 minicom -D /dev/ttyACM0 -b 115200
