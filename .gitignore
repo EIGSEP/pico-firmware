@@ -39,6 +39,7 @@ coverage.xml
 
 # Claude Code
 .claude/
+docs/superpowers/
 
 # IDE
 .vscode/
