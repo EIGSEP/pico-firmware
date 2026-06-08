@@ -337,6 +337,19 @@ _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
 _INTER_DEVICE_SETTLE_S = 1.0
+# After the GPIO mass reset the whole fleet re-enumerates at once; let
+# the bus settle before reading any device so a board's first status
+# lines aren't lost to enumeration churn.
+_POST_RESET_SETTLE_S = 2.0
+# The device-info readback (resolve CDC port + read one JSON line) can
+# flake when several Picos re-enumerate together — retry before giving
+# up, since the flash itself already succeeded.
+_READBACK_MAX_ATTEMPTS = 3
+_READBACK_RETRY_BACKOFF_S = 1.0
+# After the GPIO mass reset, wait for the whole flashed fleet to
+# re-enumerate as CDC before reading any of them.
+_CDC_DISCOVER_TIMEOUT_S = 15.0
+_CDC_DISCOVER_POLL_S = 0.3
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -403,6 +416,115 @@ def _resolve_post_flash_port(
                 return dev
         time.sleep(poll)
     return None
+
+
+def _read_cdc_port(
+    port,
+    usb_serial,
+    baud,
+    timeout,
+    attempts=_READBACK_MAX_ATTEMPTS,
+    backoff=_READBACK_RETRY_BACKOFF_S,
+):
+    """Read one device-info JSON line from CDC *port*, with retries.
+
+    Returns the device-info dict (with ``port``/``usb_serial`` added),
+    or ``None`` once *attempts* are exhausted. The read is retried
+    because, especially after the GPIO mass reset, several Picos
+    re-enumerate together: a board can be briefly busy or slow to start
+    emitting its 200 ms status, so a single timeout drops a Pico that in
+    fact flashed fine. On each retry the port is re-resolved from
+    *usb_serial* (when known) in case the kernel renamed it.
+    """
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        if port is None:
+            last_err = (
+                f"no CDC port for serial={usb_serial} "
+                f"(did not re-enumerate within {_REENUMERATE_TIMEOUT_S}s)"
+            )
+        else:
+            _udev_settle()
+            try:
+                data = read_json_from_serial(port, baud, timeout)
+                data["port"] = port
+                data["usb_serial"] = usb_serial
+                return data
+            except (RuntimeError, OSError) as e:
+                last_err = str(e)
+        if attempt < attempts:
+            logger.warning(
+                "device-info read for serial=%s on %s failed (attempt "
+                "%d/%d): %s; retrying",
+                usb_serial,
+                port,
+                attempt,
+                attempts,
+                last_err,
+            )
+            time.sleep(backoff)
+            if usb_serial is not None:
+                port = _resolve_post_flash_port(usb_serial)
+    logger.error(
+        "could not read device info for serial=%s on %s after %d "
+        "attempts: %s (it flashed — re-run flash-picos, or check the "
+        "board's DIP/app if it never reports)",
+        usb_serial,
+        port,
+        attempts,
+        last_err,
+    )
+    return None
+
+
+def _read_device_info(
+    usb_serial,
+    baud,
+    timeout,
+    attempts=_READBACK_MAX_ATTEMPTS,
+    backoff=_READBACK_RETRY_BACKOFF_S,
+):
+    """Resolve the post-flash CDC port for *usb_serial* and read its JSON.
+
+    Used by the USB per-device path, which already knows each Pico by
+    its (stable) CDC serial.
+    """
+    port = _resolve_post_flash_port(usb_serial)
+    return _read_cdc_port(port, usb_serial, baud, timeout, attempts, backoff)
+
+
+def _read_fleet_cdc(expected, baud, timeout):
+    """Read device-info JSON from every Pico now in CDC mode.
+
+    Polls :func:`find_pico_ports` until at least *expected* Picos have
+    re-enumerated (or ``_CDC_DISCOVER_TIMEOUT_S`` elapses), then reads
+    each by its **CDC** serial. The GPIO mass-flash path uses this rather
+    than mapping the BOOTSEL-mode serial used for loading: a wiped or odd
+    board can present a different (or absent) serial in BOOTSEL, which
+    would leave it flashed but unreported. Keying off the CDC serial —
+    the same identity ``find_pico_ports`` and PicoManager use — reports
+    every Pico that actually booted into firmware.
+    """
+    deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
+    ports = find_pico_ports()
+    while len(ports) < expected and time.monotonic() < deadline:
+        time.sleep(_CDC_DISCOVER_POLL_S)
+        ports = find_pico_ports()
+    if len(ports) < expected:
+        logger.warning(
+            "only %d of %d flashed Pico(s) re-enumerated as CDC within "
+            "%.0fs",
+            len(ports),
+            expected,
+            _CDC_DISCOVER_TIMEOUT_S,
+        )
+    all_devices = []
+    for port, serial in sorted(ports.items()):
+        data = _read_cdc_port(port, serial, baud, timeout)
+        if data is not None:
+            all_devices.append(data)
+            logger.info("Read device info from %s (serial=%s)", port, serial)
+    return all_devices
 
 
 def flash_and_discover(
@@ -475,32 +597,14 @@ def flash_and_discover(
             continue
 
         # picotool load reboots the Pico, which re-enumerates as a
-        # CDC device. The kernel may assign a different /dev/ttyACMn
-        # than it had pre-flash, so resolve the current path from
-        # the stable usb_serial before reading JSON — otherwise a
-        # different Pico that drifted into port_dev would have its
-        # status attributed to *this* device's usb_serial.
-        current_port = _resolve_post_flash_port(port_serial)
-        if current_port is None:
-            logger.error(
-                f"Pico serial={port_serial} (pre-flash port "
-                f"{port_dev}) did not re-enumerate within "
-                f"{_REENUMERATE_TIMEOUT_S}s; skipping"
-            )
-            continue
-
-        _udev_settle()
-
-        try:
-            data = read_json_from_serial(current_port, baud, timeout)
-        except (RuntimeError, OSError) as e:
-            logger.error(f"Serial read failed on {current_port}: {e}")
-            continue
-
-        data["port"] = current_port
-        data["usb_serial"] = port_serial
-        all_devices.append(data)
-        logger.info(f"Read device info from {current_port}")
+        # CDC device. _read_device_info resolves the current path from
+        # the stable usb_serial (the kernel may assign a different
+        # /dev/ttyACMn than it had pre-flash) and reads its JSON, with
+        # retries.
+        data = _read_device_info(port_serial, baud, timeout)
+        if data is not None:
+            all_devices.append(data)
+            logger.info(f"Read device info from {data['port']}")
 
     return all_devices
 
@@ -618,37 +722,30 @@ def flash_and_discover_gpio(
             )
 
     # Phase 3: one reset pulse boots the whole fleet, then read device
-    # info from each flashed Pico.
+    # info from every Pico now in CDC mode. Let the bus settle first —
+    # the whole fleet re-enumerates at once here, unlike the USB
+    # per-device path. The readback keys off the CDC serial, not the
+    # BOOTSEL-mode serial used for loading, so a board whose BOOTSEL
+    # serial differed or was absent is still reported.
     gpio.reset()
-    all_devices = []
-    for dev in flashed:
-        serial = dev["usb_serial"]
-        if serial is None:
-            logger.warning(
-                "flashed Pico at bus=%d address=%d has no USB serial; "
-                "cannot map it to a CDC port for the device-info read",
-                dev["bus"],
-                dev["address"],
-            )
-            continue
-        current_port = _resolve_post_flash_port(serial)
-        if current_port is None:
-            logger.error(
-                f"Pico serial={serial} did not re-enumerate within "
-                f"{_REENUMERATE_TIMEOUT_S}s after the mass reset; "
-                "skipping"
-            )
-            continue
-        _udev_settle()
-        try:
-            data = read_json_from_serial(current_port, baud, timeout)
-        except (RuntimeError, OSError) as e:
-            logger.error(f"Serial read failed on {current_port}: {e}")
-            continue
-        data["port"] = current_port
-        data["usb_serial"] = serial
-        all_devices.append(data)
-        logger.info(f"Read device info from {current_port}")
+    time.sleep(_POST_RESET_SETTLE_S)
+    all_devices = _read_fleet_cdc(len(flashed), baud, timeout)
+
+    # Surface any board that did not take the flash: after the reset it
+    # has no valid image and drops straight back into BOOTSEL.
+    stuck = _find_bootsel_devices()
+    if stuck:
+        logger.error(
+            "%d Pico(s) still in BOOTSEL after the mass reset — NOT "
+            "flashed: %s. Re-run flash-picos; if the same board fails "
+            "every time, check its USB cable/power and `picotool info`.",
+            len(stuck),
+            ", ".join(
+                f"bus={d['bus']} address={d['address']} "
+                f"serial={d['usb_serial']}"
+                for d in stuck
+            ),
+        )
 
     return all_devices
 
