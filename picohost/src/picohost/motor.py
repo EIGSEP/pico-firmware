@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
+    #: Seconds to wait for a re-seeded position to show up in firmware
+    #: status before giving up and resuming checkpoints (see
+    #: :meth:`_checkpoint_and_seed`).
+    _SEED_TIMEOUT_S = 5.0
+
     def __init__(
         self,
         port,
@@ -25,6 +30,7 @@ class PicoMotor(PicoDevice):
         name=None,
         metadata_writer=None,
         usb_serial="",
+        motor_pos_store=None,
     ):
         self.step_angle_deg = step_angle_deg
         self.gear_teeth = gear_teeth
@@ -41,6 +47,18 @@ class PicoMotor(PicoDevice):
             "el_dn_delay_us": int,
         }
         self._delay_kwargs = None
+        # Position checkpoint / boot-detection state. Touched only by
+        # _checkpoint_and_seed, which runs on the reader thread; set up
+        # before super().__init__ because the reader may start in there.
+        # The whole feature is inert when motor_pos_store is None (or
+        # when there is no metadata_writer — the redis-handler wrapper
+        # is the hook, so no publishing means no checkpointing).
+        self._motor_pos_store = motor_pos_store
+        self._seen_boot_id = None
+        self._last_checkpoint = None
+        self._await_seed = None
+        self._seed_sent_time = None
+        self._warned_no_boot_id = False
         super().__init__(
             port,
             timeout=timeout,
@@ -82,13 +100,121 @@ class PicoMotor(PicoDevice):
         :meth:`PicoRFSwitch._rfswitch_redis_handler`: both adapt the
         raw firmware payload to the published Redis shape at the same
         boundary.
+
+        Also drives the position checkpoint / boot-detection logic
+        (:meth:`_checkpoint_and_seed`) off the raw integer payload,
+        before the float cast.
         """
+        self._checkpoint_and_seed(data)
         data = data.copy()
         for key in self._POSITION_FIELDS:
             v = data.get(key)
             if v is not None:
                 data[key] = float(v)
         self._base_redis_handler(data)
+
+    def _checkpoint_and_seed(self, data):
+        """Persist the step position; re-seed it after a pico reboot.
+
+        Runs on the reader thread for every firmware status packet
+        (safe: the serial write path used by the re-seed has its own
+        lock and never waits on status). Two jobs:
+
+        1. **Checkpoint.** Upload ``(az_pos, el_pos, boot_id)`` to the
+           :class:`~picohost.buses.MotorPositionStore` whenever the
+           triple changes — during a move that is one upload per
+           status tick, at rest none. The checkpoint is what survives
+           a full-system power cut (Redis on the host persists it).
+        2. **Boot detection + re-seed.** Firmware step counters live
+           in RAM and reset to 0 at power-up; ``boot_id`` is a random
+           per-boot constant in every status packet. When the
+           incoming ``boot_id`` differs from the checkpointed one,
+           the pico has rebooted since the checkpoint was written, so
+           the stored positions are pushed back down via
+           :meth:`reset_step_position`. Checkpointing is suppressed
+           until the seeded position is reflected in a status packet
+           (else the first post-reboot all-zero status would
+           overwrite the good checkpoint), bounded by
+           :data:`_SEED_TIMEOUT_S` so a lost seed command cannot
+           freeze checkpointing forever.
+
+        A matching ``boot_id`` means the firmware position is live
+        truth — a manager restart against a still-running pico never
+        re-seeds.
+        """
+        store = self._motor_pos_store
+        if store is None:
+            return
+        boot_id = data.get("boot_id")
+        az = data.get("az_pos")
+        el = data.get("el_pos")
+        if boot_id is None or az is None or el is None:
+            if not self._warned_no_boot_id:
+                self._warned_no_boot_id = True
+                logger.warning(
+                    f"{self.name}: status packet lacks boot_id or "
+                    "position fields; position checkpointing disabled "
+                    "(firmware predates boot_id?)"
+                )
+            return
+        az, el, boot_id = int(az), int(el), int(boot_id)
+
+        if boot_id != self._seen_boot_id:
+            self._handle_new_boot(boot_id)
+
+        if self._await_seed is not None:
+            if (az, el) == self._await_seed:
+                self._await_seed = None
+            elif time.time() - self._seed_sent_time > self._SEED_TIMEOUT_S:
+                logger.error(
+                    f"{self.name}: re-seeded position "
+                    f"{self._await_seed} not reflected in status "
+                    f"within {self._SEED_TIMEOUT_S}s; resuming "
+                    "checkpoints from live position"
+                )
+                self._await_seed = None
+            else:
+                # Pre-seed positions are the reset-to-zero counters,
+                # not real state — don't checkpoint them.
+                return
+
+        checkpoint = (az, el, boot_id)
+        if checkpoint != self._last_checkpoint:
+            store.upload(az_pos=az, el_pos=el, boot_id=boot_id)
+            self._last_checkpoint = checkpoint
+
+    def _handle_new_boot(self, boot_id):
+        """React to a never-seen ``boot_id``: re-seed if the stored
+        checkpoint belongs to a different boot.
+
+        ``_seen_boot_id`` is committed only after the branch completes,
+        so a failed seed send is retried on the next status packet.
+        """
+        stored = self._motor_pos_store.get()
+        if stored is None or stored["boot_id"] == boot_id:
+            # No checkpoint to restore, or the checkpoint was written
+            # under this very boot (manager restart, pico kept running):
+            # firmware position is authoritative.
+            self._seen_boot_id = boot_id
+            return
+        az, el = stored["az_pos"], stored["el_pos"]
+        age = time.time() - stored.get("upload_time", time.time())
+        logger.warning(
+            f"{self.name}: pico rebooted (boot_id "
+            f"{stored['boot_id']} -> {boot_id}); re-seeding step "
+            f"position az={az} el={el} from checkpoint ({age:.0f}s old)"
+        )
+        try:
+            self.reset_step_position(az_step=az, el_step=el)
+        except ConnectionError as e:
+            # Status packets arrive over the same serial link, so this
+            # should be unreachable; log and leave _seen_boot_id unset
+            # so the next packet retries.
+            logger.error(f"{self.name}: position re-seed failed: {e}")
+            return
+        self._await_seed = (az, el)
+        self._seed_sent_time = time.time()
+        self._seen_boot_id = boot_id
 
     def on_reconnect(self):
         """Re-apply delay configuration after a serial reconnect."""

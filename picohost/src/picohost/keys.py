@@ -11,6 +11,7 @@ or eigsep_observing (``stream:corr``, ``corr_config``, …).
 
 PICO_CONFIG_KEY = "pico_config"
 POT_CAL_KEY = "pot_calibration"
+MOTOR_POS_KEY = "motor_position"
 PICO_CMD_STREAM = "stream:pico_cmd"
 PICO_RESP_STREAM = "stream:pico_resp"
 PICO_CLAIM_PREFIX = "pico_claim"
