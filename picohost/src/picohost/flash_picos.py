@@ -129,9 +129,7 @@ def _find_bootsel_devices(sysfs_root=None):
             address = int((entry / "devnum").read_text().strip())
         except (OSError, ValueError):
             continue
-        devices.append(
-            {"usb_serial": serial, "bus": bus, "address": address}
-        )
+        devices.append({"usb_serial": serial, "bus": bus, "address": address})
     devices.sort(key=lambda d: (d["bus"], d["address"]))
     return devices
 
@@ -190,9 +188,7 @@ def _wait_for_stable_bootsel_set(
     stable_since = None
     while time.monotonic() < deadline:
         devices = _find_bootsel_devices()
-        keys = {
-            (d["usb_serial"], d["bus"], d["address"]) for d in devices
-        }
+        keys = {(d["usb_serial"], d["bus"], d["address"]) for d in devices}
         now = time.monotonic()
         if keys != last_keys:
             last_keys = keys
@@ -267,17 +263,21 @@ def flash_uf2(
         bus, address, in_bootsel = _resolve_bus_address(usb_serial)
         if bus is None:
             detail = (
-                f"serial={usb_serial} not visible as a "
-                f"Pico (2e8a) USB device"
+                f"serial={usb_serial} not visible as a Pico (2e8a) USB device"
             )
             logger.warning("%s (attempt %d/%d)", detail, attempt, attempts)
         else:
             if not in_bootsel:
                 rb = subprocess.run(
                     [
-                        "picotool", "reboot", "-u", "-f",
-                        "--bus", str(bus),
-                        "--address", str(address),
+                        "picotool",
+                        "reboot",
+                        "-u",
+                        "-f",
+                        "--bus",
+                        str(bus),
+                        "--address",
+                        str(address),
                     ],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -512,8 +512,7 @@ def _read_fleet_cdc(expected, baud, timeout):
         ports = find_pico_ports()
     if len(ports) < expected:
         logger.warning(
-            "only %d of %d flashed Pico(s) re-enumerated as CDC within "
-            "%.0fs",
+            "only %d of %d flashed Pico(s) re-enumerated as CDC within %.0fs",
             len(ports),
             expected,
             _CDC_DISCOVER_TIMEOUT_S,
