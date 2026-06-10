@@ -1,3 +1,5 @@
+import random
+
 from .base import PicoEmulator, _safe_int
 
 DEFAULT_DELAY_US = 600
@@ -61,6 +63,10 @@ class MotorEmulator(PicoEmulator):
     def init(self):
         self.azimuth = StepperState()
         self.elevation = StepperState()
+        # Mirrors motor_init() in motor.c: positions zeroed and a fresh
+        # random 30-bit boot id drawn. Re-calling init() on a running
+        # emulator therefore models a firmware power cycle.
+        self.boot_id = random.getrandbits(30)
 
     def server(self, cmd):
         az = self.azimuth
@@ -104,6 +110,7 @@ class MotorEmulator(PicoEmulator):
             "sensor_name": "motor",
             "status": "update",
             "app_id": self.app_id,
+            "boot_id": self.boot_id,
             "az_pos": self.azimuth.position,
             "az_target_pos": self.azimuth.target_pos,
             "el_pos": self.elevation.position,
