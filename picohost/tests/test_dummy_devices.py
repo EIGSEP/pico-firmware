@@ -200,6 +200,7 @@ class TestDummyPicoMotor:
         assert "el_pos" in motor.last_status
         assert "az_target_pos" in motor.last_status
         assert "el_target_pos" in motor.last_status
+        assert "boot_id" in motor.last_status
         motor.disconnect()
 
     def test_scan_homes_after_normal_completion(self):

@@ -51,6 +51,19 @@ class TestMotorEmulator:
         assert status["el_pos"] == 0
         assert status["az_target_pos"] == 0
         assert status["el_target_pos"] == 0
+        # Random 30-bit per-boot id, mirroring motor_init() in motor.c.
+        assert 0 <= status["boot_id"] < 2**30
+
+    def test_reinit_models_power_cycle(self):
+        """init() zeroes the counters and draws a fresh boot_id —
+        the host-side reboot detector keys off exactly this."""
+        emu = MotorEmulator()
+        emu.server({"az_set_pos": 500})
+        old_boot = emu.boot_id
+        emu.init()
+        status = emu.get_status()
+        assert status["az_pos"] == 0
+        assert status["boot_id"] != old_boot
 
     def test_set_target_and_converge(self):
         emu = MotorEmulator()
@@ -130,6 +143,7 @@ class TestMotorEmulator:
             "sensor_name",
             "status",
             "app_id",
+            "boot_id",
             "az_pos",
             "az_target_pos",
             "el_pos",

@@ -1,5 +1,6 @@
 #include "motor.h"
 #include "pico/stdlib.h"
+#include "pico/rand.h"
 #include "cJSON.h"
 #include <stdlib.h>
 
@@ -12,6 +13,13 @@
 
 static Stepper azimuth;
 static Stepper elevation;
+
+/* Random per-boot identifier, reported in every motor_status packet.
+ * Step positions live in RAM and reset to 0 on power-up, so the host
+ * cannot otherwise tell "pico rebooted, position lost" apart from
+ * "parked at home". Masked to 30 bits to stay positive in cJSON's
+ * int representation. */
+static uint32_t boot_id;
 
 /**
  * @brief Initialize a stepper motor interface.
@@ -60,6 +68,7 @@ void stepper_init(Stepper *m,
 void motor_init(uint8_t app_id) {
     stepper_init(&azimuth, AZ_DIR_PIN, AZ_PUL_PIN, AZ_EN_PIN, AZ_CW_VAL);
     stepper_init(&elevation, EL_DIR_PIN, EL_PUL_PIN, EL_EN_PIN, EL_CW_VAL);
+    boot_id = get_rand_32() & 0x3fffffff;
 }
 
 /**
@@ -169,10 +178,11 @@ void motor_server(uint8_t app_id, const char *json_str) {
 
 
 void motor_status(uint8_t app_id) {
-	send_json(7,
+	send_json(8,
         KV_STR, "sensor_name", "motor",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
+        KV_INT, "boot_id", (int)boot_id,
         KV_INT, "az_pos", azimuth.position,
         KV_INT, "az_target_pos", azimuth.target_pos,
         KV_INT, "el_pos", elevation.position,
