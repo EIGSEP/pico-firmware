@@ -11,6 +11,7 @@ from eigsep_redis import Transport
 from serial import Serial
 from serial.tools import list_ports
 
+from . import manager_service
 from .buses import PicoConfigStore
 from .keys import PICO_CONFIG_KEY
 
@@ -802,6 +803,19 @@ def main(argv=None):
             "without the bussed BOOTSEL/RUN wiring."
         ),
     )
+    p.add_argument(
+        "--keep-manager",
+        action="store_true",
+        help=(
+            "Do not stop an active picomanager.service before "
+            "flashing. By default flash-picos stops the manager (it "
+            "owns every Pico's serial port and its reconnect loop "
+            "corrupts the post-flash readback) and restarts it after "
+            "the flash. Only the active unit is touched, so under "
+            "`eigsep-field patch` — which stops the unit itself — "
+            "the default is already a no-op."
+        ),
+    )
     args = p.parse_args(argv)
 
     logging.basicConfig(
@@ -830,49 +844,78 @@ def main(argv=None):
             )
             sys.exit(1)
 
-    try:
-        if use_gpio:
-            all_devices = flash_and_discover_gpio(
-                uf2_path=args.uf2,
-                baud=args.baud,
-                timeout=args.timeout,
-            )
-        else:
-            all_devices = flash_and_discover(
-                uf2_path=args.uf2,
-                port=args.port,
-                usb_serial=args.usb_serial,
-                baud=args.baud,
-                timeout=args.timeout,
-            )
-    except (FileNotFoundError, RuntimeError) as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
-
-    if not all_devices:
-        print("No devices discovered.", file=sys.stderr)
-        sys.exit(1)
-
-    if not args.no_redis:
+    stopped_manager = False
+    if not args.keep_manager and manager_service.manager_is_active():
+        logger.info(
+            "%s is active and owns the Pico serial ports; stopping "
+            "it for the flash (it will be restarted afterwards)",
+            manager_service.MANAGER_UNIT,
+        )
         try:
-            _publish_to_redis(all_devices, args.redis_host, args.redis_port)
-            print(
-                f"Published {len(all_devices)} device(s) to Redis at "
-                f"{args.redis_host}:{args.redis_port} "
-                f"(key: {PICO_CONFIG_KEY})."
-            )
-        except Exception as e:
-            print(
-                f"Redis publication failed: {e}\n"
-                "Re-run with --no-redis (and optionally --output-file) if "
-                "Redis is not available.",
-                file=sys.stderr,
-            )
+            manager_service.stop_manager()
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        stopped_manager = True
 
-    if args.output_file:
-        with open(args.output_file, "w") as f:
-            json.dump(all_devices, f, indent=2)
-        print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
+    try:
+        try:
+            if use_gpio:
+                all_devices = flash_and_discover_gpio(
+                    uf2_path=args.uf2,
+                    baud=args.baud,
+                    timeout=args.timeout,
+                )
+            else:
+                all_devices = flash_and_discover(
+                    uf2_path=args.uf2,
+                    port=args.port,
+                    usb_serial=args.usb_serial,
+                    baud=args.baud,
+                    timeout=args.timeout,
+                )
+        except (FileNotFoundError, RuntimeError) as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+
+        if not all_devices:
+            print("No devices discovered.", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.no_redis:
+            try:
+                _publish_to_redis(
+                    all_devices, args.redis_host, args.redis_port
+                )
+                print(
+                    f"Published {len(all_devices)} device(s) to Redis at "
+                    f"{args.redis_host}:{args.redis_port} "
+                    f"(key: {PICO_CONFIG_KEY})."
+                )
+            except Exception as e:
+                print(
+                    f"Redis publication failed: {e}\n"
+                    "Re-run with --no-redis (and optionally "
+                    "--output-file) if Redis is not available.",
+                    file=sys.stderr,
+                )
+
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                json.dump(all_devices, f, indent=2)
+            print(
+                f"Wrote {len(all_devices)} device(s) to "
+                f"{args.output_file}."
+            )
+    finally:
+        # Restart ONLY if we stopped it: under `eigsep-field patch`
+        # the unit is already stopped by the coordinator, which must
+        # write its ExecStart drop-in and daemon-reload BEFORE the
+        # unit starts again. The finally also runs on sys.exit() so
+        # the manager comes back even when the flash fails — same
+        # best-effort restore eigsep-field's patch flow does.
+        if stopped_manager:
+            manager_service.start_manager()
 
 
 if __name__ == "__main__":

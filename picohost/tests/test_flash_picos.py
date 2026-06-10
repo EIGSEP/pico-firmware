@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+import picohost.flash_picos as fp
 from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
@@ -1317,6 +1318,9 @@ class TestMainRouting:
         import picohost.flash_picos as fp
         import picohost.gpio as gpio_mod
 
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
         calls = []
         monkeypatch.setattr(
             fp,
@@ -1369,6 +1373,9 @@ class TestMainRouting:
         import picohost.flash_picos as fp
         import picohost.gpio as gpio_mod
 
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
         monkeypatch.setattr(gpio_mod, "available", lambda: True)
 
         def boom(**kw):
@@ -1381,3 +1388,110 @@ class TestMainRouting:
             fp.main(["--uf2", "x.uf2", "--no-redis"])
         assert excinfo.value.code == 1
         assert "BOOTSEL" in capsys.readouterr().err
+
+
+class TestManagerAutoStop:
+    """main() stops an active picomanager around the flash window."""
+
+    def _setup(
+        self, monkeypatch, tmp_path, active, devices=None, flash_exc=None
+    ):
+        uf2 = tmp_path / "fw.uf2"
+        uf2.write_bytes(b"\x00")
+        events = []
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: active
+        )
+        monkeypatch.setattr(
+            fp.manager_service,
+            "stop_manager",
+            lambda: events.append("stop"),
+        )
+        monkeypatch.setattr(
+            fp.manager_service,
+            "start_manager",
+            lambda: events.append("start"),
+        )
+
+        def fake_flash(**kwargs):
+            events.append("flash")
+            if flash_exc is not None:
+                raise flash_exc
+            return list(devices or [])
+
+        monkeypatch.setattr(fp, "flash_and_discover", fake_flash)
+        return uf2, events
+
+    def _argv(self, uf2):
+        return ["--uf2", str(uf2), "--no-gpio", "--no-redis"]
+
+    def test_stops_then_flashes_then_restarts(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2))
+        assert events == ["stop", "flash", "start"]
+
+    def test_restarts_after_flash_failure(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch, tmp_path, active=True,
+            flash_exc=RuntimeError("boom"),
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert events == ["stop", "flash", "start"]
+
+    def test_restarts_when_no_devices_found(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch, tmp_path, active=True, devices=[]
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert events == ["stop", "flash", "start"]
+
+    def test_inactive_manager_left_alone(self, monkeypatch, tmp_path):
+        # The eigsep-field patch flow: the coordinator already stopped
+        # the unit; flash-picos must not restart it behind its back.
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=False,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2))
+        assert events == ["flash"]
+
+    def test_keep_manager_skips_stop(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2) + ["--keep-manager"])
+        assert events == ["flash"]
+
+    def test_stop_failure_aborts_before_flash(self, monkeypatch, tmp_path, capsys):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+
+        def failing_stop():
+            raise RuntimeError("cannot stop")
+
+        monkeypatch.setattr(
+            fp.manager_service, "stop_manager", failing_stop
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert "cannot stop" in capsys.readouterr().err
+        assert events == []
