@@ -72,8 +72,9 @@ def _release(gpio):
     try:
         _pinctrl(gpio, _RELEASE)
     except Exception:
-        logger.warning("failed to release GPIO%d via pinctrl", gpio,
-                       exc_info=True)
+        logger.warning(
+            "failed to release GPIO%d via pinctrl", gpio, exc_info=True
+        )
 
 
 def _release_lines():
