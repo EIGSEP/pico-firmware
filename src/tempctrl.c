@@ -55,7 +55,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->Ki = 0.0;
     tempctrl->integral = 0.0;
     tempctrl->last_sample_ms = 0;
-    tempctrl->clamp = 0.6;  // Maximum drive level
+    tempctrl->clamp = 0.2;  // Maximum drive level; low default keeps Peltier current manageable
     tempctrl->hysteresis = 0.5;
     tempctrl->enabled = false;
     tempctrl->active = false;

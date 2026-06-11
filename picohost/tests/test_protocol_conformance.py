@@ -200,7 +200,7 @@ class TestTempCtrlProtocol:
         assert emu.lna.Kp == 0.2
         assert emu.lna.Ki == 0.0
         assert emu.lna.integral == 0.0
-        assert emu.lna.clamp == 0.6
+        assert emu.lna.clamp == 0.2
         assert emu.lna.hysteresis == 0.5
         assert emu.lna.enabled is False
 

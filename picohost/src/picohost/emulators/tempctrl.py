@@ -42,7 +42,7 @@ class TempControlState:
         self.Ki = 0.0
         self.integral = 0.0
         self.last_sample_seen = False
-        self.clamp = 0.6
+        self.clamp = 0.2
         self.hysteresis = 0.5
         self.enabled = False
         self.active = False

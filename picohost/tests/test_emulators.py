@@ -171,6 +171,7 @@ class TestTempCtrlEmulator:
                 "LNA_temp_target": 40.0,
                 "LNA_enable": True,
                 "LNA_hysteresis": 0.5,
+                "LNA_clamp": 0.6,  # default 0.2 saturates too slowly for 1000 ops
             }
         )
         for _ in range(1000):
@@ -186,6 +187,7 @@ class TestTempCtrlEmulator:
                 "LNA_temp_target": 35.0,
                 "LNA_enable": True,
                 "LNA_hysteresis": 0.5,
+                "LNA_clamp": 0.6,  # default 0.2 saturates too slowly for 1000 ops
             }
         )
         for _ in range(1000):
