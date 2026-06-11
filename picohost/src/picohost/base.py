@@ -765,7 +765,7 @@ class PicoPeltier(PicoDevice):
         self._last_enable = cmd
 
     def set_clamp(self, LNA=None, LOAD=None):
-        """Set maximum drive level [0.0, 1.0], 0.6 default."""
+        """Set maximum drive level [0.0, 1.0], 0.2 default."""
         cmd = {}
         if LNA is not None:
             cmd["LNA_clamp"] = LNA

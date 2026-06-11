@@ -216,6 +216,7 @@ class TestPeltierIntegration:
         """Temperature control converges to target through serial pipeline."""
         cadence = peltier.EMULATOR_CADENCE_MS
         peltier.set_temperature(T_LNA=35.0)
+        peltier.set_clamp(LNA=0.6)  # explicit: default 0.2 would need ~3x the cycles
         peltier.set_enable(LNA=True)
         # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
         # ~333 ops to converge + margin for hysteresis settling
@@ -551,16 +552,18 @@ class TestConvergenceTiming:
     def test_peltier_convergence_bounded(self):
         """Temperature converges within a cycle count derived from the model.
 
-        With default params (Kp=0.2, Ki=0, clamp=0.6) the controller is
-        pure proportional, so drive saturates at the clamp until T_delta
-        drops below clamp/Kp = 3°C. THERMAL_DRIFT_RATE=0.05 gives 0.03°C
-        per clamped op; a 10°C move (25→35) needs ~233 ops at saturation
-        plus a P-controlled tail into the deadband. Allow 500 ops.
+        With default gains (Kp=0.2, Ki=0) and clamp set to 0.6 the
+        controller is pure proportional, so drive saturates at the clamp
+        until T_delta drops below clamp/Kp = 3°C. THERMAL_DRIFT_RATE=0.05
+        gives 0.03°C per clamped op; a 10°C move (25→35) needs ~233 ops
+        at saturation plus a P-controlled tail into the deadband. Allow
+        500 ops.
         """
         p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
         try:
             cadence = p.EMULATOR_CADENCE_MS
             p.set_temperature(T_LNA=35.0)
+            p.set_clamp(LNA=0.6)
             p.set_enable(LNA=True)
             settled = wait_for_settle(
                 lambda: round(p.last_status.get("LNA_T_now", 0), 1),
