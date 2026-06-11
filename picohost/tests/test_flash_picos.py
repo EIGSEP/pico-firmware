@@ -1462,7 +1462,9 @@ class TestManagerAutoStop:
 
     def test_restarts_after_flash_failure(self, monkeypatch, tmp_path):
         uf2, events = self._setup(
-            monkeypatch, tmp_path, active=True,
+            monkeypatch,
+            tmp_path,
+            active=True,
             flash_exc=RuntimeError("boom"),
         )
         with pytest.raises(SystemExit) as excinfo:
@@ -1501,7 +1503,9 @@ class TestManagerAutoStop:
         fp.main(self._argv(uf2) + ["--keep-manager"])
         assert events == ["flash"]
 
-    def test_stop_failure_aborts_before_flash(self, monkeypatch, tmp_path, capsys):
+    def test_stop_failure_aborts_before_flash(
+        self, monkeypatch, tmp_path, capsys
+    ):
         uf2, events = self._setup(
             monkeypatch,
             tmp_path,
@@ -1512,9 +1516,7 @@ class TestManagerAutoStop:
         def failing_stop():
             raise RuntimeError("cannot stop")
 
-        monkeypatch.setattr(
-            fp.manager_service, "stop_manager", failing_stop
-        )
+        monkeypatch.setattr(fp.manager_service, "stop_manager", failing_stop)
         with pytest.raises(SystemExit) as excinfo:
             fp.main(self._argv(uf2))
         assert excinfo.value.code == 1

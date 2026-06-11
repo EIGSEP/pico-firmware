@@ -83,8 +83,7 @@ def start_manager():
     """
     if not _stop_or_start("start"):
         logger.error(
-            "could not restart %s; start it manually: "
-            "sudo systemctl start %s",
+            "could not restart %s; start it manually: sudo systemctl start %s",
             MANAGER_UNIT,
             MANAGER_UNIT,
         )
