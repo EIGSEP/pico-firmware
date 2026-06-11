@@ -216,7 +216,9 @@ class TestPeltierIntegration:
         """Temperature control converges to target through serial pipeline."""
         cadence = peltier.EMULATOR_CADENCE_MS
         peltier.set_temperature(T_LNA=35.0)
-        peltier.set_clamp(LNA=0.6)  # explicit: default 0.2 would need ~3x the cycles
+        peltier.set_clamp(
+            LNA=0.6
+        )  # explicit: default 0.2 would need ~3x the cycles
         peltier.set_enable(LNA=True)
         # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
         # ~333 ops to converge + margin for hysteresis settling
