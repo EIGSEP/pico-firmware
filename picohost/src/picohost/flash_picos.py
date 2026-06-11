@@ -903,10 +903,7 @@ def main(argv=None):
         if args.output_file:
             with open(args.output_file, "w") as f:
                 json.dump(all_devices, f, indent=2)
-            print(
-                f"Wrote {len(all_devices)} device(s) to "
-                f"{args.output_file}."
-            )
+            print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
     finally:
         # Restart ONLY if we stopped it: under `eigsep-field patch`
         # the unit is already stopped by the coordinator, which must
