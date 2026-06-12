@@ -12,8 +12,8 @@ Multi-application firmware for Raspberry Pi Pico 2 (RP2350) that implements hard
 - **JSON command protocol** - Control devices via USB serial at 115200 baud
 - **6 integrated applications**:
   - Motor control (stepper motors)
-  - Temperature controller (Peltier elements)
-  - Temperature monitoring (DS18B20 sensors)
+  - Temperature controller (Peltier elements with ADC thermistors)
+  - Temperature monitoring/control
   - IMU sensor interface (BNO08x)
   - Lidar sensor interface
   - RF switch control
@@ -164,12 +164,14 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
-Two independent Peltier control channels, each with a DS18B20 temperature sensor and an H-bridge motor driver:
+Two independent Peltier control channels, each with an ADC thermistor voltage
+divider and an H-bridge motor driver. Each thermistor node uses an 11.7k fixed
+resistor from 3V3 to the ADC pin, and the thermistor from the ADC pin to AGND.
 
-| Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
-|---------|-----------------|----------|---------------|---------------|-----|
-| **LOAD** | 27 | 8 | 10 | 12 | PIO0 |
-| **LNA** | 26 | 9 | 11 | 13 | PIO1 |
+| Channel | Thermistor GPIO | ADC | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO |
+|---------|-----------------|-----|----------|---------------|---------------|
+| **LNA** | 27 | ADC1 | 8 | 10 | 12 |
+| **LOAD** | 26 | ADC0 | 9 | 11 | 13 |
 
 JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`).
 

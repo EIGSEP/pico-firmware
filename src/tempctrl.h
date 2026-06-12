@@ -10,13 +10,13 @@
 #include "temp_simple.h"
 
 // LNA Temperature Control configuration
-#define TEMP_SENSOR_LNA_PIN     27  // thermistor data pin
+#define TEMP_SENSOR_LNA_PIN     27  // thermistor ADC pin
 #define PELTIER_LNA_PWM_PIN     8   // enable1
 #define PELTIER_LNA_DIR_PIN1    10  // in1
 #define PELTIER_LNA_DIR_PIN2    12  // in2
 
 // LOAD Temperature Control configuration
-#define TEMP_SENSOR_LOAD_PIN    26
+#define TEMP_SENSOR_LOAD_PIN    26  // thermistor ADC pin
 #define PELTIER_LOAD_PWM_PIN    9   // enable2
 #define PELTIER_LOAD_DIR_PIN3   11  // in3
 #define PELTIER_LOAD_DIR_PIN4   13  // in4
@@ -27,10 +27,9 @@
 // Stall detection: if the channel is actively driving (drive!=0) but T_now
 // fails to move by at least TEMPCTRL_STALL_MIN_DELTA over a
 // TEMPCTRL_STALL_WINDOW_MS window, the sensor or Peltier is stuck and we
-// trip the channel. The threshold is far above the DS18B20 quantization
-// (1/16 = 0.0625 C) and a healthy half-power Peltier moves the load
-// several C/min, so a healthy run rolls the window forward long before
-// reaching the trip threshold.
+// trip the channel. The threshold is far above normal ADC thermistor jitter
+// and a healthy half-power Peltier moves the load several C/min, so a healthy
+// run rolls the window forward long before reaching the trip threshold.
 #define TEMPCTRL_STALL_WINDOW_MS   60000
 #define TEMPCTRL_STALL_MIN_DELTA   0.5f
 
@@ -48,13 +47,12 @@
 // channel that is actually controlling.
 #define TEMPCTRL_RUNAWAY_STRIKES   2
 
-// Sensor sanity guard: a DS18B20 that still answers on the bus but returns
-// garbage (a failing thermistor seen cycling 0/40/90 C while the true temp
-// was ~20 C) passes temp_sensor_has_error(), so the raw read would drive the
-// Peltier full-scale on a physically impossible value. Reject any fresh
-// sample whose implied rate of change exceeds TEMPCTRL_MAX_RATE_C_PER_S
-// (well above any real thermal slew — a healthy half-power Peltier moves a
-// few C/min, ~0.1 C/s); hold the last good T_now instead. After
+// Sensor sanity guard: a thermistor channel can still return a finite but
+// physically impossible value if wiring is marginal or the ADC node glitches.
+// Reject any fresh sample whose implied rate of change exceeds
+// TEMPCTRL_MAX_RATE_C_PER_S (well above any real thermal slew — a healthy
+// half-power Peltier moves a few C/min, ~0.1 C/s); hold the last good T_now
+// instead. After
 // TEMPCTRL_MAX_REJECTS consecutive rejects the sensor is treated as failed
 // (internally_disabled), which gates drive and surfaces LNA/LOAD_status as
 // "error". A lone glitch is absorbed without disabling control.

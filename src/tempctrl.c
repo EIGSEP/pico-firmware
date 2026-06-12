@@ -3,7 +3,6 @@
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
 #include "hardware/pio.h"
-#include "onewire_library.pio.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
@@ -41,8 +40,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->pwm_slice = pwm_gpio_to_slice_num(pwm_pin);
     pwm_init(tempctrl->pwm_slice, config, true);
 
-    uint offset = pio_add_program(pio, &onewire_program);
-    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
+    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, 0);
 
     // Initialize Temperature Control structure. Ki defaults to 0 so an
     // un-tuned deployment behaves as pure P + deadband (no integral
@@ -229,10 +227,10 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         temp_sensor_start_conversion(&tempctrl->temp_sensor);
     }
 
-    // Attempt a read. `fresh` is true only on the tick a new DS18B20
+    // Attempt a read. `fresh` is true only on the tick a new thermistor
     // value was just decoded — gating the PI integrator on this prevents
-    // it from accumulating ~15x per real sample (op() runs every ~50ms,
-    // conversions complete every ~750ms).
+    // it from accumulating several times per real sample (op() runs every
+    // ~50ms, ADC samples are cadence-limited in temp_simple).
     bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
     bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
 
