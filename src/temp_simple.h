@@ -11,13 +11,13 @@
 #define THERMISTOR_SAMPLE_INTERVAL_MS 250
 #define THERMISTOR_ADC_MAX_COUNTS     4095.0f
 #define THERMISTOR_SUPPLY_VOLTS       3.3f
-#define THERMISTOR_FIXED_OHMS         11700.0f
+#define THERMISTOR_FIXED_OHMS         10680.0f
 
 // Steinhart-Hart coefficients for resistance in ohms:
-// 94582.0 ohms at 0 C, 16062.4 ohms at 40 C, 5351.9 ohms at 70 C.
-#define THERMISTOR_SH_A               9.0644878e-4f
-#define THERMISTOR_SH_B               2.2545838e-4f
-#define THERMISTOR_SH_C               1.1397637e-7f
+// 95339.0 ohms at 0 C, 16212.0 ohms at 40 C, 5387.4 ohms at 70 C.
+#define THERMISTOR_SH_A               9.2463455e-4f
+#define THERMISTOR_SH_B               2.2246310e-4f
+#define THERMISTOR_SH_C               1.2326590e-7f
 
 // Temperature sensor structure for direct ADC connection.
 typedef struct {
