@@ -20,6 +20,11 @@ jobs:
       pull-requests: write
       id-token: write
 
+    # The `secrets` context is not available in `if:` conditions, so surface
+    # the token's presence as an env var that the steps can gate on instead.
+    env:
+      HAS_CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -27,7 +32,7 @@ jobs:
           fetch-depth: 1
 
       - name: Claude firmware/emulator parity review
-        if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        if: ${{ env.HAS_CLAUDE_TOKEN == 'true' }}
         continue-on-error: true
         id: claude-emulator-parity
         uses: anthropics/claude-code-action@v1
