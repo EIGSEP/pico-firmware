@@ -6,7 +6,11 @@ emulators) correctly replaces real hardware for testing. Tests cover connection
 lifecycle, command dispatch, status propagation, and MockSerial integration.
 """
 
+import importlib
 import json
+import logging
+import sys
+
 import numpy as np
 import pytest
 import mockserial
@@ -18,6 +22,36 @@ from picohost.testing import (
     DummyPicoRFSwitch,
     DummyPicoPeltier,
 )
+
+
+# ---------------------------------------------------------------------------
+# mockserial (pyserial-mock) is an optional dependency
+# ---------------------------------------------------------------------------
+
+
+class TestMockserialOptional:
+    """``mockserial`` (pyserial-mock) is only needed for dummy devices.
+
+    Importing ``picohost.testing`` must not warn when it is absent, and the
+    failure must surface with an actionable message at the point of use
+    rather than as a bare ``NameError``.
+    """
+
+    def test_import_does_not_warn_without_mockserial(
+        self, monkeypatch, caplog
+    ):
+        """Importing picohost.testing is silent when mockserial is missing."""
+        monkeypatch.setitem(sys.modules, "mockserial", None)
+        monkeypatch.delitem(sys.modules, "picohost.testing", raising=False)
+        with caplog.at_level(logging.WARNING):
+            importlib.import_module("picohost.testing")
+        assert "Mockserial not found" not in caplog.text
+
+    def test_connect_raises_clear_error_without_mockserial(self, monkeypatch):
+        """connect() raises an informative ImportError, not NameError."""
+        monkeypatch.setitem(sys.modules, "mockserial", None)
+        with pytest.raises(ImportError, match="pyserial-mock"):
+            DummyPicoDevice(port="/dev/ttyUSB0")
 
 
 # ---------------------------------------------------------------------------

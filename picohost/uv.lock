@@ -390,6 +390,9 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
 ]
+testing = [
+    { name = "pyserial-mock" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -397,14 +400,15 @@ requires-dist = [
     { name = "fakeredis", marker = "extra == 'dev'" },
     { name = "gpiozero", specifier = ">=2" },
     { name = "numpy" },
+    { name = "picohost", extras = ["testing"], marker = "extra == 'dev'" },
     { name = "pyserial" },
-    { name = "pyserial-mock", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pyserial-mock", marker = "extra == 'testing'", specifier = ">=1.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["testing", "dev"]
 
 [[package]]
 name = "pluggy"
