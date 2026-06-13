@@ -37,7 +37,9 @@ class TestMockserialOptional:
     rather than as a bare ``NameError``.
     """
 
-    def test_import_does_not_warn_without_mockserial(self, monkeypatch, caplog):
+    def test_import_does_not_warn_without_mockserial(
+        self, monkeypatch, caplog
+    ):
         """Importing picohost.testing is silent when mockserial is missing."""
         monkeypatch.setitem(sys.modules, "mockserial", None)
         monkeypatch.delitem(sys.modules, "picohost.testing", raising=False)
