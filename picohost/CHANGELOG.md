@@ -1,5 +1,34 @@
 # Changelog
 
+## [3.7.0](https://github.com/EIGSEP/pico-firmware/compare/v3.6.0...v3.7.0) (2026-06-13)
+
+
+### Features
+
+* **flash_picos:** auto-stop picomanager around the flash window ([2b95c4f](https://github.com/EIGSEP/pico-firmware/commit/2b95c4f185b4587c0ae0d2d3b7d4885d22c0e82d))
+* **flash_picos:** default to GPIO mass-BOOTSEL flash flow with --no-gpio fallback ([032d11b](https://github.com/EIGSEP/pico-firmware/commit/032d11b7d62cd248b0965355694aa2d06fc3cb5a))
+* **motor:** report random per-boot boot_id in status ([39a8fc2](https://github.com/EIGSEP/pico-firmware/commit/39a8fc2de92c768cc29caaa3935e9ce0d1b845b2))
+* **picohost:** add gpio module for mass BOOTSEL entry and reset ([866b6e3](https://github.com/EIGSEP/pico-firmware/commit/866b6e3e182feb89bea4d00f6c327b87bc470350))
+* **picohost:** add manager_service systemctl wrapper for picomanager ([b7af7b6](https://github.com/EIGSEP/pico-firmware/commit/b7af7b6bb29b605cac8607bdec27dfe861f66e2f))
+* **picohost:** add pico-gpio CLI (bootsel/reset subcommands) ([426ec84](https://github.com/EIGSEP/pico-firmware/commit/426ec84b3c531f1a0173480dea6ac4f449fccc5e))
+* **picohost:** declare gpiozero runtime dependency ([#101](https://github.com/EIGSEP/pico-firmware/issues/101)) ([cdfe2df](https://github.com/EIGSEP/pico-firmware/commit/cdfe2df4a5bc10731ffd62053b48baba55bab42b))
+* **picohost:** persist motor position and re-seed after pico reboot ([85a6c60](https://github.com/EIGSEP/pico-firmware/commit/85a6c60210d5a8c35528ca8478a17464c7f3687f))
+* **picohost:** rename systemd unit to picomanager.service ([74241c6](https://github.com/EIGSEP/pico-firmware/commit/74241c6c585900cc444a304c1d0bb6a4cb01d2f1))
+* **tempctrl:** add runaway trip + sensor rate-sanity guards ([ae8095b](https://github.com/EIGSEP/pico-firmware/commit/ae8095bee6bfff82365733f83d5d36f7a4b54f92))
+* **tempctrl:** add scratchpad CRC guard and two-to-anchor sensor seed ([af25994](https://github.com/EIGSEP/pico-firmware/commit/af2599403b8a40e2c217f6d6b82544d514e39c76))
+* **tempctrl:** lower default drive clamp from 0.6 to 0.2 ([#107](https://github.com/EIGSEP/pico-firmware/issues/107)) ([57728b3](https://github.com/EIGSEP/pico-firmware/commit/57728b3c36b8b6650af035405324acad36b3d3e2))
+
+
+### Bug Fixes
+
+* **flash_picos:** read back device-info in flash-picos ([3d32557](https://github.com/EIGSEP/pico-firmware/commit/3d32557c0778eaf31d511294b264bd8c81133220))
+* **flash_picos:** reboot into BOOTSEL, then load ([d138141](https://github.com/EIGSEP/pico-firmware/commit/d1381415e023aba5b02dc60c0a4c7b302340dfec))
+* **flash_test:** prefer --bus/--address over --ser in auto-discovery ([d00aa7e](https://github.com/EIGSEP/pico-firmware/commit/d00aa7ea2704361577355c2c520ba4df6e68f254))
+* **flash_test:** recognize RP2350 BOOTSEL PID 000f (was RP2040 0003) ([0199563](https://github.com/EIGSEP/pico-firmware/commit/0199563426100d70d1d352a45710034fc6a95c59))
+* **picohost:** make pyserial-mock an optional lazy import ([#112](https://github.com/EIGSEP/pico-firmware/issues/112)) ([c98ab96](https://github.com/EIGSEP/pico-firmware/commit/c98ab963864e56e5dd8cb2f7e8f6afdf405497d0))
+* **picohost:** retry flash step and settle between Picos for BOOTSEL re-enumeration races ([1d9bff0](https://github.com/EIGSEP/pico-firmware/commit/1d9bff090fda51c03a122176ae538f8c379f20bc))
+* **tempctrl:** make sensor-sanity latch sticky until host ack ([f783cef](https://github.com/EIGSEP/pico-firmware/commit/f783cef933096fb3b7b1c2c8e10e21bd3d97e516))
+
 ## [3.6.0](https://github.com/EIGSEP/pico-firmware/compare/v3.5.0...v3.6.0) (2026-05-22)
 
 
