@@ -350,6 +350,87 @@ class TestTempCtrlProtocol:
         assert status["LNA_status"] == "error"
         assert status["LOAD_status"] == "update"
 
+    def test_thermistor_voltage_resistance_in_status(self):
+        """temp_simple.c keeps the divider voltage and thermistor resistance
+        of the last accepted ADC sample; tempctrl_status reports them per
+        channel. Both are 0 until the first conversion (temp_sensor_init)
+        and must satisfy the firmware's divider and Steinhart-Hart
+        equations afterwards."""
+        import math
+
+        from picohost.emulators.tempctrl import (
+            OP_TICKS_PER_CONVERSION,
+            THERMISTOR_FIXED_OHMS,
+            THERMISTOR_SH_A,
+            THERMISTOR_SH_B,
+            THERMISTOR_SH_C,
+            THERMISTOR_SUPPLY_VOLTS,
+        )
+
+        emu = TempCtrlEmulator()
+        status = emu.get_status()
+        for prefix in ("LNA", "LOAD"):
+            assert status[f"{prefix}_voltage"] == 0.0
+            assert status[f"{prefix}_resistance"] == 0.0
+
+        for _ in range(OP_TICKS_PER_CONVERSION):
+            emu.op()
+        status = emu.get_status()
+        for prefix, tc in (("LNA", emu.lna), ("LOAD", emu.load)):
+            r = status[f"{prefix}_resistance"]
+            v = status[f"{prefix}_voltage"]
+            # Divider inversion from temp_simple.c: R = Rfix * V/(Vsup - V)
+            assert v == pytest.approx(
+                THERMISTOR_SUPPLY_VOLTS * r / (THERMISTOR_FIXED_OHMS + r)
+            )
+            # Forward Steinhart-Hart of the reported resistance must give
+            # back the raw sample temperature.
+            log_r = math.log(r)
+            inv_kelvin = (
+                THERMISTOR_SH_A
+                + THERMISTOR_SH_B * log_r
+                + THERMISTOR_SH_C * log_r**3
+            )
+            assert 1.0 / inv_kelvin - 273.15 == pytest.approx(
+                tc.T_now, abs=1e-3
+            )
+
+    def test_voltage_resistance_track_raw_sample_not_filtered_T_now(self):
+        """temp_sensor_read() commits voltage/resistance on every
+        hardware-accepted sample; the rate-sanity guard in
+        tempctrl_update_sensor_drive only filters T_now. A rejected
+        glitch therefore shows up in *_voltage/*_resistance while
+        *_T_now holds the last good value."""
+        import math
+
+        from picohost.emulators.tempctrl import (
+            OP_TICKS_PER_CONVERSION,
+            THERMISTOR_SH_A,
+            THERMISTOR_SH_B,
+            THERMISTOR_SH_C,
+        )
+
+        emu = TempCtrlEmulator()
+        # Two conversions anchor the rate reference (two-to-anchor).
+        for _ in range(2 * OP_TICKS_PER_CONVERSION):
+            emu.op()
+        assert emu.lna.rate_ref_valid
+
+        emu.lna.inject_sensor_glitch(120.0)
+        for _ in range(OP_TICKS_PER_CONVERSION):
+            emu.op()
+        status = emu.get_status()
+        # T_now held by the rate guard...
+        assert status["LNA_T_now"] == pytest.approx(25.0)
+        # ...but voltage/resistance reflect the glitch sample.
+        log_r = math.log(status["LNA_resistance"])
+        inv_kelvin = (
+            THERMISTOR_SH_A
+            + THERMISTOR_SH_B * log_r
+            + THERMISTOR_SH_C * log_r**3
+        )
+        assert 1.0 / inv_kelvin - 273.15 == pytest.approx(120.0, abs=1e-3)
+
 
 # ---------------------------------------------------------------------------
 # IMU protocol (src/imu.c — UART RVC mode)

@@ -607,6 +607,8 @@ class PicoPeltier(PicoDevice):
 
     _PELTIER_CHANNEL_FIELDS = (
         "T_now",
+        "voltage",
+        "resistance",
         "timestamp",
         "T_target",
         "drive_level",
