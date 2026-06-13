@@ -6,7 +6,7 @@ pattern in ``eigsep_observing.corr``: each class takes an
 ``eigsep_redis.Transport`` at construction, and the concerns are
 split into the smallest stable surface per bus.
 
-Five buses here:
+Six buses here:
 
 - :class:`PicoConfigStore` — persistent single-key blob holding the
   list of picos (app id, serial port, usb serial) written once by
@@ -16,6 +16,12 @@ Five buses here:
   both pots). Written by ``calibrate-pot`` and read by
   :class:`picohost.PicoPotentiometer` at startup so a rebooted
   pot Pico picks up its cal from Redis without a local JSON file.
+- :class:`MotorPositionStore` — persistent single-key blob holding
+  the motor's last known step positions and the firmware
+  ``boot_id`` they belong to. Written by
+  :class:`picohost.PicoMotor`'s redis handler on every position
+  change and read back to re-seed the firmware step counters after
+  a pico power cycle (positions live in RAM and reset to 0).
 - :class:`PicoCmdReader` — blocking reader for the pico command
   stream. Consumed by the manager's command-relay thread.
 - :class:`PicoRespWriter` — writer for the pico response stream.
@@ -39,6 +45,7 @@ import logging
 from eigsep_redis import SingleStreamReader, SingleStreamWriter
 
 from .keys import (
+    MOTOR_POS_KEY,
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
     PICO_RESP_STREAM,
@@ -168,6 +175,90 @@ class PotCalStore:
     def clear(self):
         """Delete the stored calibration."""
         self.transport.r.delete(POT_CAL_KEY)
+
+
+class MotorPositionStore:
+    """
+    Persistent single-key store for the motor's last known position.
+
+    The value under :data:`MOTOR_POS_KEY` is a JSON object
+    ``{"az_pos": int, "el_pos": int, "boot_id": int,
+    "upload_time": ...}`` — the canonical ``upload_time`` field is
+    injected by :meth:`Transport.upload_dict` at the top level.
+
+    :class:`picohost.PicoMotor`'s redis handler uploads on every
+    position change and compares the stored ``boot_id`` against the
+    one in each firmware status packet: a mismatch means the pico
+    power-cycled (its RAM step counters reset to 0) and the stored
+    positions are pushed back down via ``az_set_pos``/``el_set_pos``.
+    The store therefore only ever holds positions paired with the
+    boot they were counted in.
+
+    This recovers the operator-defined zero across reboots; it cannot
+    detect motion that happened while unpowered (the rig being moved
+    by hand, or steps lost between the last status tick and a
+    power cut) — an absolute sensor (pot) is the only cure for that.
+    """
+
+    def __init__(self, transport):
+        self.transport = transport
+
+    def upload(self, az_pos, el_pos, boot_id):
+        """Upload the current position checkpoint.
+
+        Parameters
+        ----------
+        az_pos, el_pos : int
+            Step positions as reported by the firmware.
+        boot_id : int
+            The firmware boot id the positions were observed under.
+        """
+        self.transport.upload_dict(
+            {
+                "az_pos": int(az_pos),
+                "el_pos": int(el_pos),
+                "boot_id": int(boot_id),
+            },
+            MOTOR_POS_KEY,
+        )
+
+    def get(self):
+        """Return the stored checkpoint dict.
+
+        Returns
+        -------
+        dict or None
+            ``None`` if no checkpoint has been uploaded, or if the
+            stored JSON fails to decode or lacks integer ``az_pos`` /
+            ``el_pos`` / ``boot_id`` fields. The caller treats that
+            as "no checkpoint" — it never seeds from a blob it cannot
+            fully validate.
+        """
+        raw = self.transport.get_raw(MOTOR_POS_KEY)
+        if raw is None:
+            return None
+        try:
+            blob = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Corrupted {MOTOR_POS_KEY} in Redis ({e}); "
+                "ignoring checkpoint."
+            )
+            return None
+        try:
+            for key in ("az_pos", "el_pos", "boot_id"):
+                blob[key] = int(blob[key])
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(
+                f"Malformed {MOTOR_POS_KEY} in Redis ({e}); "
+                "ignoring checkpoint."
+            )
+            return None
+        return blob
+
+    def clear(self):
+        """Delete the stored checkpoint."""
+        self.transport.r.delete(MOTOR_POS_KEY)
 
 
 class PicoCmdReader(SingleStreamReader):

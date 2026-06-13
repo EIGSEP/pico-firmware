@@ -26,6 +26,7 @@ MOTOR_FIELDS = {
     "sensor_name",
     "status",
     "app_id",
+    "boot_id",
     "az_pos",
     "az_target_pos",
     "el_pos",

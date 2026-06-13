@@ -53,6 +53,7 @@ from .base import (
     PicoRFSwitch,
 )
 from .buses import (
+    MotorPositionStore,
     PicoClaimStore,
     PicoCmdReader,
     PicoConfigStore,
@@ -158,6 +159,7 @@ class PicoManager:
         self._metadata_writer = MetadataWriter(transport)
         self._config_store = PicoConfigStore(transport)
         self._pot_cal_store = PotCalStore(transport)
+        self._motor_pos_store = MotorPositionStore(transport)
         self._cmd_reader = PicoCmdReader(transport)
         self._resp_writer = PicoRespWriter(transport)
         self._claim_store = PicoClaimStore(transport)
@@ -257,6 +259,8 @@ class PicoManager:
             }
             if cls is PicoPotentiometer:
                 kwargs["pot_cal_store"] = self._pot_cal_store
+            elif cls is PicoMotor:
+                kwargs["motor_pos_store"] = self._motor_pos_store
             try:
                 pico = cls(port, **kwargs)
                 self.picos[name] = pico

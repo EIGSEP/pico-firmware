@@ -21,11 +21,6 @@ dependencies = [
   "numpy",
   "pyserial",
   "eigsep_redis>=2.3.0",
-  # Pi-side GPIO control. Pure-python; the pin factory backend (lgpio
-  # on the field image, via eigsep-field's [hardware.lgpio]) is
-  # supplied by the deployment, not declared here — PyPI lgpio ships
-  # no cp313 wheel, so declaring it would break eigsep-field's
-  # wheelhouse build. For tests/dev on non-Pi systems, set GPIOZERO_PIN_FACTORY=mock.
   "gpiozero>=2",
 ]
 
@@ -38,12 +33,18 @@ picohost-resolve = "picohost.resolve:main"
 pico-gpio = "picohost.gpio:main"
 
 [project.optional-dependencies]
+# Dummy devices (picohost.testing) need pyserial-mock; production installs
+# that never touch dummy devices can skip it. The import is lazy, so its
+# absence is silent until a DummyPico* device is actually connected.
+testing = [
+  "pyserial-mock>=1.0.0",
+]
 dev = [
   "ruff",
   "pytest",
   "pytest-cov",
   "pytest-timeout",
-  "pyserial-mock>=1.0.0",
+  "picohost[testing]",
   "fakeredis",
 ]
 

@@ -51,6 +51,7 @@ target_link_libraries(pico_multi
     hardware_pio
     hardware_adc
     pico_unique_id
+    pico_rand
     cjson
     eigsep_command
     hardware_i2c

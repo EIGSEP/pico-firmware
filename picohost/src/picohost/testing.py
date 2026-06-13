@@ -1,10 +1,4 @@
-import logging
 import time
-
-try:
-    import mockserial
-except ImportError:
-    logging.warning("Mockserial not found, dummy devices will not work")
 
 from .base import (
     PicoDevice,
@@ -37,6 +31,13 @@ class DummyPicoDevice(PicoDevice):
         )
 
     def connect(self):
+        try:
+            import mockserial
+        except ImportError as e:
+            raise ImportError(
+                "dummy devices need pyserial-mock: "
+                "pip install pyserial-mock (or picohost[testing])"
+            ) from e
         self.ser = mockserial.MockSerial(timeout=0.5)
         self._peer = mockserial.MockSerial(timeout=0.01)
         self.ser.add_peer(self._peer)

@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+import picohost.flash_picos as fp
 from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
@@ -672,34 +673,28 @@ class TestResolvePostFlashPort:
 
 
 class TestReadDeviceInfo:
-    """The post-flash device-info readback retries before giving up.
+    """The post-flash device-info readback is a single attempt.
 
-    After the GPIO mass reset the whole fleet re-enumerates at once, so
-    a board that flashed fine can briefly fail to yield its JSON — a
-    single timeout must not drop it.
+    Failing boards fail persistently (wrong DIP, failed boot), so a
+    board whose read fails is dropped immediately rather than retried.
     """
 
     def _patch_common(self, monkeypatch, fp):
         monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
 
-    def test_retries_then_succeeds(self, monkeypatch):
+    def test_reads_device_info(self, monkeypatch):
         import picohost.flash_picos as fp
 
         self._patch_common(monkeypatch, fp)
         monkeypatch.setattr(
             fp, "_resolve_post_flash_port", lambda s: "/dev/ttyACM0"
         )
-
-        attempts = {"n": 0}
-
-        def fake_read(port, baud, timeout):
-            attempts["n"] += 1
-            if attempts["n"] == 1:  # first read flakes
-                raise RuntimeError("Timed out waiting for JSON")
-            return {"app_id": 3}
-
-        monkeypatch.setattr(fp, "read_json_from_serial", fake_read)
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: {"app_id": 3},
+        )
 
         data = fp._read_device_info("SER_A", 115200, 1)
         assert data == {
@@ -707,9 +702,8 @@ class TestReadDeviceInfo:
             "port": "/dev/ttyACM0",
             "usb_serial": "SER_A",
         }
-        assert attempts["n"] == 2
 
-    def test_returns_none_after_exhausting_attempts(self, monkeypatch):
+    def test_returns_none_on_read_failure(self, monkeypatch):
         import picohost.flash_picos as fp
 
         self._patch_common(monkeypatch, fp)
@@ -725,57 +719,39 @@ class TestReadDeviceInfo:
 
         monkeypatch.setattr(fp, "read_json_from_serial", always_timeout)
 
-        data = fp._read_device_info("SER_A", 115200, 1, attempts=3)
+        data = fp._read_device_info("SER_A", 115200, 1)
         assert data is None
-        assert calls["n"] == 3
+        assert calls["n"] == 1  # no retry
 
-    def test_reresolves_port_each_attempt(self, monkeypatch):
-        """The port may rename across re-enumeration; resolve it fresh
-        on every attempt rather than reusing a stale path."""
+    def test_returns_none_when_port_missing(self, monkeypatch):
+        """A Pico that never re-enumerated has no port to read from."""
         import picohost.flash_picos as fp
 
         self._patch_common(monkeypatch, fp)
+        monkeypatch.setattr(fp, "_resolve_post_flash_port", lambda s: None)
 
-        ports = iter(["/dev/ttyACM0", "/dev/ttyACM4"])
-        monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda s: next(ports)
-        )
+        def fail_read(port, baud, timeout):
+            raise AssertionError("must not read without a port")
 
-        seen = []
+        monkeypatch.setattr(fp, "read_json_from_serial", fail_read)
 
-        def fake_read(port, baud, timeout):
-            seen.append(port)
-            if len(seen) == 1:
-                raise RuntimeError("Timed out waiting for JSON")
-            return {"app_id": 0}
+        assert fp._read_device_info("SER_A", 115200, 1) is None
 
-        monkeypatch.setattr(fp, "read_json_from_serial", fake_read)
-
-        data = fp._read_device_info("SER_A", 115200, 1)
-        assert seen == ["/dev/ttyACM0", "/dev/ttyACM4"]
-        assert data["port"] == "/dev/ttyACM4"
-
-    def test_gpio_flow_recovers_flaky_readback(self, _mock_gpio_flash):
-        """End-to-end: a board whose first read times out is still
-        published once the retry succeeds."""
+    def test_gpio_flow_drops_unreadable_board(self, _mock_gpio_flash):
+        """End-to-end: a board whose read times out is dropped; the
+        rest of the fleet is still published."""
         m = _mock_gpio_flash
-        attempts = {"/dev/ttyACM5": 0, "/dev/ttyACM6": 0}
 
-        def flaky_read(port, baud, timeout):
-            attempts[port] += 1
-            # SER_B's port flakes once, then yields JSON.
-            if port == "/dev/ttyACM6" and attempts[port] == 1:
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM6":  # SER_B never yields JSON
                 raise RuntimeError("Timed out waiting for JSON")
-            return {
-                "/dev/ttyACM5": {"app_id": 0},
-                "/dev/ttyACM6": {"app_id": 5},
-            }[port]
+            return {"/dev/ttyACM5": {"app_id": 0}}[port]
 
-        m.monkeypatch.setattr(m.fp, "read_json_from_serial", flaky_read)
+        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
 
         devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
 
-        assert sorted(d["usb_serial"] for d in devices) == ["SER_A", "SER_B"]
+        assert [d["usb_serial"] for d in devices] == ["SER_A"]
 
 
 class TestResolveBusAddress:
@@ -1342,6 +1318,9 @@ class TestMainRouting:
         import picohost.flash_picos as fp
         import picohost.gpio as gpio_mod
 
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
         calls = []
         monkeypatch.setattr(
             fp,
@@ -1394,6 +1373,9 @@ class TestMainRouting:
         import picohost.flash_picos as fp
         import picohost.gpio as gpio_mod
 
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
         monkeypatch.setattr(gpio_mod, "available", lambda: True)
 
         def boom(**kw):
@@ -1406,3 +1388,112 @@ class TestMainRouting:
             fp.main(["--uf2", "x.uf2", "--no-redis"])
         assert excinfo.value.code == 1
         assert "BOOTSEL" in capsys.readouterr().err
+
+
+class TestManagerAutoStop:
+    """main() stops an active picomanager around the flash window."""
+
+    def _setup(
+        self, monkeypatch, tmp_path, active, devices=None, flash_exc=None
+    ):
+        uf2 = tmp_path / "fw.uf2"
+        uf2.write_bytes(b"\x00")
+        events = []
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: active
+        )
+        monkeypatch.setattr(
+            fp.manager_service,
+            "stop_manager",
+            lambda: events.append("stop"),
+        )
+        monkeypatch.setattr(
+            fp.manager_service,
+            "start_manager",
+            lambda: events.append("start"),
+        )
+
+        def fake_flash(**kwargs):
+            events.append("flash")
+            if flash_exc is not None:
+                raise flash_exc
+            return list(devices or [])
+
+        monkeypatch.setattr(fp, "flash_and_discover", fake_flash)
+        return uf2, events
+
+    def _argv(self, uf2):
+        return ["--uf2", str(uf2), "--no-gpio", "--no-redis"]
+
+    def test_stops_then_flashes_then_restarts(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2))
+        assert events == ["stop", "flash", "start"]
+
+    def test_restarts_after_flash_failure(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            flash_exc=RuntimeError("boom"),
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert events == ["stop", "flash", "start"]
+
+    def test_restarts_when_no_devices_found(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch, tmp_path, active=True, devices=[]
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert events == ["stop", "flash", "start"]
+
+    def test_inactive_manager_left_alone(self, monkeypatch, tmp_path):
+        # The eigsep-field patch flow: the coordinator already stopped
+        # the unit; flash-picos must not restart it behind its back.
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=False,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2))
+        assert events == ["flash"]
+
+    def test_keep_manager_skips_stop(self, monkeypatch, tmp_path):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+        fp.main(self._argv(uf2) + ["--keep-manager"])
+        assert events == ["flash"]
+
+    def test_stop_failure_aborts_before_flash(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        uf2, events = self._setup(
+            monkeypatch,
+            tmp_path,
+            active=True,
+            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
+        )
+
+        def failing_stop():
+            raise RuntimeError("cannot stop")
+
+        monkeypatch.setattr(fp.manager_service, "stop_manager", failing_stop)
+        with pytest.raises(SystemExit) as excinfo:
+            fp.main(self._argv(uf2))
+        assert excinfo.value.code == 1
+        assert "cannot stop" in capsys.readouterr().err
+        assert events == []

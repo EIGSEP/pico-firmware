@@ -11,6 +11,7 @@ from eigsep_redis import Transport
 from serial import Serial
 from serial.tools import list_ports
 
+from . import manager_service
 from .buses import PicoConfigStore
 from .keys import PICO_CONFIG_KEY
 
@@ -341,11 +342,6 @@ _INTER_DEVICE_SETTLE_S = 1.0
 # the bus settle before reading any device so a board's first status
 # lines aren't lost to enumeration churn.
 _POST_RESET_SETTLE_S = 2.0
-# The device-info readback (resolve CDC port + read one JSON line) can
-# flake when several Picos re-enumerate together — retry before giving
-# up, since the flash itself already succeeded.
-_READBACK_MAX_ATTEMPTS = 3
-_READBACK_RETRY_BACKOFF_S = 1.0
 # After the GPIO mass reset, wait for the whole flashed fleet to
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
@@ -418,79 +414,51 @@ def _resolve_post_flash_port(
     return None
 
 
-def _read_cdc_port(
-    port,
-    usb_serial,
-    baud,
-    timeout,
-    attempts=_READBACK_MAX_ATTEMPTS,
-    backoff=_READBACK_RETRY_BACKOFF_S,
-):
-    """Read one device-info JSON line from CDC *port*, with retries.
+def _read_cdc_port(port, usb_serial, baud, timeout):
+    """Read one device-info JSON line from CDC *port*.
 
     Returns the device-info dict (with ``port``/``usb_serial`` added),
-    or ``None`` once *attempts* are exhausted. The read is retried
-    because, especially after the GPIO mass reset, several Picos
-    re-enumerate together: a board can be briefly busy or slow to start
-    emitting its 200 ms status, so a single timeout drops a Pico that in
-    fact flashed fine. On each retry the port is re-resolved from
-    *usb_serial* (when known) in case the kernel renamed it.
+    or ``None`` on failure. A single attempt is enough: the post-flash
+    re-enumeration races are absorbed before this point (fleet CDC
+    discovery and bus settle on the GPIO path, port re-resolution on
+    the USB path, udev settle here) and the read itself waits up to
+    *timeout* seconds for a status line the firmware emits every
+    200 ms — a board that still says nothing is persistently broken
+    (wrong DIP, failed boot), not transiently busy.
     """
-    last_err = None
-    for attempt in range(1, attempts + 1):
-        if port is None:
-            last_err = (
-                f"no CDC port for serial={usb_serial} "
-                f"(did not re-enumerate within {_REENUMERATE_TIMEOUT_S}s)"
-            )
-        else:
-            _udev_settle()
-            try:
-                data = read_json_from_serial(port, baud, timeout)
-                data["port"] = port
-                data["usb_serial"] = usb_serial
-                return data
-            except (RuntimeError, OSError) as e:
-                last_err = str(e)
-        if attempt < attempts:
-            logger.warning(
-                "device-info read for serial=%s on %s failed (attempt "
-                "%d/%d): %s; retrying",
-                usb_serial,
-                port,
-                attempt,
-                attempts,
-                last_err,
-            )
-            time.sleep(backoff)
-            if usb_serial is not None:
-                port = _resolve_post_flash_port(usb_serial)
-    logger.error(
-        "could not read device info for serial=%s on %s after %d "
-        "attempts: %s (it flashed — re-run flash-picos, or check the "
-        "board's DIP/app if it never reports)",
-        usb_serial,
-        port,
-        attempts,
-        last_err,
-    )
-    return None
+    if port is None:
+        logger.error(
+            "no CDC port for serial=%s (did not re-enumerate within %.0fs)",
+            usb_serial,
+            _REENUMERATE_TIMEOUT_S,
+        )
+        return None
+    _udev_settle()
+    try:
+        data = read_json_from_serial(port, baud, timeout)
+    except (RuntimeError, OSError) as e:
+        logger.error(
+            "could not read device info for serial=%s on %s: %s (it "
+            "flashed — re-run flash-picos, or check the board's DIP/app "
+            "if it never reports)",
+            usb_serial,
+            port,
+            e,
+        )
+        return None
+    data["port"] = port
+    data["usb_serial"] = usb_serial
+    return data
 
 
-def _read_device_info(
-    usb_serial,
-    baud,
-    timeout,
-    attempts=_READBACK_MAX_ATTEMPTS,
-    backoff=_READBACK_RETRY_BACKOFF_S,
-):
+def _read_device_info(usb_serial, baud, timeout):
     """Resolve the post-flash CDC port for *usb_serial* and read its JSON.
 
     Used by the USB per-device path, which already knows each Pico by
     its (stable) CDC serial.
     """
     port = _resolve_post_flash_port(usb_serial)
-    return _read_cdc_port(port, usb_serial, baud, timeout, attempts, backoff)
+    return _read_cdc_port(port, usb_serial, baud, timeout)
 
 
 def _read_fleet_cdc(expected, baud, timeout):
@@ -598,8 +566,7 @@ def flash_and_discover(
         # picotool load reboots the Pico, which re-enumerates as a
         # CDC device. _read_device_info resolves the current path from
         # the stable usb_serial (the kernel may assign a different
-        # /dev/ttyACMn than it had pre-flash) and reads its JSON, with
-        # retries.
+        # /dev/ttyACMn than it had pre-flash) and reads its JSON.
         data = _read_device_info(port_serial, baud, timeout)
         if data is not None:
             all_devices.append(data)
@@ -836,6 +803,19 @@ def main(argv=None):
             "without the bussed BOOTSEL/RUN wiring."
         ),
     )
+    p.add_argument(
+        "--keep-manager",
+        action="store_true",
+        help=(
+            "Do not stop an active picomanager.service before "
+            "flashing. By default flash-picos stops the manager (it "
+            "owns every Pico's serial port and its reconnect loop "
+            "corrupts the post-flash readback) and restarts it after "
+            "the flash. Only the active unit is touched, so under "
+            "`eigsep-field patch` — which stops the unit itself — "
+            "the default is already a no-op."
+        ),
+    )
     args = p.parse_args(argv)
 
     logging.basicConfig(
@@ -864,49 +844,75 @@ def main(argv=None):
             )
             sys.exit(1)
 
-    try:
-        if use_gpio:
-            all_devices = flash_and_discover_gpio(
-                uf2_path=args.uf2,
-                baud=args.baud,
-                timeout=args.timeout,
-            )
-        else:
-            all_devices = flash_and_discover(
-                uf2_path=args.uf2,
-                port=args.port,
-                usb_serial=args.usb_serial,
-                baud=args.baud,
-                timeout=args.timeout,
-            )
-    except (FileNotFoundError, RuntimeError) as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
-
-    if not all_devices:
-        print("No devices discovered.", file=sys.stderr)
-        sys.exit(1)
-
-    if not args.no_redis:
+    stopped_manager = False
+    if not args.keep_manager and manager_service.manager_is_active():
+        logger.info(
+            "%s is active and owns the Pico serial ports; stopping "
+            "it for the flash (it will be restarted afterwards)",
+            manager_service.MANAGER_UNIT,
+        )
         try:
-            _publish_to_redis(all_devices, args.redis_host, args.redis_port)
-            print(
-                f"Published {len(all_devices)} device(s) to Redis at "
-                f"{args.redis_host}:{args.redis_port} "
-                f"(key: {PICO_CONFIG_KEY})."
-            )
-        except Exception as e:
-            print(
-                f"Redis publication failed: {e}\n"
-                "Re-run with --no-redis (and optionally --output-file) if "
-                "Redis is not available.",
-                file=sys.stderr,
-            )
+            manager_service.stop_manager()
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        stopped_manager = True
 
-    if args.output_file:
-        with open(args.output_file, "w") as f:
-            json.dump(all_devices, f, indent=2)
-        print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
+    try:
+        try:
+            if use_gpio:
+                all_devices = flash_and_discover_gpio(
+                    uf2_path=args.uf2,
+                    baud=args.baud,
+                    timeout=args.timeout,
+                )
+            else:
+                all_devices = flash_and_discover(
+                    uf2_path=args.uf2,
+                    port=args.port,
+                    usb_serial=args.usb_serial,
+                    baud=args.baud,
+                    timeout=args.timeout,
+                )
+        except (FileNotFoundError, RuntimeError) as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+
+        if not all_devices:
+            print("No devices discovered.", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.no_redis:
+            try:
+                _publish_to_redis(
+                    all_devices, args.redis_host, args.redis_port
+                )
+                print(
+                    f"Published {len(all_devices)} device(s) to Redis at "
+                    f"{args.redis_host}:{args.redis_port} "
+                    f"(key: {PICO_CONFIG_KEY})."
+                )
+            except Exception as e:
+                print(
+                    f"Redis publication failed: {e}\n"
+                    "Re-run with --no-redis (and optionally "
+                    "--output-file) if Redis is not available.",
+                    file=sys.stderr,
+                )
+
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                json.dump(all_devices, f, indent=2)
+            print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
+    finally:
+        # Restart ONLY if we stopped it: under `eigsep-field patch`
+        # the unit is already stopped by the coordinator, which must
+        # write its ExecStart drop-in and daemon-reload BEFORE the
+        # unit starts again. The finally also runs on sys.exit() so
+        # the manager comes back even when the flash fails — same
+        # best-effort restore eigsep-field's patch flow does.
+        if stopped_manager:
+            manager_service.start_manager()
 
 
 if __name__ == "__main__":
