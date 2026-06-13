@@ -11,7 +11,7 @@
 #define THERMISTOR_SAMPLE_INTERVAL_MS 250
 #define THERMISTOR_ADC_MAX_COUNTS     4095.0f
 #define THERMISTOR_SUPPLY_VOLTS       3.3f
-#define THERMISTOR_FIXED_OHMS         3000000.0f
+#define THERMISTOR_FIXED_OHMS         11700.0f
 
 // Steinhart-Hart coefficients for resistance in ohms:
 // 94582.0 ohms at 0 C, 16062.4 ohms at 40 C, 5351.9 ohms at 70 C.

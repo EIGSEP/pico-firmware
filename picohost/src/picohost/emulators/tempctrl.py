@@ -19,7 +19,7 @@ THERMAL_DRIFT_PER_OP = 0.05
 # Thermistor divider constants, mirroring temp_simple.h: fixed resistor
 # from 3V3 to the ADC node, thermistor from the node to AGND.
 THERMISTOR_SUPPLY_VOLTS = 3.3
-THERMISTOR_FIXED_OHMS = 3000000.0
+THERMISTOR_FIXED_OHMS = 11700.0
 THERMISTOR_SH_A = 9.0644878e-4
 THERMISTOR_SH_B = 2.2545838e-4
 THERMISTOR_SH_C = 1.1397637e-7

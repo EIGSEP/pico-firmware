@@ -165,7 +165,7 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
 Two independent Peltier control channels, each with an ADC thermistor voltage
-divider and an H-bridge motor driver. Each thermistor node uses a 3 Mohm fixed
+divider and an H-bridge motor driver. Each thermistor node uses an 11.7k fixed
 resistor from 3V3 to the ADC pin, and the thermistor from the ADC pin to AGND.
 
 | Channel | Thermistor GPIO | ADC | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO |
