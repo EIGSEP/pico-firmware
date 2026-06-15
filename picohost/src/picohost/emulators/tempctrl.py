@@ -1,3 +1,4 @@
+import math
 import time
 
 from .base import PicoEmulator, _safe_int
@@ -14,6 +15,32 @@ DT_PER_PI_TICK_S = 0.75
 # held between PI ticks (mirrors continuous PWM), so the per-op rate is
 # what determines convergence speed, independent of PI cadence.
 THERMAL_DRIFT_PER_OP = 0.05
+
+# Thermistor divider constants, mirroring temp_simple.h.
+THERMISTOR_SUPPLY_VOLTS = 3.3
+THERMISTOR_FIXED_OHMS = 10680.0
+THERMISTOR_SH_A = 9.2463455e-4
+THERMISTOR_SH_B = 2.2246310e-4
+THERMISTOR_SH_C = 1.2326590e-7
+
+
+def _thermistor_resistance(temp_c):
+    """Invert the firmware's Steinhart-Hart fit: temperature -> ohms."""
+    inv_kelvin = 1.0 / (temp_c + 273.15)
+    y = (THERMISTOR_SH_A - inv_kelvin) / THERMISTOR_SH_C
+    z = math.sqrt(
+        (THERMISTOR_SH_B / (3.0 * THERMISTOR_SH_C)) ** 3 + (y / 2.0) ** 2
+    )
+    log_r = (z - y / 2.0) ** (1.0 / 3.0) - (z + y / 2.0) ** (1.0 / 3.0)
+    return math.exp(log_r)
+
+
+def _thermistor_voltage(resistance):
+    return (
+        THERMISTOR_SUPPLY_VOLTS
+        * resistance
+        / (THERMISTOR_FIXED_OHMS + resistance)
+    )
 
 
 def _coerce_float(val):
@@ -37,6 +64,8 @@ class TempControlState:
     def __init__(self):
         self.T_now = 25.0
         self.T_target = 30.0
+        self.voltage = 0.0
+        self.resistance = 0.0
         self.drive = 0.0
         self.Kp = 0.2
         self.Ki = 0.0
@@ -311,6 +340,8 @@ class TempCtrlEmulator(PicoEmulator):
         if tc._sensor_error:
             return
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
+        tc.resistance = _thermistor_resistance(raw)
+        tc.voltage = _thermistor_voltage(tc.resistance)
         if not tc.rate_ref_valid:
             if not tc.seed_pending:
                 # First sample: hold as candidate, await confirmation.
@@ -451,6 +482,8 @@ class TempCtrlEmulator(PicoEmulator):
             "watchdog_timeout_ms": self.watchdog_timeout_ms,
             "LNA_status": lna_status,
             "LNA_T_now": self.lna.T_now,
+            "LNA_voltage": self.lna.voltage,
+            "LNA_resistance": self.lna.resistance,
             "LNA_timestamp": self.lna.timestamp,
             "LNA_T_target": self.lna.T_target,
             "LNA_drive_level": self.lna.drive,
@@ -466,6 +499,8 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_integral": self.lna.integral,
             "LOAD_status": load_status,
             "LOAD_T_now": self.load.T_now,
+            "LOAD_voltage": self.load.voltage,
+            "LOAD_resistance": self.load.resistance,
             "LOAD_timestamp": self.load.timestamp,
             "LOAD_T_target": self.load.T_target,
             "LOAD_drive_level": self.load.drive,

@@ -906,6 +906,8 @@ class TestPicoPeltierRedisHandler:
         "watchdog_timeout_ms": 30000,
         "LNA_status": "update",
         "LNA_T_now": 25.4,
+        "LNA_voltage": 2.51,
+        "LNA_resistance": 37200.0,
         "LNA_timestamp": 750.0,
         "LNA_T_target": 25.0,
         "LNA_drive_level": 0.42,
@@ -921,6 +923,8 @@ class TestPicoPeltierRedisHandler:
         "LNA_integral": 1.25,
         "LOAD_status": "error",
         "LOAD_T_now": None,
+        "LOAD_voltage": 0.0,
+        "LOAD_resistance": 0.0,
         "LOAD_timestamp": 750.0,
         "LOAD_T_target": 25.0,
         "LOAD_drive_level": 0.0,
@@ -943,6 +947,8 @@ class TestPicoPeltierRedisHandler:
         "watchdog_tripped",
         "watchdog_timeout_ms",
         "T_now",
+        "voltage",
+        "resistance",
         "timestamp",
         "T_target",
         "drive_level",
@@ -990,6 +996,8 @@ class TestPicoPeltierRedisHandler:
         try:
             lna, load = self._capture_all(peltier, self._SAMPLE)
             assert lna["T_now"] == pytest.approx(25.4)
+            assert lna["voltage"] == pytest.approx(2.51)
+            assert lna["resistance"] == pytest.approx(37200.0)
             assert lna["drive_level"] == pytest.approx(0.42)
             assert lna["active"] is True
             assert lna["int_disabled"] is False

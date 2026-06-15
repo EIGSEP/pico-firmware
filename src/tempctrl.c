@@ -182,16 +182,18 @@ void tempctrl_status(uint8_t app_id) {
     const char *status_lna = tempctrl_lna.internally_disabled ? "error" : "update";
     const char *status_load = tempctrl_load.internally_disabled ? "error" : "update";
 
-    /* 34 KV pairs: 4 device-wide + 15 per channel * 2 channels. send_json
+    /* 38 KV pairs: 4 device-wide + 17 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(34,
+    send_json(38,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
         KV_INT, "watchdog_timeout_ms", (int)watchdog_timeout_ms,
         KV_STR, "LNA_status", status_lna,
         KV_FLOAT, "LNA_T_now", tempctrl_lna.T_now,
+        KV_FLOAT, "LNA_voltage", tempctrl_lna.temp_sensor.voltage,
+        KV_FLOAT, "LNA_resistance", tempctrl_lna.temp_sensor.resistance,
         KV_FLOAT, "LNA_timestamp", (double)time_lna,
         KV_FLOAT, "LNA_T_target", tempctrl_lna.T_target,
         KV_FLOAT, "LNA_drive_level", tempctrl_lna.drive,
@@ -207,6 +209,8 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LNA_integral", tempctrl_lna.integral,
         KV_STR, "LOAD_status", status_load,
         KV_FLOAT, "LOAD_T_now", tempctrl_load.T_now,
+        KV_FLOAT, "LOAD_voltage", tempctrl_load.temp_sensor.voltage,
+        KV_FLOAT, "LOAD_resistance", tempctrl_load.temp_sensor.resistance,
         KV_FLOAT, "LOAD_timestamp", (double)time_load,
         KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
         KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
@@ -229,10 +233,10 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         temp_sensor_start_conversion(&tempctrl->temp_sensor);
     }
 
-    // Attempt a read. `fresh` is true only on the tick a new DS18B20
+    // Attempt a read. `fresh` is true only on the tick a new sensor
     // value was just decoded — gating the PI integrator on this prevents
     // it from accumulating ~15x per real sample (op() runs every ~50ms,
-    // conversions complete every ~750ms).
+    // samples complete every ~750ms).
     bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
     bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
 
