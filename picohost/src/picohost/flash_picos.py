@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import errno
 import json
 import logging
 import subprocess
@@ -414,6 +415,64 @@ def _resolve_post_flash_port(
     return None
 
 
+def _classify_read_failure(exc):
+    """Map a readback exception to a short, operator-facing verdict.
+
+    Distinguishes the stages an operator must tell apart when a board
+    drops out of the device count: the port opened but the firmware
+    stayed silent (a :class:`RuntimeError` timeout from
+    :func:`read_json_from_serial`), a permission race on the freshly
+    created node (``EACCES``), the port being held by another process
+    (``EBUSY`` — ModemManager probing the new CDC device, or a stray
+    PicoManager), or any other open/read error. ``pyserial`` sets
+    ``errno`` on its :class:`~serial.SerialException` (an ``OSError``
+    subclass); fall back to scanning the message when it does not.
+    """
+    if isinstance(exc, RuntimeError):
+        return (
+            "port opened but no JSON before timeout (silent firmware "
+            "or wrong DIP switch?)"
+        )
+    code = getattr(exc, "errno", None)
+    text = str(exc)
+    if code == errno.EACCES or "Permission denied" in text:
+        return (
+            "permission denied opening port (EACCES — udev mode race, "
+            "or the user is not in the dialout group)"
+        )
+    if code == errno.EBUSY or "resource busy" in text.lower():
+        return (
+            "port busy (EBUSY — held by another process, e.g. "
+            "ModemManager probing the new CDC port, or a stray "
+            "PicoManager)"
+        )
+    return f"error opening/reading port: {exc}"
+
+
+def _read_cdc_outcome(port, usb_serial, baud, timeout):
+    """Attempt one device-info read; return ``(data_or_None, reason)``.
+
+    ``reason`` is ``None`` on success, otherwise a short verdict (from
+    :func:`_classify_read_failure`, or a no-port message) that
+    :func:`_read_fleet_cdc` reconciles into a per-serial report. Keeping
+    the classification here — rather than only logging the raw exception
+    in :func:`_read_cdc_port` — lets the fleet path attribute *why* each
+    board dropped without re-parsing a log line.
+    """
+    if port is None:
+        return None, (
+            f"did not re-enumerate as CDC within {_REENUMERATE_TIMEOUT_S:.0f}s"
+        )
+    _udev_settle()
+    try:
+        data = read_json_from_serial(port, baud, timeout)
+    except (RuntimeError, OSError) as e:
+        return None, _classify_read_failure(e)
+    data["port"] = port
+    data["usb_serial"] = usb_serial
+    return data, None
+
+
 def _read_cdc_port(port, usb_serial, baud, timeout):
     """Read one device-info JSON line from CDC *port*.
 
@@ -426,28 +485,19 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     200 ms — a board that still says nothing is persistently broken
     (wrong DIP, failed boot), not transiently busy.
     """
-    if port is None:
-        logger.error(
-            "no CDC port for serial=%s (did not re-enumerate within %.0fs)",
-            usb_serial,
-            _REENUMERATE_TIMEOUT_S,
-        )
-        return None
-    _udev_settle()
-    try:
-        data = read_json_from_serial(port, baud, timeout)
-    except (RuntimeError, OSError) as e:
-        logger.error(
-            "could not read device info for serial=%s on %s: %s (it "
-            "flashed — re-run flash-picos, or check the board's DIP/app "
-            "if it never reports)",
-            usb_serial,
-            port,
-            e,
-        )
-        return None
-    data["port"] = port
-    data["usb_serial"] = usb_serial
+    data, reason = _read_cdc_outcome(port, usb_serial, baud, timeout)
+    if data is None:
+        if port is None:
+            logger.error("no CDC port for serial=%s (%s)", usb_serial, reason)
+        else:
+            logger.error(
+                "could not read device info for serial=%s on %s: %s (it "
+                "flashed — re-run flash-picos, or check the board's DIP/app "
+                "if it never reports)",
+                usb_serial,
+                port,
+                reason,
+            )
     return data
 
 
@@ -461,7 +511,7 @@ def _read_device_info(usb_serial, baud, timeout):
     return _read_cdc_port(port, usb_serial, baud, timeout)
 
 
-def _read_fleet_cdc(expected, baud, timeout):
+def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
     """Read device-info JSON from every Pico now in CDC mode.
 
     Polls :func:`find_pico_ports` until at least *expected* Picos have
@@ -472,6 +522,12 @@ def _read_fleet_cdc(expected, baud, timeout):
     would leave it flashed but unreported. Keying off the CDC serial —
     the same identity ``find_pico_ports`` and PicoManager use — reports
     every Pico that actually booted into firmware.
+
+    *expected_serials*, when given, is the set of board serials that were
+    flashed and should report back; it drives a per-serial reconciliation
+    report (see :func:`_log_readback_reconciliation`) so a short device
+    count is attributable to a specific board and failure stage instead
+    of being silently swallowed.
     """
     deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
     ports = find_pico_ports()
@@ -486,12 +542,78 @@ def _read_fleet_cdc(expected, baud, timeout):
             _CDC_DISCOVER_TIMEOUT_S,
         )
     all_devices = []
+    outcomes = {}
     for port, serial in sorted(ports.items()):
-        data = _read_cdc_port(port, serial, baud, timeout)
+        data, reason = _read_cdc_outcome(port, serial, baud, timeout)
+        outcomes[serial] = reason
         if data is not None:
             all_devices.append(data)
             logger.info("Read device info from %s (serial=%s)", port, serial)
+    _log_readback_reconciliation(
+        expected_serials, set(ports.values()), outcomes
+    )
     return all_devices
+
+
+def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
+    """Log a per-serial verdict reconciling flashed vs. reported boards.
+
+    *expected_serials* is the set of board serials that were flashed and
+    should report device info; *present_serials* is the set that
+    re-enumerated as CDC; *outcomes* maps each read-attempted serial to
+    ``None`` (read succeeded) or a failure reason from
+    :func:`_classify_read_failure`.
+
+    For every expected board that did not report, emits one line saying
+    whether it never re-enumerated or opened-but-failed (and why) — the
+    "which board, and at which stage" detail that turns an inconsistent
+    device count into an actionable diagnosis. Boards that reported but
+    were not in the flashed set (e.g. a board whose BOOTSEL serial
+    differed from its CDC serial) are named too. With no baseline
+    (*expected_serials* is ``None``), falls back to logging any
+    present-but-failed read.
+    """
+    if expected_serials is None:
+        for serial, reason in sorted(outcomes.items()):
+            if reason is not None:
+                logger.error(
+                    "could not read device info for serial=%s: %s",
+                    serial,
+                    reason,
+                )
+        return
+
+    expected = set(expected_serials)
+    reported = {s for s, reason in outcomes.items() if reason is None}
+    ok = expected & reported
+    unexpected = reported - expected
+    if ok == expected and not unexpected:
+        logger.info(
+            "device-info readback: all %d flashed Pico(s) reported",
+            len(expected),
+        )
+        return
+
+    logger.warning(
+        "device-info readback: %d of %d flashed Pico(s) reported device info",
+        len(ok),
+        len(expected),
+    )
+    for serial in sorted(expected - reported):
+        if serial in present_serials:
+            reason = outcomes.get(serial) or "read failed"
+        else:
+            reason = (
+                f"did not re-enumerate as CDC within "
+                f"{_CDC_DISCOVER_TIMEOUT_S:.0f}s"
+            )
+        logger.error("  serial=%s NOT reported: %s", serial, reason)
+    for serial in sorted(unexpected):
+        logger.warning(
+            "  serial=%s reported but was not in the flashed set "
+            "(BOOTSEL/CDC serial mismatch, or an unexpected board)",
+            serial,
+        )
 
 
 def flash_and_discover(
@@ -695,7 +817,12 @@ def flash_and_discover_gpio(
     # serial differed or was absent is still reported.
     gpio.reset()
     time.sleep(_POST_RESET_SETTLE_S)
-    all_devices = _read_fleet_cdc(len(flashed), baud, timeout)
+    all_devices = _read_fleet_cdc(
+        len(flashed),
+        baud,
+        timeout,
+        expected_serials={d["usb_serial"] for d in flashed if d["usb_serial"]},
+    )
 
     # Surface any board that did not take the flash: after the reset it
     # has no valid image and drops straight back into BOOTSEL.

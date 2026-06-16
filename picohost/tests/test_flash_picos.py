@@ -1,11 +1,15 @@
 """Tests for picohost.flash_picos.flash_and_discover."""
 
+import errno
+import logging
 import types
 
 import pytest
 
 import picohost.flash_picos as fp
 from picohost.flash_picos import (
+    _classify_read_failure,
+    _log_readback_reconciliation,
     _resolve_post_flash_port,
     flash_and_discover,
 )
@@ -1304,6 +1308,48 @@ class TestFlashAndDiscoverGpio:
         devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
 
+    def test_reconciliation_confirms_all_reported(
+        self, _mock_gpio_flash, caplog
+    ):
+        # Happy path: the readback report confirms every flashed board
+        # reported, so an operator can trust the count at a glance.
+        m = _mock_gpio_flash
+        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
+            m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert "all 2 flashed Pico(s) reported" in caplog.text
+
+    def test_reconciliation_names_silent_board(self, _mock_gpio_flash, caplog):
+        # SER_B re-enumerates but never emits JSON: the report must name
+        # it and attribute the stage (opened-but-silent), not just drop
+        # the count.
+        m = _mock_gpio_flash
+
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM6":  # SER_B
+                raise RuntimeError("Timed out waiting for JSON")
+            return m.reads[port]
+
+        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert "1 of 2 flashed Pico(s) reported" in caplog.text
+        assert "serial=SER_B NOT reported" in caplog.text
+        assert "no JSON before timeout" in caplog.text
+
+    def test_reconciliation_names_board_that_never_reenumerated(
+        self, _mock_gpio_flash, caplog
+    ):
+        # A board that flashed but never came back as CDC is attributed
+        # to the re-enumeration stage, distinct from a silent firmware.
+        m = _mock_gpio_flash
+        m.bootsel.append({"usb_serial": "SER_D", "bus": 1, "address": 52})
+        # SER_D loads fine but is absent from post-reset CDC. Keep the
+        # CDC-discovery wait from spinning on the wall clock until the
+        # real 15s timeout.
+        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.01)
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert "serial=SER_D NOT reported" in caplog.text
+        assert "did not re-enumerate as CDC" in caplog.text
+
     def test_missing_uf2_raises_before_any_gpio_action(
         self, _mock_gpio_flash, tmp_path
     ):
@@ -1311,6 +1357,75 @@ class TestFlashAndDiscoverGpio:
         with pytest.raises(FileNotFoundError, match="UF2 file not found"):
             m.fp.flash_and_discover_gpio(uf2_path=tmp_path / "nonexistent.uf2")
         assert m.events == []
+
+
+class TestClassifyReadFailure:
+    def test_runtime_timeout_is_silent_firmware(self):
+        reason = _classify_read_failure(
+            RuntimeError("[/dev/ttyACM0] Timed out waiting for JSON")
+        )
+        assert "no JSON before timeout" in reason
+
+    def test_eacces_by_errno(self):
+        reason = _classify_read_failure(
+            OSError(errno.EACCES, "Permission denied")
+        )
+        assert "EACCES" in reason
+
+    def test_ebusy_by_errno(self):
+        reason = _classify_read_failure(
+            OSError(errno.EBUSY, "Device or resource busy")
+        )
+        assert "EBUSY" in reason
+
+    def test_eacces_by_message_when_errno_absent(self):
+        # pyserial's SerialException does not always carry errno; fall
+        # back to the message text.
+        reason = _classify_read_failure(
+            OSError("could not open port /dev/ttyACM0: Permission denied")
+        )
+        assert "EACCES" in reason
+
+    def test_other_oserror_is_verbatim(self):
+        reason = _classify_read_failure(OSError("some other failure"))
+        assert "some other failure" in reason
+
+
+class TestLogReadbackReconciliation:
+    def _reasons(self, caplog):
+        return caplog.text
+
+    def test_all_reported_logs_confirmation(self, caplog):
+        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
+            _log_readback_reconciliation(
+                {"A", "B"}, {"A", "B"}, {"A": None, "B": None}
+            )
+        assert "all 2 flashed Pico(s) reported" in caplog.text
+
+    def test_board_absent_from_cdc_attributed_to_reenumeration(self, caplog):
+        _log_readback_reconciliation({"A", "B"}, {"A"}, {"A": None})
+        assert "serial=B NOT reported" in caplog.text
+        assert "did not re-enumerate as CDC" in caplog.text
+
+    def test_present_but_failed_carries_its_reason(self, caplog):
+        _log_readback_reconciliation(
+            {"A", "B"}, {"A", "B"}, {"A": None, "B": "port busy (EBUSY ...)"}
+        )
+        assert "serial=B NOT reported: port busy (EBUSY" in caplog.text
+
+    def test_unexpected_serial_is_named(self, caplog):
+        _log_readback_reconciliation({"A"}, {"A", "X"}, {"A": None, "X": None})
+        assert (
+            "serial=X reported but was not in the flashed set" in caplog.text
+        )
+
+    def test_none_baseline_falls_back_to_failure_logs(self, caplog):
+        # Without a flashed-serial baseline, still surface read failures.
+        _log_readback_reconciliation(
+            None, {"A"}, {"A": "permission denied opening port (EACCES ...)"}
+        )
+        assert "could not read device info for serial=A" in caplog.text
+        assert "EACCES" in caplog.text
 
 
 class TestMainRouting:
