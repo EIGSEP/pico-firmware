@@ -1151,6 +1151,13 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(fp.time, "sleep", lambda _: None)
 
+    # Straggler recovery re-flashes mute boards one at a time; record the
+    # serials it re-flashes (success by default).
+    recovery_flashes = []
+    monkeypatch.setattr(
+        fp, "flash_uf2", lambda path, serial: recovery_flashes.append(serial)
+    )
+
     return types.SimpleNamespace(
         uf2=uf2,
         events=events,
@@ -1160,6 +1167,7 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
         post_cdc=post_cdc,
         reads=reads,
         stuck=stuck,
+        recovery_flashes=recovery_flashes,
         fp=fp,
         monkeypatch=monkeypatch,
     )
@@ -1319,8 +1327,8 @@ class TestFlashAndDiscoverGpio:
         assert "all 2 flashed Pico(s) reported" in caplog.text
 
     def test_reconciliation_names_silent_board(self, _mock_gpio_flash, caplog):
-        # SER_B re-enumerates but never emits JSON: the report must name
-        # it and attribute the stage (opened-but-silent), not just drop
+        # SER_B re-enumerates but never emits JSON, even after the
+        # straggler re-flash: the report must name it, not silently drop
         # the count.
         m = _mock_gpio_flash
 
@@ -1333,35 +1341,22 @@ class TestFlashAndDiscoverGpio:
         m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         assert "1 of 2 flashed Pico(s) reported" in caplog.text
         assert "serial=SER_B NOT reported" in caplog.text
-        assert "no JSON before timeout" in caplog.text
+        assert "re-flashed but still did not report" in caplog.text
 
-    def test_reconciliation_names_board_that_never_reenumerated(
-        self, _mock_gpio_flash, caplog
-    ):
-        # A board that flashed but never came back as CDC is attributed
-        # to the re-enumeration stage, distinct from a silent firmware.
-        m = _mock_gpio_flash
-        m.bootsel.append({"usb_serial": "SER_D", "bus": 1, "address": 52})
-        # SER_D loads fine but is absent from post-reset CDC. Keep the
-        # CDC-discovery wait from spinning on the wall clock until the
-        # real 15s timeout.
-        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.01)
-        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert "serial=SER_D NOT reported" in caplog.text
-        assert "did not re-enumerate as CDC" in caplog.text
-
-    def test_deferred_reread_recovers_transiently_mute_board(
+    def test_straggler_recovery_reflashes_and_reads_mute_board(
         self, _mock_gpio_flash, caplog
     ):
         # SER_B is mute on the first read (transient -110 after the mass
-        # re-enumeration) but emits on the deferred sweep. It must end up
-        # reported, exercising the re-read path that the single-pass read
-        # would have dropped.
+        # reset) but reads fine once re-flashed alone. It must end up
+        # reported, exercising the staggered recovery that the single
+        # pass would have dropped.
         m = _mock_gpio_flash
         calls = {"/dev/ttyACM6": 0}
 
         def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B
+            if (
+                port == "/dev/ttyACM6"
+            ):  # SER_B: mute in pass 1, OK after reflash
                 calls[port] += 1
                 if calls[port] == 1:
                     raise RuntimeError("Timed out waiting for JSON")
@@ -1372,27 +1367,42 @@ class TestFlashAndDiscoverGpio:
         with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
             devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-        assert calls["/dev/ttyACM6"] >= 2  # needed the deferred sweep
-        assert "on re-read sweep" in caplog.text
+        assert m.recovery_flashes == ["SER_B"]  # only the mute board
+        assert "straggler recovery succeeded for serial=SER_B" in caplog.text
 
-    def test_deferred_reread_gives_up_after_bounded_sweeps(
-        self, _mock_gpio_flash
+    def test_straggler_recovery_failure_is_surfaced(
+        self, _mock_gpio_flash, caplog
     ):
-        # A board mute on every attempt must not loop forever: the read
-        # count is bounded (pass 1 + _FLEET_REREAD_SWEEPS).
+        # If the straggler re-flash itself fails, the board is reported
+        # as NOT reported with the failure reason — never silently lost.
         m = _mock_gpio_flash
-        calls = {"/dev/ttyACM6": 0}
 
         def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B never recovers
-                calls[port] += 1
+            if port == "/dev/ttyACM6":  # SER_B never reads
                 raise RuntimeError("Timed out waiting for JSON")
             return m.reads[port]
 
+        def boom(path, serial):
+            raise RuntimeError("serial=SER_B not visible as a Pico USB device")
+
         m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
+        m.monkeypatch.setattr(m.fp, "flash_uf2", boom)
         devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         assert {d["usb_serial"] for d in devices} == {"SER_A"}
-        assert calls["/dev/ttyACM6"] == 1 + m.fp._FLEET_REREAD_SWEEPS
+        assert "serial=SER_B NOT reported" in caplog.text
+        assert "re-flash failed" in caplog.text
+
+    def test_absent_board_is_not_reflashed(self, _mock_gpio_flash, caplog):
+        # A board that never re-enumerated as CDC cannot be found by
+        # serial, so recovery must NOT try to re-flash it — it is left to
+        # the re-enumeration reporting instead.
+        m = _mock_gpio_flash
+        m.bootsel.append({"usb_serial": "SER_D", "bus": 1, "address": 52})
+        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.01)
+        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert "SER_D" not in m.recovery_flashes
+        assert "serial=SER_D NOT reported" in caplog.text
+        assert "did not re-enumerate as CDC" in caplog.text
 
     def test_missing_uf2_raises_before_any_gpio_action(
         self, _mock_gpio_flash, tmp_path

@@ -347,20 +347,6 @@ _POST_RESET_SETTLE_S = 2.0
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
-# After the simultaneous mass re-enumeration a subset of boards can be
-# transiently mute on their CDC IN endpoint (USB read -110 / no data)
-# even though the firmware is running — they self-recover within a few
-# seconds. Re-read any expected-but-missing board AFTER cycling through
-# the rest: the deferral is the point. An *immediate* same-port retry
-# lands in the same storm window (which is why the old retry was dropped
-# in d171fcb), but coming back to a straggler once the others are read
-# gives its endpoint time to settle.
-_FLEET_REREAD_SWEEPS = 3
-_FLEET_REREAD_SETTLE_S = 2.0
-# A recovered board emits its 200 ms status almost immediately, so the
-# re-read does not need the full per-board timeout — cap it so a board
-# that is genuinely silent does not stall each sweep for the full window.
-_FLEET_REREAD_TIMEOUT_S = 5
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -535,7 +521,7 @@ def _read_device_info(usb_serial, baud, timeout):
     return _read_cdc_port(port, usb_serial, baud, timeout)
 
 
-def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
+def _read_fleet_cdc(expected, baud, timeout):
     """Read device-info JSON from every Pico now in CDC mode.
 
     Polls :func:`find_pico_ports` until at least *expected* Picos have
@@ -547,14 +533,10 @@ def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
     the same identity ``find_pico_ports`` and PicoManager use — reports
     every Pico that actually booted into firmware.
 
-    *expected_serials*, when given, is the set of board serials that were
-    flashed and should report back. It drives both a deferred re-read
-    sweep — a board mute right after the simultaneous re-enumeration
-    self-recovers within seconds, so any still-missing board is re-read
-    *after* the rest (see ``_FLEET_REREAD_SWEEPS``) — and a per-serial
-    reconciliation report (see :func:`_log_readback_reconciliation`) so a
-    short device count is attributable to a specific board and failure
-    stage instead of being silently swallowed.
+    Returns ``(devices, outcomes)`` where *outcomes* maps each read
+    serial to ``None`` (read succeeded) or a failure reason. The caller
+    reconciles that against the flashed set, recovers any straggler, and
+    emits the per-serial report.
     """
     deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
     ports = find_pico_ports()
@@ -568,50 +550,58 @@ def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
             expected,
             _CDC_DISCOVER_TIMEOUT_S,
         )
-    all_devices = []
+    devices = []
     outcomes = {}
-    got = set()
-
-    # Pass 1: read every port that has re-enumerated so far.
     for port, serial in sorted(ports.items()):
         data, reason = _read_cdc_outcome(port, serial, baud, timeout)
         outcomes[serial] = reason
         if data is not None:
-            all_devices.append(data)
-            got.add(serial)
+            devices.append(data)
             logger.info("Read device info from %s (serial=%s)", port, serial)
+    return devices, outcomes
 
-    # Deferred sweeps: come back to any expected board still missing,
-    # re-resolving its (possibly renamed) port each round, so a board
-    # transiently mute during pass 1 gets read once its endpoint settles.
-    missing = set(expected_serials) - got if expected_serials else set()
-    sweep = 0
-    while missing and sweep < _FLEET_REREAD_SWEEPS:
-        sweep += 1
-        time.sleep(_FLEET_REREAD_SETTLE_S)
-        current = {serial: port for port, serial in find_pico_ports().items()}
-        for serial in sorted(missing):
-            port = current.get(serial)
-            data, reason = _read_cdc_outcome(
-                port, serial, baud, _FLEET_REREAD_TIMEOUT_S
+
+def _recover_stragglers(missing, uf2_path, baud, timeout):
+    """Re-flash and re-read each board in *missing*, one at a time.
+
+    The single GPIO reset boots the whole fleet simultaneously, and a
+    subset can come up enumerated-but-mute: the CDC port opens but the
+    IN endpoint times out (USB -110) or yields no data even though the
+    firmware is running (LED heartbeat continues). A waiting re-read does
+    not clear it — only a re-enumeration does, which is why "another
+    flash brings them all back". This applies that recovery to just the
+    mute boards, **one at a time** so the simultaneous-re-enumeration
+    storm is never recreated: each board is re-flashed alone (round-trips
+    it BOOTSEL→CDC by bus/address, no ``--ser``) on an otherwise-quiet
+    bus, then re-read.
+
+    Returns ``(recovered_devices, outcomes)`` — *outcomes* records the
+    per-serial result (``None`` on success) for the reconciliation report.
+    """
+    recovered = []
+    outcomes = {}
+    for serial in sorted(missing):
+        logger.info(
+            "straggler recovery: re-flashing serial=%s alone (came up "
+            "mute after the simultaneous reset)",
+            serial,
+        )
+        try:
+            flash_uf2(uf2_path, serial)
+        except RuntimeError as e:
+            outcomes[serial] = f"straggler re-flash failed: {e}"
+            logger.error(
+                "straggler recovery failed for serial=%s: %s", serial, e
             )
-            outcomes[serial] = reason
-            if data is not None:
-                all_devices.append(data)
-                got.add(serial)
-                logger.info(
-                    "Read device info from %s (serial=%s) on re-read "
-                    "sweep %d/%d",
-                    port,
-                    serial,
-                    sweep,
-                    _FLEET_REREAD_SWEEPS,
-                )
-        missing = set(expected_serials) - got
-
-    present = set(find_pico_ports().values()) | got
-    _log_readback_reconciliation(expected_serials, present, outcomes)
-    return all_devices
+            continue
+        data = _read_device_info(serial, baud, timeout)
+        if data is not None:
+            recovered.append(data)
+            outcomes[serial] = None
+            logger.info("straggler recovery succeeded for serial=%s", serial)
+        else:
+            outcomes[serial] = "re-flashed but still did not report"
+    return recovered, outcomes
 
 
 def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
@@ -876,11 +866,27 @@ def flash_and_discover_gpio(
     # serial differed or was absent is still reported.
     gpio.reset()
     time.sleep(_POST_RESET_SETTLE_S)
-    all_devices = _read_fleet_cdc(
-        len(flashed),
-        baud,
-        timeout,
-        expected_serials={d["usb_serial"] for d in flashed if d["usb_serial"]},
+    expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
+    all_devices, outcomes = _read_fleet_cdc(len(flashed), baud, timeout)
+
+    # Recover any board that flashed but came up enumerated-but-mute
+    # after the simultaneous reset, one at a time on a now-quiet bus.
+    # Scope this to boards that DID re-enumerate as CDC (a re-flash by
+    # serial can find them) but failed to read — a board entirely absent
+    # from CDC is left to the BOOTSEL/re-enumeration reporting below.
+    reported = {d["usb_serial"] for d in all_devices}
+    recoverable = (expected_serials - reported) & set(
+        find_pico_ports().values()
+    )
+    if recoverable:
+        recovered, recovery_outcomes = _recover_stragglers(
+            recoverable, uf2_path, baud, timeout
+        )
+        all_devices.extend(recovered)
+        outcomes.update(recovery_outcomes)
+
+    _log_readback_reconciliation(
+        expected_serials, set(find_pico_ports().values()), outcomes
     )
 
     # Surface any board that did not take the flash: after the reset it
