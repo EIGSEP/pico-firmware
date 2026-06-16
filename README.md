@@ -13,7 +13,7 @@ Multi-application firmware for Raspberry Pi Pico 2 (RP2350) that implements hard
 - **6 integrated applications**:
   - Motor control (stepper motors)
   - Temperature controller (Peltier elements)
-  - Temperature monitoring (DS18B20 sensors)
+  - Potentiometer position monitoring
   - IMU sensor interface (BNO08x)
   - Lidar sensor interface
   - RF switch control
@@ -164,14 +164,14 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
-Two independent Peltier control channels, each with a DS18B20 temperature sensor and an H-bridge motor driver:
+Two independent Peltier control channels, each with an ADC thermistor divider and an H-bridge motor driver. The divider is wired `3.3V -> 10.68k fixed resistor -> ADC pin -> thermistor -> GND`.
 
-| Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
-|---------|-----------------|----------|---------------|---------------|-----|
-| **LOAD** | 27 | 8 | 10 | 12 | PIO0 |
-| **LNA** | 26 | 9 | 11 | 13 | PIO1 |
+| Channel | Thermistor GPIO | ADC Input | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO |
+|---------|-----------------|-----------|----------|----------------|----------------|
+| **LNA** | 27 | 1 | 8 | 10 | 12 |
+| **LOAD** | 26 | 0 | 9 | 11 | 13 |
 
-JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`).
+JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`). Status includes per-channel temperature plus thermistor diagnostics (`LNA_voltage`, `LNA_resistance`, `LOAD_voltage`, `LOAD_resistance`).
 
 ### Potentiometer Wiring (APP_POTMON)
 
@@ -222,7 +222,7 @@ python3 picohost/scripts/monitor_picos.py
 ## Project Structure
 
 - `src/` - Firmware source code for all applications
-- `lib/` - Libraries (cJSON, BNO08x, eigsep_command, onewire)
+- `lib/` - Libraries (cJSON, eigsep_command, and vendored legacy libraries)
 - `picohost/` - Python host control library and test scripts
 - `build.sh` - Build script for firmware
 - `flash-picos` - Multi-device flashing CLI (installed with `picohost`)

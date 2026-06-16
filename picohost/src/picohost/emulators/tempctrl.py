@@ -5,7 +5,7 @@ from .base import PicoEmulator, _safe_int
 
 
 # Mirror the firmware's PI cadence. On hardware, op() runs every ~50 ms
-# and a DS18B20 conversion completes about every ~750 ms, so PI runs on
+# and the thermistor helper samples about every ~750 ms, so PI runs on
 # roughly 1 in 15 op ticks (the `fresh` gate in tempctrl_update_sensor_drive).
 OP_TICKS_PER_CONVERSION = 15
 # dt argument to tempctrl_pi_drive — matches the firmware's
@@ -41,6 +41,11 @@ def _thermistor_voltage(resistance):
         * resistance
         / (THERMISTOR_FIXED_OHMS + resistance)
     )
+
+
+def _set_thermistor_diagnostics(tc, temp_c):
+    tc.resistance = _thermistor_resistance(temp_c)
+    tc.voltage = _thermistor_voltage(tc.resistance)
 
 
 def _coerce_float(val):
@@ -91,7 +96,7 @@ class TempControlState:
         # drive engaged, so the stall guard can be exercised deterministically.
         self.thermal_frozen = False
         # Mirrors temp_sensor_has_error()'s underlying state. op() re-reads
-        # this into internally_disabled every tick, so a recovered bus fault
+        # this into internally_disabled every tick, so a recovered read fault
         # self-clears (matches firmware tempctrl_update_sensor_drive). The
         # rate-sanity latch (sensor_tripped) is sticky by contrast.
         self._sensor_error = False
@@ -120,13 +125,14 @@ class TempControlState:
         # tick (empty queue) reads the thermal-model T_now and always
         # passes the rate guard. See inject_sensor_glitch.
         self._glitch_queue = []
+        _set_thermistor_diagnostics(self, self.T_now)
 
     def inject_sensor_glitch(self, value, count=1):
         """Queue ``count`` bogus raw sensor readings of ``value``.
 
         Each is consumed on a subsequent fresh conversion and run through
-        the rate-of-change guard, mirroring a DS18B20 that answers on the
-        bus with garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
+        the rate-of-change guard, mirroring a thermistor/ADC path that
+        returns garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
         rejected (``T_now`` holds, ``sensor_rejects`` increments); after
         ``MAX_REJECTS`` consecutive rejects the channel latches
         ``internally_disabled``.
@@ -303,7 +309,7 @@ class TempCtrlEmulator(PicoEmulator):
             self.watchdog_timeout_ms = 0 if val < 0 else val
 
     def inject_sensor_error(self, channel, error=True):
-        """Simulate a OneWire sensor failure on channel "LNA" or "LOAD".
+        """Simulate a sensor failure on channel "LNA" or "LOAD".
 
         Sets both the underlying sensor-error state and the current
         ``internally_disabled`` flag so callers that introspect status
@@ -340,8 +346,7 @@ class TempCtrlEmulator(PicoEmulator):
         if tc._sensor_error:
             return
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
-        tc.resistance = _thermistor_resistance(raw)
-        tc.voltage = _thermistor_voltage(tc.resistance)
+        _set_thermistor_diagnostics(tc, raw)
         if not tc.rate_ref_valid:
             if not tc.seed_pending:
                 # First sample: hold as candidate, await confirmation.
@@ -385,7 +390,7 @@ class TempCtrlEmulator(PicoEmulator):
             tc.timestamp = self._ms_since_boot()
 
         # internally_disabled is the hardware read error OR the latched
-        # sensor-sanity trip. The bus error self-clears when the sensor
+        # sensor-sanity trip. The read error self-clears when the sensor
         # recovers; the rate-sanity latch is sticky once sensor_rejects hits
         # MAX_REJECTS and only the enable ack clears it (matches firmware
         # tempctrl_update_sensor_drive / tempctrl_apply_enable).

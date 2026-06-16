@@ -1,17 +1,14 @@
 #include "temp_simple.h"
 #include "hardware/adc.h"
-#include "hardware/gpio.h"
-#include "hardware/regs/pads_bank0.h"
-#include "hardware/structs/pads_bank0.h"
 #include "pico/stdlib.h"
 #include <math.h>
 
-#define THERMISTOR_ADC_SAMPLES 32
+#define THERMISTOR_ADC_SAMPLES 16
 
 static bool adc_ready = false;
 
 static bool adc_input_from_gpio(uint gpio_pin, uint *adc_input) {
-    if (gpio_pin < 26 || gpio_pin > 28) {
+    if (gpio_pin < 26 || gpio_pin > 29) {
         return false;
     }
     *adc_input = gpio_pin - 26;
@@ -26,7 +23,6 @@ static float temp_sensor_read_voltage(const TempSensor *sensor) {
 
     for (uint i = 0; i < THERMISTOR_ADC_SAMPLES; i++) {
         total += adc_read();
-        sleep_ms(2);
     }
 
     float counts = (float)total / (float)THERMISTOR_ADC_SAMPLES;
@@ -36,7 +32,9 @@ static float temp_sensor_read_voltage(const TempSensor *sensor) {
 static bool temp_sensor_voltage_to_temperature(float voltage,
                                                float *resistance,
                                                float *temperature) {
-    if (voltage <= 0.0f || voltage >= THERMISTOR_SUPPLY_VOLTS) {
+    if (!isfinite(voltage) ||
+        voltage <= 0.0f ||
+        voltage >= THERMISTOR_SUPPLY_VOLTS) {
         return false;
     }
 
@@ -64,10 +62,7 @@ static bool temp_sensor_voltage_to_temperature(float voltage,
     return true;
 }
 
-void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset) {
-    (void)pio;
-    (void)sm_offset;
-
+void temp_sensor_init(TempSensor *sensor, uint gpio_pin) {
     sensor->gpio_pin = gpio_pin;
     sensor->adc_input = 0;
     sensor->temperature = 0.0f;
@@ -89,10 +84,6 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset
     }
 
     adc_gpio_init(gpio_pin);
-    gpio_set_oeover(gpio_pin, GPIO_OVERRIDE_LOW);
-    gpio_set_input_enabled(gpio_pin, false);
-    gpio_disable_pulls(gpio_pin);
-    hw_set_bits(&pads_bank0_hw->io[gpio_pin], PADS_BANK0_GPIO0_OD_BITS);
     sensor->adc_configured = true;
 
     temp_sensor_start_conversion(sensor);

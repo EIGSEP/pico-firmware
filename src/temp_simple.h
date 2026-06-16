@@ -3,8 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "hardware/pio.h"
-#include "onewire_library.h"
+#include "pico/types.h"
 
 // ADC thermistor helper for the tempctrl app. The existing tempctrl app shape
 // is preserved; only the private TempSensor backend reads an ADC divider.
@@ -32,9 +31,8 @@ typedef struct {
     bool read_error;
 } TempSensor;
 
-// Initialize a temperature sensor on a specific GPIO pin. PIO arguments remain
-// in the API so tempctrl keeps the main-branch initialization structure.
-void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset);
+// Initialize a temperature sensor on a specific ADC-capable GPIO pin.
+void temp_sensor_init(TempSensor *sensor, uint gpio_pin);
 
 // Start a timed sampling window.
 void temp_sensor_start_conversion(TempSensor *sensor);

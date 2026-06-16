@@ -2,8 +2,6 @@
 #include "temp_simple.h"
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
-#include "hardware/pio.h"
-#include "onewire_library.pio.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +17,7 @@ static uint32_t watchdog_timeout_ms = 30000;  // default 30s, 0 = disabled
 static bool watchdog_tripped = false;
 
 // Forward declarations
-static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
+static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint);
 static void tempctrl_update_sensor_drive(TempControl *);
 static void tempctrl_apply_drive(TempControl *);
 static void tempctrl_check_stall(TempControl *);
@@ -28,9 +26,9 @@ static bool tempctrl_drive_allowed(const TempControl *);
 static void tempctrl_pi_drive(TempControl *);
 static void tempctrl_reset_controller_state(TempControl *);
 
-void init_single_tempctrl(TempControl *tempctrl,
-                          uint dir_pin1, uint dir_pin2, uint pwm_pin,
-                          pwm_config *config, uint temp_sensor_pin, PIO pio) {
+static void init_single_tempctrl(TempControl *tempctrl,
+                                 uint dir_pin1, uint dir_pin2, uint pwm_pin,
+                                 pwm_config *config, uint temp_sensor_pin) {
     // Initialize GPIO for Peltier
     gpio_init(dir_pin1);
     gpio_set_dir(dir_pin1, GPIO_OUT);
@@ -41,8 +39,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->pwm_slice = pwm_gpio_to_slice_num(pwm_pin);
     pwm_init(tempctrl->pwm_slice, config, true);
 
-    uint offset = pio_add_program(pio, &onewire_program);
-    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
+    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin);
 
     // Initialize Temperature Control structure. Ki defaults to 0 so an
     // un-tuned deployment behaves as pure P + deadband (no integral
@@ -80,9 +77,9 @@ void tempctrl_init(uint8_t app_id) {
     pwm_config_set_clkdiv(&config, 145.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1)), system_clock = 150 MHz default
     pwm_config_set_wrap(&config, PWM_WRAP);
     init_single_tempctrl(&tempctrl_lna, PELTIER_LNA_DIR_PIN1, PELTIER_LNA_DIR_PIN2,
-            PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN, pio0);
+            PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN);
     init_single_tempctrl(&tempctrl_load, PELTIER_LOAD_DIR_PIN3, PELTIER_LOAD_DIR_PIN4,
-            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN, pio1);
+            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN);
     last_cmd_time = get_absolute_time();
 }
 
@@ -175,7 +172,7 @@ void tempctrl_status(uint8_t app_id) {
     /* internally_disabled is recomputed every op tick from the hardware
        read error OR a latched sensor-sanity reject (see
        tempctrl_update_sensor_drive), so LNA_status / LOAD_status reflect the
-       most recent cycle and surface a garbage-but-valid sensor that the bus
+       most recent cycle and surface a garbage-but-valid sensor that a read
        error alone would miss. Matches the per-cycle status contract enforced
        by eigsep_observing._avg_sensor_values and the emulator's status
        derivation. */

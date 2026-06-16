@@ -154,7 +154,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
   - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
   - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)
 - **Shared Utilities**:
-  - `src/temp_simple.c` - Reusable DS18B20 temperature sensor helper (used by tempctrl and tempmon)
+  - `src/temp_simple.c` - ADC thermistor helper used by tempctrl
 - **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
   - **`send_json(count, ...)`**: The first argument is the number of KV entries — it must exactly match the actual entries or fields will be silently dropped. Always verify the count when adding or removing fields.
 - **Python Host Library**: `picohost/src/picohost/` - src-layout package with device-specific classes
@@ -220,7 +220,6 @@ Complete Python package (`picohost/src/picohost/`, src-layout) for controlling P
 The project includes several libraries:
 - **cJSON**: JSON parsing and generation for command protocol
 - **eigsep_command**: Custom command handling library built on cJSON
-- **onewire**: OneWire protocol library with PIO implementation
 - **BNO08x_Pico_Library**: IMU sensor library for BNO08x devices
 
 ## Scripts and ownership

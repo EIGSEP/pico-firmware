@@ -21,8 +21,8 @@ from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
 def _run_to_pi_tick(emu):
     """Advance the emulator until the next PI tick fires on both channels.
 
-    Firmware only runs tempctrl_pi_drive on the op tick a DS18B20
-    conversion completes (~1 in OP_TICKS_PER_CONVERSION op ticks), so
+    Firmware only runs tempctrl_pi_drive on the op tick a thermistor
+    sample completes (~1 in OP_TICKS_PER_CONVERSION op ticks), so
     tests that observe controller state need to step through a full
     conversion cycle rather than calling op() once.
     """
@@ -274,6 +274,10 @@ class TestTempCtrlEmulator:
             "LOAD_integral",
         }
         assert set(status.keys()) == expected_keys
+        assert 0.0 < status["LNA_voltage"] < 3.3
+        assert 0.0 < status["LOAD_voltage"] < 3.3
+        assert status["LNA_resistance"] > 0.0
+        assert status["LOAD_resistance"] > 0.0
 
     def test_integral_eliminates_steady_state_offset(self):
         """With Ki > 0, T_now converges to within the deadband and the
