@@ -347,6 +347,20 @@ _POST_RESET_SETTLE_S = 2.0
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
+# After the simultaneous mass re-enumeration a subset of boards can be
+# transiently mute on their CDC IN endpoint (USB read -110 / no data)
+# even though the firmware is running — they self-recover within a few
+# seconds. Re-read any expected-but-missing board AFTER cycling through
+# the rest: the deferral is the point. An *immediate* same-port retry
+# lands in the same storm window (which is why the old retry was dropped
+# in d171fcb), but coming back to a straggler once the others are read
+# gives its endpoint time to settle.
+_FLEET_REREAD_SWEEPS = 3
+_FLEET_REREAD_SETTLE_S = 2.0
+# A recovered board emits its 200 ms status almost immediately, so the
+# re-read does not need the full per-board timeout — cap it so a board
+# that is genuinely silent does not stall each sweep for the full window.
+_FLEET_REREAD_TIMEOUT_S = 5
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -446,6 +460,16 @@ def _classify_read_failure(exc):
             "ModemManager probing the new CDC port, or a stray "
             "PicoManager)"
         )
+    if (
+        code == errno.ETIMEDOUT
+        or "Errno 110" in text
+        or "Connection timed out" in text
+    ):
+        return (
+            "USB IN-endpoint timeout (-110/ETIMEDOUT — board enumerated "
+            "but transiently mute after the mass re-enumeration; usually "
+            "self-recovers on a re-read sweep)"
+        )
     return f"error opening/reading port: {exc}"
 
 
@@ -524,10 +548,13 @@ def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
     every Pico that actually booted into firmware.
 
     *expected_serials*, when given, is the set of board serials that were
-    flashed and should report back; it drives a per-serial reconciliation
-    report (see :func:`_log_readback_reconciliation`) so a short device
-    count is attributable to a specific board and failure stage instead
-    of being silently swallowed.
+    flashed and should report back. It drives both a deferred re-read
+    sweep — a board mute right after the simultaneous re-enumeration
+    self-recovers within seconds, so any still-missing board is re-read
+    *after* the rest (see ``_FLEET_REREAD_SWEEPS``) — and a per-serial
+    reconciliation report (see :func:`_log_readback_reconciliation`) so a
+    short device count is attributable to a specific board and failure
+    stage instead of being silently swallowed.
     """
     deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
     ports = find_pico_ports()
@@ -543,15 +570,47 @@ def _read_fleet_cdc(expected, baud, timeout, expected_serials=None):
         )
     all_devices = []
     outcomes = {}
+    got = set()
+
+    # Pass 1: read every port that has re-enumerated so far.
     for port, serial in sorted(ports.items()):
         data, reason = _read_cdc_outcome(port, serial, baud, timeout)
         outcomes[serial] = reason
         if data is not None:
             all_devices.append(data)
+            got.add(serial)
             logger.info("Read device info from %s (serial=%s)", port, serial)
-    _log_readback_reconciliation(
-        expected_serials, set(ports.values()), outcomes
-    )
+
+    # Deferred sweeps: come back to any expected board still missing,
+    # re-resolving its (possibly renamed) port each round, so a board
+    # transiently mute during pass 1 gets read once its endpoint settles.
+    missing = set(expected_serials) - got if expected_serials else set()
+    sweep = 0
+    while missing and sweep < _FLEET_REREAD_SWEEPS:
+        sweep += 1
+        time.sleep(_FLEET_REREAD_SETTLE_S)
+        current = {serial: port for port, serial in find_pico_ports().items()}
+        for serial in sorted(missing):
+            port = current.get(serial)
+            data, reason = _read_cdc_outcome(
+                port, serial, baud, _FLEET_REREAD_TIMEOUT_S
+            )
+            outcomes[serial] = reason
+            if data is not None:
+                all_devices.append(data)
+                got.add(serial)
+                logger.info(
+                    "Read device info from %s (serial=%s) on re-read "
+                    "sweep %d/%d",
+                    port,
+                    serial,
+                    sweep,
+                    _FLEET_REREAD_SWEEPS,
+                )
+        missing = set(expected_serials) - got
+
+    present = set(find_pico_ports().values()) | got
+    _log_readback_reconciliation(expected_serials, present, outcomes)
     return all_devices
 
 

@@ -1350,6 +1350,50 @@ class TestFlashAndDiscoverGpio:
         assert "serial=SER_D NOT reported" in caplog.text
         assert "did not re-enumerate as CDC" in caplog.text
 
+    def test_deferred_reread_recovers_transiently_mute_board(
+        self, _mock_gpio_flash, caplog
+    ):
+        # SER_B is mute on the first read (transient -110 after the mass
+        # re-enumeration) but emits on the deferred sweep. It must end up
+        # reported, exercising the re-read path that the single-pass read
+        # would have dropped.
+        m = _mock_gpio_flash
+        calls = {"/dev/ttyACM6": 0}
+
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM6":  # SER_B
+                calls[port] += 1
+                if calls[port] == 1:
+                    raise RuntimeError("Timed out waiting for JSON")
+                return {"app_id": 5}
+            return m.reads[port]
+
+        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
+        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
+            devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
+        assert calls["/dev/ttyACM6"] >= 2  # needed the deferred sweep
+        assert "on re-read sweep" in caplog.text
+
+    def test_deferred_reread_gives_up_after_bounded_sweeps(
+        self, _mock_gpio_flash
+    ):
+        # A board mute on every attempt must not loop forever: the read
+        # count is bounded (pass 1 + _FLEET_REREAD_SWEEPS).
+        m = _mock_gpio_flash
+        calls = {"/dev/ttyACM6": 0}
+
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM6":  # SER_B never recovers
+                calls[port] += 1
+                raise RuntimeError("Timed out waiting for JSON")
+            return m.reads[port]
+
+        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
+        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert {d["usb_serial"] for d in devices} == {"SER_A"}
+        assert calls["/dev/ttyACM6"] == 1 + m.fp._FLEET_REREAD_SWEEPS
+
     def test_missing_uf2_raises_before_any_gpio_action(
         self, _mock_gpio_flash, tmp_path
     ):
@@ -1385,6 +1429,18 @@ class TestClassifyReadFailure:
             OSError("could not open port /dev/ttyACM0: Permission denied")
         )
         assert "EACCES" in reason
+
+    def test_etimedout_is_usb_endpoint_stall(self):
+        reason = _classify_read_failure(
+            OSError(errno.ETIMEDOUT, "Connection timed out")
+        )
+        assert "-110" in reason or "ETIMEDOUT" in reason
+
+    def test_etimedout_by_message_when_errno_absent(self):
+        reason = _classify_read_failure(
+            OSError("read failed: [Errno 110] Connection timed out")
+        )
+        assert "-110" in reason or "ETIMEDOUT" in reason
 
     def test_other_oserror_is_verbatim(self):
         reason = _classify_read_failure(OSError("some other failure"))
