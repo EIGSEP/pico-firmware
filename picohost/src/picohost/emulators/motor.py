@@ -3,8 +3,8 @@ import random
 from .base import PicoEmulator, _safe_int
 
 DEFAULT_DELAY_US = 600
-SLOWDOWN_FACTOR = 2
-SLOW_ZONE = 100
+RAMP_STEPS = 100
+RAMP_START_FACTOR = 4.0
 
 
 class StepperState:
@@ -17,8 +17,11 @@ class StepperState:
         self.steps_in_direction = 0
         self.up_delay_us = DEFAULT_DELAY_US
         self.dn_delay_us = DEFAULT_DELAY_US
-        self.slowdown_factor = SLOWDOWN_FACTOR
-        self.slow_zone = SLOW_ZONE
+        # Timing fields mirror the C Stepper struct for parity; the emulator
+        # models position only (no per-step delays), so the ramp params are
+        # carried but unused here.
+        self.ramp_steps = RAMP_STEPS
+        self.ramp_start_factor = RAMP_START_FACTOR
         self.max_pulses = 60
 
 

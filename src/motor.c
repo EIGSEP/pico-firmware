@@ -1,4 +1,5 @@
 #include "motor.h"
+#include "motor_ramp.h"
 #include "pico/stdlib.h"
 #include "pico/rand.h"
 #include "cJSON.h"
@@ -42,8 +43,8 @@ void stepper_init(Stepper *m,
     m->cw_val        = cw_val;
     m->up_delay_us   = DEFAULT_DELAY_US;  // pause between delays 
     m->dn_delay_us   = DEFAULT_DELAY_US;  // pause between delays 
-    m->slowdown_factor = SLOWDOWN_FACTOR; // slow direction changes
-    m->slow_zone = SLOW_ZONE; // steps within which to slow down
+    m->ramp_steps = RAMP_STEPS; // steps to accel/decel over
+    m->ramp_start_factor = RAMP_START_FACTOR; // start/stop slowdown vs cruise
     m->position      = 0;
     m->dir           = 0;
     // controlling steps
@@ -94,7 +95,6 @@ void stepper_op(Stepper *m) {
     int remaining_steps = m->target_pos - m->position;
     int abs_steps = abs(remaining_steps);
     int nsteps = MIN(m->max_pulses, abs_steps);  // how many steps to take now
-    bool near_stop = (abs_steps <= m->slow_zone);
 
     if      (remaining_steps > 0) new_dir =  1;
     else if (remaining_steps < 0) new_dir = -1;
@@ -105,16 +105,24 @@ void stepper_op(Stepper *m) {
     if (change_dir) m->steps_in_direction = 0;
     if (nsteps == 0) return;  // nothing to do, skip enable/disable toggling
 
-    bool near_start = (m->steps_in_direction <= m->slow_zone);
-
-    int extra_delay_us = m->slowdown_factor * m->dn_delay_us;
-    extra_delay_us = (near_start || near_stop) ? extra_delay_us : 0;
+    // Constant-acceleration ramp, evaluated per step. steps_in_direction
+    // accumulates across the 60-step batches and resets on a reversal, so the
+    // accel ramp spans batches and re-ramps after every direction change.
+    // abs_steps is the distance left to the target, giving the decel ramp.
+    // Taking the slower (larger-extra) of the two keeps short moves
+    // (< 2*ramp_steps) triangular instead of overshooting cruise.
+    uint32_t cruise_period = m->up_delay_us + m->dn_delay_us;
 
     // set correct direction for motor
     gpio_put(m->direction_pin, m->dir > 0 ? m->cw_val : !m->cw_val);
 
     stepper_enable(m);
     for (int i = 0; i < nsteps; i++) {
+        uint32_t k_up = m->steps_in_direction + i;       // steps since start
+        uint32_t k_dn = (uint32_t)(abs_steps - i - 1);   // steps left to go
+        uint32_t k = MIN(k_up, k_dn);
+        int extra_delay_us = (int)ramp_extra(
+            k, m->ramp_steps, m->ramp_start_factor, cruise_period);
         stepper_tick(m, extra_delay_us);
     }
     stepper_disable(m);
