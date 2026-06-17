@@ -36,8 +36,12 @@
 #define  AZ_CW_VAL 0
 
 #define DEFAULT_DELAY_US 600
-#define SLOWDOWN_FACTOR 2
-#define SLOW_ZONE 100
+// Constant-acceleration ramp (see motor_ramp.h). The step rate ramps from
+// cruise/RAMP_START_FACTOR up to cruise over RAMP_STEPS steps, then mirrors
+// it before the target. Bring-up knobs: raise RAMP_STEPS / RAMP_START_FACTOR
+// for gentler starts at the cost of slightly slower short moves.
+#define RAMP_STEPS 100
+#define RAMP_START_FACTOR 4.0f
 
 /**
  * @struct Stepper
@@ -50,8 +54,8 @@ typedef struct {
     uint8_t cw_val;        /**< Logic level for clockwise direction */      
     uint32_t up_delay_us;     /**< pulse width in microseconds */    
     uint32_t dn_delay_us;     /**< delay between steps */    
-    uint32_t slowdown_factor; /**< extra multiplier on delay between steps */    
-    uint32_t slow_zone;
+    uint32_t ramp_steps;       /**< steps over which to accel/decel */
+    float    ramp_start_factor; /**< start/stop period = cruise * this factor */
     uint32_t steps_in_direction;
     int32_t position;      /**< Current motor position in steps */     
     int8_t  dir;           /**< Current direction flag (1 = CW, -1 = CCW) */         
