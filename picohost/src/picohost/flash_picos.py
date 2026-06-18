@@ -5,6 +5,7 @@ import json
 import logging
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -318,21 +319,78 @@ def flash_uf2(
     )
 
 
+# Extra wall-clock budget, beyond the read *timeout*, for the serial
+# port's open and close to complete. A marginal CDC port whose USB
+# endpoint has wedged (the "-110 mute" state) can block in the kernel's
+# cdc_acm teardown — os.close() inside the `with Serial(...)` exit never
+# returns — and pyserial's timeout bounds only reads, not open/close. The
+# read therefore runs on a daemon worker we bound by wall clock and
+# abandon if it overruns, so one wedged port cannot hang the whole fleet
+# readback.
+_SERIAL_TEARDOWN_GRACE_S = 2.0
+
+
 def read_json_from_serial(port, baud, timeout):
+    """Open *port* and return the first valid JSON line, or raise.
+
+    Runs the open/read/close on a daemon worker bounded by wall clock
+    (*timeout* for the read, plus :data:`_SERIAL_TEARDOWN_GRACE_S` for
+    open and close). A board whose USB endpoint has wedged can block the
+    kernel's cdc_acm teardown indefinitely — ``os.close()`` inside the
+    ``with Serial(...)`` exit never returns, and pyserial's ``timeout``
+    does not cover it. Rather than let that freeze the fleet readback
+    (observed in the field: flash-picos hung in :func:`_read_fleet_cdc`
+    on a mute ``/dev/ttyACMn`` after reading the rest of the fleet), the
+    worker is abandoned and a :class:`RuntimeError` raised so the caller
+    classifies the port as a failed read and moves on. A line read before
+    a blocking close is still returned: the worker publishes it before
+    unwinding the ``with``.
+
+    Raises :class:`RuntimeError` on timeout/wedge, or re-raises the
+    worker's open/read ``OSError`` — mirroring the previous direct-read
+    contract so :func:`_classify_read_failure` verdicts are unchanged.
     """
-    Open the serial port, read until a valid JSON line appears or timeout.
-    """
-    with Serial(port, baudrate=baud, timeout=1) as ser:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            line = ser.readline().decode("utf-8", errors="ignore").strip()
-            if not line:
-                continue
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    raise RuntimeError(f"[{port}] Timed out waiting for JSON")
+    result = {}
+    done = threading.Event()
+
+    def _read():
+        try:
+            with Serial(port, baudrate=baud, timeout=1) as ser:
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    line = ser.readline().decode("utf-8", errors="ignore")
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        parsed = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    # Publish before leaving the `with`: if close wedges,
+                    # the caller still gets the line we already read.
+                    result["data"] = parsed
+                    done.set()
+                    return
+        except Exception as e:  # open or read failed
+            result["exc"] = e
+            done.set()
+            return
+        result["exc"] = RuntimeError(f"[{port}] Timed out waiting for JSON")
+        done.set()
+
+    threading.Thread(
+        target=_read, name=f"serial-read-{port}", daemon=True
+    ).start()
+    done.wait(timeout + _SERIAL_TEARDOWN_GRACE_S)
+    if "data" in result:
+        return result["data"]
+    if "exc" in result:
+        raise result["exc"]
+    raise RuntimeError(
+        f"[{port}] serial open/read/close did not complete within "
+        f"{timeout + _SERIAL_TEARDOWN_GRACE_S:.0f}s; the port is wedged "
+        f"(USB endpoint stuck) — abandoning it"
+    )
 
 
 _REENUMERATE_TIMEOUT_S = 10.0

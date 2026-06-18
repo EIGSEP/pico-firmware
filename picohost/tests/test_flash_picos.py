@@ -758,6 +758,103 @@ class TestReadDeviceInfo:
         assert [d["usb_serial"] for d in devices] == ["SER_A"]
 
 
+class TestReadJsonFromSerialBoundedTeardown:
+    """read_json_from_serial must never hang the fleet read on a wedged
+    port.
+
+    A board that enumerated but whose USB endpoint is stuck ("-110
+    mute") can block in the kernel's cdc_acm teardown: ``os.close()``
+    inside the ``with Serial(...)`` exit never returns. Observed in the
+    field — flash-picos froze in _read_fleet_cdc on /dev/ttyACM4 after
+    reading the other four boards. pyserial's ``timeout`` bounds reads,
+    not open/close, so the read runs on an abandonable worker bounded by
+    wall clock: a wedged port becomes a classified failure and the rest
+    of the fleet is still read and published.
+    """
+
+    @staticmethod
+    def _run_bounded(fn, bound=5.0):
+        """Run *fn* on a daemon thread; return ``(finished, box)``.
+
+        Lets the test assert the call returned within *bound* without the
+        suite itself hanging when the code under test blocks.
+        """
+        import threading
+
+        box = {}
+
+        def run():
+            try:
+                box["ret"] = fn()
+            except BaseException as e:  # record for the assertion
+                box["exc"] = e
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(bound)
+        return (not t.is_alive()), box
+
+    def test_wedged_close_does_not_hang(self, monkeypatch):
+        import threading
+
+        import picohost.flash_picos as fp
+
+        wedged = threading.Event()  # never set: os.close() never returns
+
+        class WedgedSerial:
+            def __init__(self, port, baudrate=115200, timeout=1):
+                self.port = port
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                wedged.wait()  # block forever in teardown
+
+            def readline(self):
+                return b""  # nothing to read -> inner read times out
+
+        monkeypatch.setattr(fp, "Serial", WedgedSerial)
+        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.3, raising=False)
+
+        finished, box = self._run_bounded(
+            lambda: fp.read_json_from_serial("/dev/ttyACM4", 115200, 0.2)
+        )
+
+        assert finished, "read_json_from_serial hung on a wedged serial close"
+        assert isinstance(box.get("exc"), RuntimeError)
+
+    def test_returns_data_captured_before_blocking_close(self, monkeypatch):
+        import threading
+
+        import picohost.flash_picos as fp
+
+        wedged = threading.Event()  # close blocks, but data already read
+
+        class SlowCloseSerial:
+            def __init__(self, port, baudrate=115200, timeout=1):
+                self.port = port
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                wedged.wait()
+
+            def readline(self):
+                return b'{"app_id": 5}\n'
+
+        monkeypatch.setattr(fp, "Serial", SlowCloseSerial)
+        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.3, raising=False)
+
+        finished, box = self._run_bounded(
+            lambda: fp.read_json_from_serial("/dev/ttyACM4", 115200, 10)
+        )
+
+        assert finished, "did not return data read before the blocking close"
+        assert box.get("ret") == {"app_id": 5}
+
+
 class TestResolveBusAddress:
     def _make(
         self, root, name, vid, pid, *, serial=None, bus=None, devnum=None
