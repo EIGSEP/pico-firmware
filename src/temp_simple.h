@@ -11,6 +11,10 @@
 #define THERMISTOR_ADC_MAX_COUNTS     4095.0f
 #define THERMISTOR_SUPPLY_VOLTS       3.3f
 #define THERMISTOR_FIXED_OHMS         10680.0f
+#define THERMISTOR_BOARD_PULLUP_OHMS  4700.0f
+#define THERMISTOR_TOP_OHMS           \
+    ((THERMISTOR_FIXED_OHMS * THERMISTOR_BOARD_PULLUP_OHMS) / \
+     (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS))
 
 // Steinhart-Hart coefficients for resistance in ohms:
 // 95339.0 ohms at 0 C, 16212.0 ohms at 40 C, 5387.4 ohms at 70 C.

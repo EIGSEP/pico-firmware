@@ -19,6 +19,12 @@ THERMAL_DRIFT_PER_OP = 0.05
 # Thermistor divider constants, mirroring temp_simple.h.
 THERMISTOR_SUPPLY_VOLTS = 3.3
 THERMISTOR_FIXED_OHMS = 10680.0
+THERMISTOR_BOARD_PULLUP_OHMS = 4700.0
+THERMISTOR_TOP_OHMS = (
+    THERMISTOR_FIXED_OHMS
+    * THERMISTOR_BOARD_PULLUP_OHMS
+    / (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS)
+)
 THERMISTOR_SH_A = 9.2463455e-4
 THERMISTOR_SH_B = 2.2246310e-4
 THERMISTOR_SH_C = 1.2326590e-7
@@ -39,7 +45,7 @@ def _thermistor_voltage(resistance):
     return (
         THERMISTOR_SUPPLY_VOLTS
         * resistance
-        / (THERMISTOR_FIXED_OHMS + resistance)
+        / (THERMISTOR_TOP_OHMS + resistance)
     )
 
 

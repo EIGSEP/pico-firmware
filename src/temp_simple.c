@@ -38,7 +38,7 @@ static bool temp_sensor_voltage_to_temperature(float voltage,
         return false;
     }
 
-    float r_thermistor = THERMISTOR_FIXED_OHMS
+    float r_thermistor = THERMISTOR_TOP_OHMS
         * voltage / (THERMISTOR_SUPPLY_VOLTS - voltage);
     if (!isfinite(r_thermistor) || r_thermistor <= 0.0f) {
         return false;
