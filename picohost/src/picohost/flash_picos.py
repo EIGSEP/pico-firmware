@@ -339,11 +339,7 @@ _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
 _INTER_DEVICE_SETTLE_S = 1.0
-# After the GPIO mass reset the whole fleet re-enumerates at once; let
-# the bus settle before reading any device so a board's first status
-# lines aren't lost to enumeration churn.
-_POST_RESET_SETTLE_S = 2.0
-# After the GPIO mass reset, wait for the whole flashed fleet to
+# After the staggered fleet boot, wait for the booted boards to
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
@@ -561,49 +557,6 @@ def _read_fleet_cdc(expected, baud, timeout):
     return devices, outcomes
 
 
-def _recover_stragglers(missing, uf2_path, baud, timeout):
-    """Re-flash and re-read each board in *missing*, one at a time.
-
-    The single GPIO reset boots the whole fleet simultaneously, and a
-    subset can come up enumerated-but-mute: the CDC port opens but the
-    IN endpoint times out (USB -110) or yields no data even though the
-    firmware is running (LED heartbeat continues). A waiting re-read does
-    not clear it — only a re-enumeration does, which is why "another
-    flash brings them all back". This applies that recovery to just the
-    mute boards, **one at a time** so the simultaneous-re-enumeration
-    storm is never recreated: each board is re-flashed alone (round-trips
-    it BOOTSEL→CDC by bus/address, no ``--ser``) on an otherwise-quiet
-    bus, then re-read.
-
-    Returns ``(recovered_devices, outcomes)`` — *outcomes* records the
-    per-serial result (``None`` on success) for the reconciliation report.
-    """
-    recovered = []
-    outcomes = {}
-    for serial in sorted(missing):
-        logger.info(
-            "straggler recovery: re-flashing serial=%s alone (came up "
-            "mute after the simultaneous reset)",
-            serial,
-        )
-        try:
-            flash_uf2(uf2_path, serial)
-        except RuntimeError as e:
-            outcomes[serial] = f"straggler re-flash failed: {e}"
-            logger.error(
-                "straggler recovery failed for serial=%s: %s", serial, e
-            )
-            continue
-        data = _read_device_info(serial, baud, timeout)
-        if data is not None:
-            recovered.append(data)
-            outcomes[serial] = None
-            logger.info("straggler recovery succeeded for serial=%s", serial)
-        else:
-            outcomes[serial] = "re-flashed but still did not report"
-    return recovered, outcomes
-
-
 def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
     """Log a per-serial verdict reconciling flashed vs. reported boards.
 
@@ -787,6 +740,151 @@ def _load_bootsel_device(
     return False
 
 
+_BOOT_FLEET_ATTEMPTS = 3
+# Gap between per-board boots so re-enumeration never storms (a
+# simultaneous storm is what leaves boards transiently mute). It also
+# gives each board time to leave BOOTSEL before the next is rebooted.
+_BOOT_STAGGER_S = 1.5
+
+
+def _picotool_reboot_app(bus, address):
+    """``picotool reboot -a`` (into the application) by bus/address.
+
+    Boots a device that is in BOOTSEL into its loaded image. Targeted by
+    ``--bus``/``--address`` (no ``--ser`` — its live descriptor read
+    corrupts under hub contention) and no ``-f`` (the device is already
+    in BOOTSEL). Returns the :class:`subprocess.CompletedProcess`.
+    """
+    return subprocess.run(
+        [
+            "picotool",
+            "reboot",
+            "-a",
+            "--bus",
+            str(bus),
+            "--address",
+            str(address),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+    )
+
+
+def _boot_fleet_staggered(
+    flashed,
+    stagger=_BOOT_STAGGER_S,
+    attempts=_BOOT_FLEET_ATTEMPTS,
+):
+    """Boot each loaded board into its image, one at a time, staggered.
+
+    Replaces the single shared ``gpio.reset()`` pulse. That pulse is
+    unreliable across the full fleet (boards miss it and stay in BOOTSEL),
+    and booting everything at once triggers a simultaneous USB
+    re-enumeration storm that leaves some boards transiently mute — and a
+    mute board cannot be reached over USB to read or recover. Booting each
+    board individually with ``picotool reboot -a`` (by bus/address, no
+    ``--ser``/``-f``) is reliable on a device already in BOOTSEL, and the
+    *stagger* gap between boards spreads re-enumeration out so the bus
+    never storms.
+
+    Each board is retried up to *attempts* times: after the reboot it
+    should drop out of the BOOTSEL set; if it has not (the reboot was
+    lost, or it re-entered BOOTSEL), it is rebooted again from its freshly
+    resolved BOOTSEL address. A board that never leaves BOOTSEL has its
+    BOOTSEL/QSPI-CS line held low at boot (hardware) — left in BOOTSEL for
+    the caller's stuck-board report.
+
+    Returns the set of serials that left BOOTSEL, so the caller can wait
+    for exactly that many CDC devices instead of timing out on a
+    hardware-stuck board that will never re-enumerate.
+    """
+    booted = set()
+    for dev in flashed:
+        serial = dev["usb_serial"]
+        bus, address = dev["bus"], dev["address"]
+        for attempt in range(1, attempts + 1):
+            logger.info(
+                "booting serial=%s into its image (bus=%d address=%d) "
+                "(attempt %d/%d)",
+                serial,
+                bus,
+                address,
+                attempt,
+                attempts,
+            )
+            _picotool_reboot_app(bus, address)
+            time.sleep(stagger)
+            in_bootsel = {
+                d["usb_serial"]: d for d in _find_bootsel_devices()
+            }
+            if serial is None or serial not in in_bootsel:
+                if serial is not None:
+                    booted.add(serial)
+                break
+            # still in BOOTSEL — retry from its (possibly new) address
+            bus = in_bootsel[serial]["bus"]
+            address = in_bootsel[serial]["address"]
+    return booted
+
+
+_MUTE_REREAD_ATTEMPTS = 3
+_MUTE_REREAD_SETTLE_S = 1.0
+# A board that re-enumerated as CDC emits a status line every 200 ms, so
+# a short read is plenty; keep re-reads snappy rather than waiting out the
+# full per-device timeout on every attempt.
+_MUTE_REREAD_TIMEOUT_S = 3
+
+
+def _reread_mute_boards(
+    mute,
+    baud,
+    timeout,
+    attempts=_MUTE_REREAD_ATTEMPTS,
+    settle=_MUTE_REREAD_SETTLE_S,
+):
+    """Re-read boards that re-enumerated as CDC but lost the first read.
+
+    A board can lose its first read in a momentary enumeration race — its
+    CDC port opens but the read times out — even though the firmware is up
+    and emitting status every 200 ms. Such a board does not need
+    re-flashing (which a genuinely mute board is not even reachable for,
+    and which only re-introduces a BOOTSEL round-trip); it needs the bus
+    to quiet and a second look. Re-resolve each board's current CDC port
+    by its stable serial and re-read, up to *attempts* times.
+
+    Returns ``(devices, outcomes)`` — *outcomes* maps each serial to
+    ``None`` once read, else its last failure reason, for the caller's
+    reconciliation report.
+    """
+    read_timeout = min(timeout, _MUTE_REREAD_TIMEOUT_S)
+    recovered = []
+    outcomes = {}
+    pending = set(mute)
+    for attempt in range(1, attempts + 1):
+        if not pending:
+            break
+        if attempt > 1:
+            time.sleep(settle)
+        by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
+        for serial in sorted(pending):
+            data, reason = _read_cdc_outcome(
+                by_serial.get(serial), serial, baud, read_timeout
+            )
+            outcomes[serial] = reason
+            if data is not None:
+                recovered.append(data)
+                pending.discard(serial)
+                logger.info(
+                    "re-read recovered serial=%s on %s (was mute after the "
+                    "mass reset)",
+                    serial,
+                    data["port"],
+                )
+    return recovered, outcomes
+
+
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
@@ -858,52 +956,81 @@ def flash_and_discover_gpio(
                 dev["address"],
             )
 
-    # Phase 3: one reset pulse boots the whole fleet, then read device
-    # info from every Pico now in CDC mode. Let the bus settle first —
-    # the whole fleet re-enumerates at once here, unlike the USB
-    # per-device path. The readback keys off the CDC serial, not the
-    # BOOTSEL-mode serial used for loading, so a board whose BOOTSEL
-    # serial differed or was absent is still reported.
-    gpio.reset()
-    time.sleep(_POST_RESET_SETTLE_S)
+    # Phase 3: boot each loaded board individually and staggered, then
+    # read the fleet on a settled bus.
+    #
+    # This replaces the single shared gpio.reset() pulse, which is
+    # unreliable across the full fleet (boards miss it and stay in
+    # BOOTSEL) and re-enumerates everything at once — a simultaneous storm
+    # that leaves some boards transiently mute (and a mute board cannot be
+    # reached over USB to read or recover). Per-board picotool reboot -a,
+    # staggered, boots reliably without storming the bus.
     expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
-    all_devices, outcomes = _read_fleet_cdc(len(flashed), baud, timeout)
+    booted = _boot_fleet_staggered(flashed)
 
-    # Recover any board that flashed but came up enumerated-but-mute
-    # after the simultaneous reset, one at a time on a now-quiet bus.
-    # Scope this to boards that DID re-enumerate as CDC (a re-flash by
-    # serial can find them) but failed to read — a board entirely absent
-    # from CDC is left to the BOOTSEL/re-enumeration reporting below.
+    # Wait only for the boards that actually booted (a hardware-stuck
+    # board never re-enumerates), then read each. The readback keys off
+    # the CDC serial, not the BOOTSEL serial used for loading, so a board
+    # whose BOOTSEL serial differed or was absent is still reported.
+    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, timeout)
     reported = {d["usb_serial"] for d in all_devices}
-    recoverable = (expected_serials - reported) & set(
-        find_pico_ports().values()
-    )
-    if recoverable:
-        recovered, recovery_outcomes = _recover_stragglers(
-            recoverable, uf2_path, baud, timeout
-        )
-        all_devices.extend(recovered)
-        outcomes.update(recovery_outcomes)
+
+    # Staggered boot should leave no board mute, but if one still lost its
+    # first read, re-read it on the quiet bus (the firmware emits status
+    # every 200 ms). There is no re-flash fallback: a genuinely mute board
+    # cannot be reached over USB to re-flash, and re-flashing a healthy
+    # board only re-introduces a BOOTSEL round-trip — so a still-missing
+    # board is reported, not re-flashed.
+    mute = (expected_serials - reported) & set(find_pico_ports().values())
+    if mute:
+        reread, reread_outcomes = _reread_mute_boards(mute, baud, timeout)
+        all_devices.extend(reread)
+        outcomes.update(reread_outcomes)
+        reported |= {d["usb_serial"] for d in reread}
 
     _log_readback_reconciliation(
         expected_serials, set(find_pico_ports().values()), outcomes
     )
 
-    # Surface any board that did not take the flash: after the reset it
-    # has no valid image and drops straight back into BOOTSEL.
+    # Surface any board still in BOOTSEL, distinguishing the two causes:
+    # a board we flashed that will not leave BOOTSEL even after its
+    # per-board reboot has a valid image but its BOOTSEL/QSPI-CS line is
+    # held low at boot (hardware); a board whose load never succeeded
+    # simply has no image to boot.
     stuck = _find_bootsel_devices()
     if stuck:
-        logger.error(
-            "%d Pico(s) still in BOOTSEL after the mass reset — NOT "
-            "flashed: %s. Re-run flash-picos; if the same board fails "
-            "every time, check its USB cable/power and `picotool info`.",
-            len(stuck),
-            ", ".join(
-                f"bus={d['bus']} address={d['address']} "
-                f"serial={d['usb_serial']}"
-                for d in stuck
-            ),
-        )
+        held = [
+            d for d in stuck if d["usb_serial"] in expected_serials
+        ]
+        unflashed = [
+            d for d in stuck if d["usb_serial"] not in expected_serials
+        ]
+        if held:
+            logger.error(
+                "%d Pico(s) still in BOOTSEL after a per-board reboot — "
+                "image loaded but the board will not leave BOOTSEL, so its "
+                "BOOTSEL/QSPI-CS line is held low at boot (hardware, not "
+                "fixable by re-flashing): %s. Check that board's BOOTSEL "
+                "tap/solder joint on the shared line.",
+                len(held),
+                ", ".join(
+                    f"bus={d['bus']} address={d['address']} "
+                    f"serial={d['usb_serial']}"
+                    for d in held
+                ),
+            )
+        if unflashed:
+            logger.error(
+                "%d Pico(s) still in BOOTSEL — NOT flashed (load did not "
+                "succeed): %s. Re-run flash-picos; if the same board fails "
+                "every time, check its USB cable/power and `picotool info`.",
+                len(unflashed),
+                ", ".join(
+                    f"bus={d['bus']} address={d['address']} "
+                    f"serial={d['usb_serial']}"
+                    for d in unflashed
+                ),
+            )
 
     return all_devices
 
