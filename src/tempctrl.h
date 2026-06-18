@@ -103,7 +103,7 @@ typedef struct {
     // or an enable ack.
     uint8_t runaway_strikes;
     // Sensor sanity guard state. rate_ref_ms advances on every fresh sample
-    // (so the rate denominator is one conversion); T_now itself is the value
+    // (so the rate denominator is one sample); T_now itself is the value
     // reference (held on reject). sensor_rejects counts consecutive rejected
     // samples; when it reaches TEMPCTRL_MAX_REJECTS the channel latches via
     // the sticky sensor_tripped flag. sensor_tripped is cleared only by an

@@ -166,8 +166,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const uint32_t time_lna = temp_sensor_get_conversion_time(&tempctrl_lna.temp_sensor);
-    const uint32_t time_load = temp_sensor_get_conversion_time(&tempctrl_load.temp_sensor);
+    const uint32_t time_lna = temp_sensor_get_sample_time(&tempctrl_lna.temp_sensor);
+    const uint32_t time_load = temp_sensor_get_sample_time(&tempctrl_load.temp_sensor);
 
     /* internally_disabled is recomputed every op tick from the hardware
        read error OR a latched sensor-sanity reject (see
@@ -225,15 +225,9 @@ void tempctrl_status(uint8_t app_id) {
 }
 
 void tempctrl_update_sensor_drive(TempControl *tempctrl) {
-    // Start conversions if not already started
-    if (!tempctrl->temp_sensor.conversion_started) {
-        temp_sensor_start_conversion(&tempctrl->temp_sensor);
-    }
-
-    // Attempt a read. `fresh` is true only on the tick a new sensor
-    // value was just decoded — gating the PI integrator on this prevents
-    // it from accumulating ~15x per real sample (op() runs every ~50ms,
-    // samples complete every ~750ms).
+    // Read a fresh sample. The ADC samples on every read, so `fresh` is
+    // true on every op tick a sensor value was decoded (false only on a
+    // read error) — the PI controller runs on each fresh tick.
     bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
     bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
 
@@ -242,7 +236,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // (a failing thermistor returning garbage) and hold the last good
     // T_now; latch the channel after TEMPCTRL_MAX_REJECTS consecutive
     // rejects. rate_ref_ms advances on every fresh sample so the rate
-    // denominator stays ~one conversion; T_now is the value reference.
+    // denominator stays ~one sample; T_now is the value reference.
     //
     // Before the reference is anchored there is nothing to rate-check
     // against, so the first sample is only a candidate (held in T_now,
@@ -306,7 +300,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // rate_ref_valid gates control as well as the guard: until the reference
     // is anchored T_now is only a candidate, so the channel stays idle (the
     // not-allowed branch holds drive at 0) rather than driving on an
-    // unconfirmed reading. Costs at most one extra conversion after enable.
+    // unconfirmed reading. Costs at most one extra sample after enable.
     if (tempctrl_drive_allowed(tempctrl) && tempctrl->rate_ref_valid) {
         if (fresh) {
             tempctrl_pi_drive(tempctrl);

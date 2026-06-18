@@ -68,9 +68,8 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin) {
     sensor->temperature = 0.0f;
     sensor->voltage = 0.0f;
     sensor->resistance = 0.0f;
-    sensor->last_conversion_time = 0;
+    sensor->last_sample_time = 0;
     sensor->adc_configured = false;
-    sensor->conversion_started = false;
     sensor->read_error = false;
 
     if (!adc_input_from_gpio(gpio_pin, &sensor->adc_input)) {
@@ -85,18 +84,6 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin) {
 
     adc_gpio_init(gpio_pin);
     sensor->adc_configured = true;
-
-    temp_sensor_start_conversion(sensor);
-}
-
-void temp_sensor_start_conversion(TempSensor *sensor) {
-    if (!sensor->adc_configured) {
-        sensor->read_error = true;
-        return;
-    }
-
-    sensor->last_conversion_time = to_ms_since_boot(get_absolute_time());
-    sensor->conversion_started = true;
 }
 
 bool temp_sensor_read(TempSensor *sensor) {
@@ -105,29 +92,18 @@ bool temp_sensor_read(TempSensor *sensor) {
         return false;
     }
 
-    if (!sensor->conversion_started) {
-        return false;
-    }
-
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if ((now - sensor->last_conversion_time) < THERMISTOR_SAMPLE_INTERVAL_MS) {
-        return false;
-    }
-
     float voltage = temp_sensor_read_voltage(sensor);
     float resistance = 0.0f;
     float temperature = 0.0f;
     if (!temp_sensor_voltage_to_temperature(voltage, &resistance, &temperature)) {
         sensor->read_error = true;
-        sensor->conversion_started = false;
         return false;
     }
 
     sensor->voltage = voltage;
     sensor->resistance = resistance;
     sensor->temperature = temperature;
-    sensor->last_conversion_time = now;
-    sensor->conversion_started = false;
+    sensor->last_sample_time = to_ms_since_boot(get_absolute_time());
     sensor->read_error = false;
     return true;
 }
@@ -136,8 +112,8 @@ float temp_sensor_get_temp(TempSensor *sensor) {
     return sensor->temperature;
 }
 
-uint32_t temp_sensor_get_conversion_time(TempSensor *sensor) {
-    return sensor->last_conversion_time;
+uint32_t temp_sensor_get_sample_time(TempSensor *sensor) {
+    return sensor->last_sample_time;
 }
 
 bool temp_sensor_has_error(TempSensor *sensor) {

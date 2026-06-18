@@ -4,16 +4,15 @@ import time
 from .base import PicoEmulator, _safe_int
 
 
-# Mirror the firmware's PI cadence. On hardware, op() runs every ~50 ms
-# and the thermistor helper samples about every ~750 ms, so PI runs on
-# roughly 1 in 15 op ticks (the `fresh` gate in tempctrl_update_sensor_drive).
-OP_TICKS_PER_CONVERSION = 15
+# Mirror the firmware's PI cadence. The ADC samples on every read, so the
+# firmware decodes a fresh sample and runs tempctrl_pi_drive on every op tick
+# (op() runs every ~50 ms); there is no sampling-interval gate.
 # dt argument to tempctrl_pi_drive — matches the firmware's
-# (now_ms - last_sample_ms) value at conversion cadence.
-DT_PER_PI_TICK_S = 0.75
+# (now_ms - last_sample_ms) elapsed time between op ticks.
+DT_PER_SAMPLE_S = 0.05
 # Thermal effect per op tick at unit drive. The drive value set by PI is
-# held between PI ticks (mirrors continuous PWM), so the per-op rate is
-# what determines convergence speed, independent of PI cadence.
+# held between op ticks (mirrors continuous PWM), so the per-op rate is
+# what determines convergence speed.
 THERMAL_DRIFT_PER_OP = 0.05
 
 # Thermistor divider constants, mirroring temp_simple.h.
@@ -106,9 +105,6 @@ class TempControlState:
         # self-clears (matches firmware tempctrl_update_sensor_drive). The
         # rate-sanity latch (sensor_tripped) is sticky by contrast.
         self._sensor_error = False
-        # Conversion-cycle counter for the fresh-sample gate. PI fires
-        # when this rolls over OP_TICKS_PER_CONVERSION.
-        self._op_counter = 0
         # Runaway guard mirror (see tempctrl_check_stall in tempctrl.c):
         # consecutive wrong-direction windows.
         self.runaway_strikes = 0
@@ -126,17 +122,17 @@ class TempControlState:
         self.seed_pending = False
         self.sensor_rejects = 0
         self.sensor_tripped = False
-        # Test hook: queued bogus sensor readings, one consumed per fresh
-        # conversion, standing in for a failing thermistor. A normal fresh
-        # tick (empty queue) reads the thermal-model T_now and always
-        # passes the rate guard. See inject_sensor_glitch.
+        # Test hook: queued bogus sensor readings, one consumed per op tick,
+        # standing in for a failing thermistor. A normal tick (empty queue)
+        # reads the thermal-model T_now and always passes the rate guard.
+        # See inject_sensor_glitch.
         self._glitch_queue = []
         _set_thermistor_diagnostics(self, self.T_now)
 
     def inject_sensor_glitch(self, value, count=1):
         """Queue ``count`` bogus raw sensor readings of ``value``.
 
-        Each is consumed on a subsequent fresh conversion and run through
+        Each is consumed on a subsequent op tick and run through
         the rate-of-change guard, mirroring a thermistor/ADC path that
         returns garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
         rejected (``T_now`` holds, ``sensor_rejects`` increments); after
@@ -154,7 +150,7 @@ def _reset_controller_state(tc):
     tc.active = False
 
 
-def tempctrl_pi_drive(tc, dt=DT_PER_PI_TICK_S):
+def tempctrl_pi_drive(tc, dt=DT_PER_SAMPLE_S):
     """Matches tempctrl_pi_drive() from tempctrl.c.
 
     Deadband + PI with conditional-integration anti-windup. First sample
@@ -221,7 +217,7 @@ class TempCtrlEmulator(PicoEmulator):
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
         # Boot reference for the *_timestamp field. Firmware sends
-        # temp_sensor_get_conversion_time() — uint32_t ms since boot, cast
+        # temp_sensor_get_sample_time() — uint32_t ms since boot, cast
         # to double in the KV_FLOAT slot. monotonic() so the value cannot
         # jump under NTP adjustments.
         self._boot_monotonic = time.monotonic()
@@ -337,11 +333,13 @@ class TempCtrlEmulator(PicoEmulator):
 
     def _read_sensor(self, tc):
         """Mirror the sensor read + rate-of-change sanity guard in
-        tempctrl_update_sensor_drive. ``raw`` is the bogus queued reading
-        when a glitch is pending, else the thermal-model ``T_now`` (a
-        normal reading, which equals the current ``T_now`` and so always
-        passes). dt is one conversion (``DT_PER_PI_TICK_S``) because the
-        firmware advances its rate reference on every fresh sample.
+        tempctrl_update_sensor_drive. Returns True when a sample was decoded
+        and False on a read error (mirrors temp_sensor_read()). ``raw`` is
+        the bogus queued reading when a glitch is pending, else the
+        thermal-model ``T_now`` (a normal reading, which equals the current
+        ``T_now`` and so always passes). dt is one op tick
+        (``DT_PER_SAMPLE_S``) because the firmware advances its rate
+        reference on every fresh sample.
 
         Two-to-anchor: until rate_ref_valid is set, the first sample is only a
         candidate (held in T_now) and the reference anchors only when a second
@@ -350,7 +348,7 @@ class TempCtrlEmulator(PicoEmulator):
         two consistent readings still latches.
         """
         if tc._sensor_error:
-            return
+            return False
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
         _set_thermistor_diagnostics(tc, raw)
         if not tc.rate_ref_valid:
@@ -359,8 +357,8 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.T_now = raw
                 tc.seed_pending = True
                 tc.sensor_rejects = 0
-                return
-            rate = abs(raw - tc.T_now) / DT_PER_PI_TICK_S
+                return True
+            rate = abs(raw - tc.T_now) / DT_PER_SAMPLE_S
             if rate > MAX_RATE_C_PER_S:
                 # Candidate unconfirmed: replace it, count toward the latch.
                 tc.T_now = raw
@@ -372,8 +370,8 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.rate_ref_valid = True
                 tc.seed_pending = False
                 tc.sensor_rejects = 0
-            return
-        rate = abs(raw - tc.T_now) / DT_PER_PI_TICK_S
+            return True
+        rate = abs(raw - tc.T_now) / DT_PER_SAMPLE_S
         if rate > MAX_RATE_C_PER_S:
             # Reject: hold the last good T_now, count toward the latch.
             if tc.sensor_rejects < MAX_REJECTS:
@@ -381,18 +379,17 @@ class TempCtrlEmulator(PicoEmulator):
         else:
             tc.T_now = raw
             tc.sensor_rejects = 0
+        return True
 
     def _update_channel(self, tc):
-        tc._op_counter += 1
-        fresh = tc._op_counter % OP_TICKS_PER_CONVERSION == 0
-
-        # Sense first (mirrors firmware order: read + rate guard, then
-        # control on the filtered T_now). Only a fresh conversion produces
-        # a new sample.
+        # The ADC samples on every read, so every op tick decodes a fresh
+        # sample (mirrors firmware: read + rate guard, then control on the
+        # filtered T_now). `fresh` is the read's success, false only on a
+        # sensor read error — mirroring temp_sensor_read() returning false.
+        fresh = self._read_sensor(tc)
         if fresh:
-            self._read_sensor(tc)
             # Mirror firmware: tempctrl_status sends
-            # temp_sensor_get_conversion_time(), updated on each decode.
+            # temp_sensor_get_sample_time(), updated on each decode.
             tc.timestamp = self._ms_since_boot()
 
         # internally_disabled is the hardware read error OR the latched

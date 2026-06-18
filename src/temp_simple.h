@@ -7,7 +7,8 @@
 
 // ADC thermistor helper for the tempctrl app. The existing tempctrl app shape
 // is preserved; only the private TempSensor backend reads an ADC divider.
-#define THERMISTOR_SAMPLE_INTERVAL_MS 750
+// The ADC conversion is effectively instantaneous, so every read takes a fresh
+// sample (no sampling interval) and the PI controller runs on every op tick.
 #define THERMISTOR_ADC_MAX_COUNTS     4095.0f
 #define THERMISTOR_SUPPLY_VOLTS       3.3f
 #define THERMISTOR_FIXED_OHMS         10680.0f
@@ -29,30 +30,25 @@ typedef struct {
     float temperature;
     float voltage;
     float resistance;
-    uint32_t last_conversion_time;
+    uint32_t last_sample_time;
     bool adc_configured;
-    bool conversion_started;
     bool read_error;
 } TempSensor;
 
 // Initialize a temperature sensor on a specific ADC-capable GPIO pin.
 void temp_sensor_init(TempSensor *sensor, uint gpio_pin);
 
-// Start a timed sampling window.
-void temp_sensor_start_conversion(TempSensor *sensor);
-
-// Attempt to read a new temperature sample. Returns true exactly when
-// a fresh sample was just decoded this call (so callers gating on new
-// data — e.g. a PI controller — can avoid integrating on stale ticks).
-// Returns false when the sample interval has not elapsed, or when the read
-// failed (see temp_sensor_has_error()).
+// Read a fresh temperature sample from the ADC. Returns true when a sample
+// was decoded this call (so callers gating on new data — e.g. a PI
+// controller — can skip ticks with no valid sample). Returns false only when
+// the read failed (see temp_sensor_has_error()).
 bool temp_sensor_read(TempSensor *sensor);
 
 // Get current temperature value
 float temp_sensor_get_temp(TempSensor *sensor);
 
 // Returns the absolute time (ms since boot) of the last accepted ADC sample.
-uint32_t temp_sensor_get_conversion_time(TempSensor *sensor);
+uint32_t temp_sensor_get_sample_time(TempSensor *sensor);
 
 // Get error status
 bool temp_sensor_has_error(TempSensor *sensor);
