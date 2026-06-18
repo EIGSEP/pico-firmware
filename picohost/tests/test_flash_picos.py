@@ -1227,9 +1227,7 @@ class TestFlashAndDiscoverGpio:
         with pytest.raises(RuntimeError, match="no Picos entered BOOTSEL"):
             m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
 
-    def test_failed_load_excluded_but_boot_still_fires(
-        self, _mock_gpio_flash
-    ):
+    def test_failed_load_excluded_but_boot_still_fires(self, _mock_gpio_flash):
         # SER_A's load never succeeds, so it is not booted and never
         # reaches CDC — absent from the results — but the fleet boot must
         # still run for the boards that did load.

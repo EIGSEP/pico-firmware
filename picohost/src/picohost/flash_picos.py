@@ -816,9 +816,7 @@ def _boot_fleet_staggered(
             )
             _picotool_reboot_app(bus, address)
             time.sleep(stagger)
-            in_bootsel = {
-                d["usb_serial"]: d for d in _find_bootsel_devices()
-            }
+            in_bootsel = {d["usb_serial"]: d for d in _find_bootsel_devices()}
             if serial is None or serial not in in_bootsel:
                 if serial is not None:
                     booted.add(serial)
@@ -1010,9 +1008,7 @@ def flash_and_discover_gpio(
     # simply has no image to boot.
     stuck = _find_bootsel_devices()
     if stuck:
-        held = [
-            d for d in stuck if d["usb_serial"] in expected_serials
-        ]
+        held = [d for d in stuck if d["usb_serial"] in expected_serials]
         unflashed = [
             d for d in stuck if d["usb_serial"] not in expected_serials
         ]
