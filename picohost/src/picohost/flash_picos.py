@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import errno
 import json
 import logging
 import subprocess
@@ -338,11 +339,7 @@ _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
 _INTER_DEVICE_SETTLE_S = 1.0
-# After the GPIO mass reset the whole fleet re-enumerates at once; let
-# the bus settle before reading any device so a board's first status
-# lines aren't lost to enumeration churn.
-_POST_RESET_SETTLE_S = 2.0
-# After the GPIO mass reset, wait for the whole flashed fleet to
+# After the staggered fleet boot, wait for the booted boards to
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
@@ -414,6 +411,74 @@ def _resolve_post_flash_port(
     return None
 
 
+def _classify_read_failure(exc):
+    """Map a readback exception to a short, operator-facing verdict.
+
+    Distinguishes the stages an operator must tell apart when a board
+    drops out of the device count: the port opened but the firmware
+    stayed silent (a :class:`RuntimeError` timeout from
+    :func:`read_json_from_serial`), a permission race on the freshly
+    created node (``EACCES``), the port being held by another process
+    (``EBUSY`` — ModemManager probing the new CDC device, or a stray
+    PicoManager), or any other open/read error. ``pyserial`` sets
+    ``errno`` on its :class:`~serial.SerialException` (an ``OSError``
+    subclass); fall back to scanning the message when it does not.
+    """
+    if isinstance(exc, RuntimeError):
+        return (
+            "port opened but no JSON before timeout (silent firmware "
+            "or wrong DIP switch?)"
+        )
+    code = getattr(exc, "errno", None)
+    text = str(exc)
+    if code == errno.EACCES or "Permission denied" in text:
+        return (
+            "permission denied opening port (EACCES — udev mode race, "
+            "or the user is not in the dialout group)"
+        )
+    if code == errno.EBUSY or "resource busy" in text.lower():
+        return (
+            "port busy (EBUSY — held by another process, e.g. "
+            "ModemManager probing the new CDC port, or a stray "
+            "PicoManager)"
+        )
+    if (
+        code == errno.ETIMEDOUT
+        or "Errno 110" in text
+        or "Connection timed out" in text
+    ):
+        return (
+            "USB IN-endpoint timeout (-110/ETIMEDOUT — board enumerated "
+            "but transiently mute after the mass re-enumeration; usually "
+            "self-recovers on a re-read sweep)"
+        )
+    return f"error opening/reading port: {exc}"
+
+
+def _read_cdc_outcome(port, usb_serial, baud, timeout):
+    """Attempt one device-info read; return ``(data_or_None, reason)``.
+
+    ``reason`` is ``None`` on success, otherwise a short verdict (from
+    :func:`_classify_read_failure`, or a no-port message) that
+    :func:`_read_fleet_cdc` reconciles into a per-serial report. Keeping
+    the classification here — rather than only logging the raw exception
+    in :func:`_read_cdc_port` — lets the fleet path attribute *why* each
+    board dropped without re-parsing a log line.
+    """
+    if port is None:
+        return None, (
+            f"did not re-enumerate as CDC within {_REENUMERATE_TIMEOUT_S:.0f}s"
+        )
+    _udev_settle()
+    try:
+        data = read_json_from_serial(port, baud, timeout)
+    except (RuntimeError, OSError) as e:
+        return None, _classify_read_failure(e)
+    data["port"] = port
+    data["usb_serial"] = usb_serial
+    return data, None
+
+
 def _read_cdc_port(port, usb_serial, baud, timeout):
     """Read one device-info JSON line from CDC *port*.
 
@@ -426,28 +491,19 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     200 ms — a board that still says nothing is persistently broken
     (wrong DIP, failed boot), not transiently busy.
     """
-    if port is None:
-        logger.error(
-            "no CDC port for serial=%s (did not re-enumerate within %.0fs)",
-            usb_serial,
-            _REENUMERATE_TIMEOUT_S,
-        )
-        return None
-    _udev_settle()
-    try:
-        data = read_json_from_serial(port, baud, timeout)
-    except (RuntimeError, OSError) as e:
-        logger.error(
-            "could not read device info for serial=%s on %s: %s (it "
-            "flashed — re-run flash-picos, or check the board's DIP/app "
-            "if it never reports)",
-            usb_serial,
-            port,
-            e,
-        )
-        return None
-    data["port"] = port
-    data["usb_serial"] = usb_serial
+    data, reason = _read_cdc_outcome(port, usb_serial, baud, timeout)
+    if data is None:
+        if port is None:
+            logger.error("no CDC port for serial=%s (%s)", usb_serial, reason)
+        else:
+            logger.error(
+                "could not read device info for serial=%s on %s: %s (it "
+                "flashed — re-run flash-picos, or check the board's DIP/app "
+                "if it never reports)",
+                usb_serial,
+                port,
+                reason,
+            )
     return data
 
 
@@ -472,6 +528,11 @@ def _read_fleet_cdc(expected, baud, timeout):
     would leave it flashed but unreported. Keying off the CDC serial —
     the same identity ``find_pico_ports`` and PicoManager use — reports
     every Pico that actually booted into firmware.
+
+    Returns ``(devices, outcomes)`` where *outcomes* maps each read
+    serial to ``None`` (read succeeded) or a failure reason. The caller
+    reconciles that against the flashed set, recovers any straggler, and
+    emits the per-serial report.
     """
     deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
     ports = find_pico_ports()
@@ -485,13 +546,76 @@ def _read_fleet_cdc(expected, baud, timeout):
             expected,
             _CDC_DISCOVER_TIMEOUT_S,
         )
-    all_devices = []
+    devices = []
+    outcomes = {}
     for port, serial in sorted(ports.items()):
-        data = _read_cdc_port(port, serial, baud, timeout)
+        data, reason = _read_cdc_outcome(port, serial, baud, timeout)
+        outcomes[serial] = reason
         if data is not None:
-            all_devices.append(data)
+            devices.append(data)
             logger.info("Read device info from %s (serial=%s)", port, serial)
-    return all_devices
+    return devices, outcomes
+
+
+def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
+    """Log a per-serial verdict reconciling flashed vs. reported boards.
+
+    *expected_serials* is the set of board serials that were flashed and
+    should report device info; *present_serials* is the set that
+    re-enumerated as CDC; *outcomes* maps each read-attempted serial to
+    ``None`` (read succeeded) or a failure reason from
+    :func:`_classify_read_failure`.
+
+    For every expected board that did not report, emits one line saying
+    whether it never re-enumerated or opened-but-failed (and why) — the
+    "which board, and at which stage" detail that turns an inconsistent
+    device count into an actionable diagnosis. Boards that reported but
+    were not in the flashed set (e.g. a board whose BOOTSEL serial
+    differed from its CDC serial) are named too. With no baseline
+    (*expected_serials* is ``None``), falls back to logging any
+    present-but-failed read.
+    """
+    if expected_serials is None:
+        for serial, reason in sorted(outcomes.items()):
+            if reason is not None:
+                logger.error(
+                    "could not read device info for serial=%s: %s",
+                    serial,
+                    reason,
+                )
+        return
+
+    expected = set(expected_serials)
+    reported = {s for s, reason in outcomes.items() if reason is None}
+    ok = expected & reported
+    unexpected = reported - expected
+    if ok == expected and not unexpected:
+        logger.info(
+            "device-info readback: all %d flashed Pico(s) reported",
+            len(expected),
+        )
+        return
+
+    logger.warning(
+        "device-info readback: %d of %d flashed Pico(s) reported device info",
+        len(ok),
+        len(expected),
+    )
+    for serial in sorted(expected - reported):
+        if serial in present_serials:
+            reason = outcomes.get(serial) or "read failed"
+        else:
+            reason = (
+                f"did not re-enumerate as CDC within "
+                f"{_CDC_DISCOVER_TIMEOUT_S:.0f}s"
+            )
+        logger.error("  serial=%s NOT reported: %s", serial, reason)
+    for serial in sorted(unexpected):
+        logger.warning(
+            "  serial=%s reported but was not in the flashed set "
+            "(BOOTSEL/CDC serial mismatch, or an unexpected board)",
+            serial,
+        )
 
 
 def flash_and_discover(
@@ -616,6 +740,160 @@ def _load_bootsel_device(
     return False
 
 
+_BOOT_FLEET_ATTEMPTS = 3
+# Gap between per-board boots so re-enumeration never storms (a
+# simultaneous storm is what leaves boards transiently mute). It also
+# gives each board time to leave BOOTSEL before the next is rebooted.
+_BOOT_STAGGER_S = 1.5
+
+
+def _picotool_reboot_app(bus, address):
+    """``picotool reboot -a`` (into the application) by bus/address.
+
+    Boots a device that is in BOOTSEL into its loaded image. Targeted by
+    ``--bus``/``--address`` (no ``--ser`` — its live descriptor read
+    corrupts under hub contention) and no ``-f`` (the device is already
+    in BOOTSEL). Returns the :class:`subprocess.CompletedProcess`.
+    """
+    return subprocess.run(
+        [
+            "picotool",
+            "reboot",
+            "-a",
+            "--bus",
+            str(bus),
+            "--address",
+            str(address),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+    )
+
+
+def _boot_fleet_staggered(
+    flashed,
+    stagger=_BOOT_STAGGER_S,
+    attempts=_BOOT_FLEET_ATTEMPTS,
+):
+    """Boot each loaded board into its image, one at a time, staggered.
+
+    Replaces the single shared ``gpio.reset()`` pulse. That pulse is
+    unreliable across the full fleet (boards miss it and stay in BOOTSEL),
+    and booting everything at once triggers a simultaneous USB
+    re-enumeration storm that leaves some boards transiently mute — and a
+    mute board cannot be reached over USB to read or recover. Booting each
+    board individually with ``picotool reboot -a`` (by bus/address, no
+    ``--ser``/``-f``) is reliable on a device already in BOOTSEL, and the
+    *stagger* gap between boards spreads re-enumeration out so the bus
+    never storms.
+
+    Each board is retried up to *attempts* times: after the reboot it
+    should drop out of the BOOTSEL set; if it has not (the reboot was
+    lost, or it re-entered BOOTSEL), it is rebooted again from its freshly
+    resolved BOOTSEL address. A board that never leaves BOOTSEL has its
+    BOOTSEL/QSPI-CS line held low at boot (hardware) — left in BOOTSEL for
+    the caller's stuck-board report.
+
+    Returns the set of serials that left BOOTSEL, so the caller can wait
+    for exactly that many CDC devices instead of timing out on a
+    hardware-stuck board that will never re-enumerate.
+    """
+    booted = set()
+    for dev in flashed:
+        serial = dev["usb_serial"]
+        bus, address = dev["bus"], dev["address"]
+        for attempt in range(1, attempts + 1):
+            logger.info(
+                "booting serial=%s into its image (bus=%d address=%d) "
+                "(attempt %d/%d)",
+                serial,
+                bus,
+                address,
+                attempt,
+                attempts,
+            )
+            _picotool_reboot_app(bus, address)
+            time.sleep(stagger)
+            in_bootsel = {d["usb_serial"]: d for d in _find_bootsel_devices()}
+            if serial is None or serial not in in_bootsel:
+                if serial is not None:
+                    booted.add(serial)
+                break
+            # still in BOOTSEL — retry from its (possibly new) address
+            bus = in_bootsel[serial]["bus"]
+            address = in_bootsel[serial]["address"]
+    return booted
+
+
+_MUTE_REREAD_ATTEMPTS = 5
+_MUTE_REREAD_SETTLE_S = 1.5
+# A board that re-enumerated as CDC emits a status line every 200 ms, so
+# a short read is plenty; keep re-reads snappy rather than waiting out the
+# full per-device timeout on every attempt.
+_MUTE_REREAD_TIMEOUT_S = 5
+
+
+def _reread_mute_boards(
+    mute,
+    baud,
+    timeout,
+    attempts=_MUTE_REREAD_ATTEMPTS,
+    settle=_MUTE_REREAD_SETTLE_S,
+):
+    """Re-read boards that re-enumerated as CDC but lost the first read.
+
+    A board can lose its first read in a momentary enumeration race — its
+    CDC port opens but the read times out — even though the firmware is up
+    and emitting status every 200 ms. Such a board does not need
+    re-flashing (which a genuinely mute board is not even reachable for,
+    and which only re-introduces a BOOTSEL round-trip); it needs the bus
+    to quiet and a second look. Resolve each board's CDC port once by
+    its stable serial, then re-read that fixed path up to *attempts*
+    times — without re-scanning USB descriptors between tries, which
+    would re-disturb the very node we are coaxing a line out of.
+
+    Returns ``(devices, outcomes)`` — *outcomes* maps each serial to
+    ``None`` once read, else its last failure reason, for the caller's
+    reconciliation report.
+    """
+    read_timeout = min(timeout, _MUTE_REREAD_TIMEOUT_S)
+    recovered = []
+    outcomes = {}
+    pending = set(mute)
+    # Resolve each board's CDC port ONCE, up front. Every board in
+    # *mute* is — by the caller's construction — already present in
+    # find_pico_ports(), so its node already exists; what failed was the
+    # read, not the enumeration. Re-scanning on every attempt
+    # (list_ports.comports() walks and probes every device on the hub)
+    # re-disturbs a marginal deep-hub node — e.g. the lidar at 1-1.1.1.4
+    # with a dead I2C sensor — which is the very board we want to read.
+    # So scan once, then re-read the fixed paths on an otherwise-quiet
+    # bus.
+    by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
+    for attempt in range(1, attempts + 1):
+        if not pending:
+            break
+        if attempt > 1:
+            time.sleep(settle)
+        for serial in sorted(pending):
+            data, reason = _read_cdc_outcome(
+                by_serial.get(serial), serial, baud, read_timeout
+            )
+            outcomes[serial] = reason
+            if data is not None:
+                recovered.append(data)
+                pending.discard(serial)
+                logger.info(
+                    "re-read recovered serial=%s on %s (was mute after the "
+                    "mass reset)",
+                    serial,
+                    data["port"],
+                )
+    return recovered, outcomes
+
+
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
@@ -687,31 +965,79 @@ def flash_and_discover_gpio(
                 dev["address"],
             )
 
-    # Phase 3: one reset pulse boots the whole fleet, then read device
-    # info from every Pico now in CDC mode. Let the bus settle first —
-    # the whole fleet re-enumerates at once here, unlike the USB
-    # per-device path. The readback keys off the CDC serial, not the
-    # BOOTSEL-mode serial used for loading, so a board whose BOOTSEL
-    # serial differed or was absent is still reported.
-    gpio.reset()
-    time.sleep(_POST_RESET_SETTLE_S)
-    all_devices = _read_fleet_cdc(len(flashed), baud, timeout)
+    # Phase 3: boot each loaded board individually and staggered, then
+    # read the fleet on a settled bus.
+    #
+    # This replaces the single shared gpio.reset() pulse, which is
+    # unreliable across the full fleet (boards miss it and stay in
+    # BOOTSEL) and re-enumerates everything at once — a simultaneous storm
+    # that leaves some boards transiently mute (and a mute board cannot be
+    # reached over USB to read or recover). Per-board picotool reboot -a,
+    # staggered, boots reliably without storming the bus.
+    expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
+    booted = _boot_fleet_staggered(flashed)
 
-    # Surface any board that did not take the flash: after the reset it
-    # has no valid image and drops straight back into BOOTSEL.
+    # Wait only for the boards that actually booted (a hardware-stuck
+    # board never re-enumerates), then read each. The readback keys off
+    # the CDC serial, not the BOOTSEL serial used for loading, so a board
+    # whose BOOTSEL serial differed or was absent is still reported.
+    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, timeout)
+    reported = {d["usb_serial"] for d in all_devices}
+
+    # Staggered boot should leave no board mute, but if one still lost its
+    # first read, re-read it on the quiet bus (the firmware emits status
+    # every 200 ms). There is no re-flash fallback: a genuinely mute board
+    # cannot be reached over USB to re-flash, and re-flashing a healthy
+    # board only re-introduces a BOOTSEL round-trip — so a still-missing
+    # board is reported, not re-flashed.
+    mute = (expected_serials - reported) & set(find_pico_ports().values())
+    if mute:
+        reread, reread_outcomes = _reread_mute_boards(mute, baud, timeout)
+        all_devices.extend(reread)
+        outcomes.update(reread_outcomes)
+        reported |= {d["usb_serial"] for d in reread}
+
+    _log_readback_reconciliation(
+        expected_serials, set(find_pico_ports().values()), outcomes
+    )
+
+    # Surface any board still in BOOTSEL, distinguishing the two causes:
+    # a board we flashed that will not leave BOOTSEL even after its
+    # per-board reboot has a valid image but its BOOTSEL/QSPI-CS line is
+    # held low at boot (hardware); a board whose load never succeeded
+    # simply has no image to boot.
     stuck = _find_bootsel_devices()
     if stuck:
-        logger.error(
-            "%d Pico(s) still in BOOTSEL after the mass reset — NOT "
-            "flashed: %s. Re-run flash-picos; if the same board fails "
-            "every time, check its USB cable/power and `picotool info`.",
-            len(stuck),
-            ", ".join(
-                f"bus={d['bus']} address={d['address']} "
-                f"serial={d['usb_serial']}"
-                for d in stuck
-            ),
-        )
+        held = [d for d in stuck if d["usb_serial"] in expected_serials]
+        unflashed = [
+            d for d in stuck if d["usb_serial"] not in expected_serials
+        ]
+        if held:
+            logger.error(
+                "%d Pico(s) still in BOOTSEL after a per-board reboot — "
+                "image loaded but the board will not leave BOOTSEL, so its "
+                "BOOTSEL/QSPI-CS line is held low at boot (hardware, not "
+                "fixable by re-flashing): %s. Check that board's BOOTSEL "
+                "tap/solder joint on the shared line.",
+                len(held),
+                ", ".join(
+                    f"bus={d['bus']} address={d['address']} "
+                    f"serial={d['usb_serial']}"
+                    for d in held
+                ),
+            )
+        if unflashed:
+            logger.error(
+                "%d Pico(s) still in BOOTSEL — NOT flashed (load did not "
+                "succeed): %s. Re-run flash-picos; if the same board fails "
+                "every time, check its USB cable/power and `picotool info`.",
+                len(unflashed),
+                ", ".join(
+                    f"bus={d['bus']} address={d['address']} "
+                    f"serial={d['usb_serial']}"
+                    for d in unflashed
+                ),
+            )
 
     return all_devices
 
