@@ -829,12 +829,12 @@ def _boot_fleet_staggered(
     return booted
 
 
-_MUTE_REREAD_ATTEMPTS = 3
-_MUTE_REREAD_SETTLE_S = 1.0
+_MUTE_REREAD_ATTEMPTS = 5
+_MUTE_REREAD_SETTLE_S = 1.5
 # A board that re-enumerated as CDC emits a status line every 200 ms, so
 # a short read is plenty; keep re-reads snappy rather than waiting out the
 # full per-device timeout on every attempt.
-_MUTE_REREAD_TIMEOUT_S = 3
+_MUTE_REREAD_TIMEOUT_S = 5
 
 
 def _reread_mute_boards(
@@ -851,8 +851,10 @@ def _reread_mute_boards(
     and emitting status every 200 ms. Such a board does not need
     re-flashing (which a genuinely mute board is not even reachable for,
     and which only re-introduces a BOOTSEL round-trip); it needs the bus
-    to quiet and a second look. Re-resolve each board's current CDC port
-    by its stable serial and re-read, up to *attempts* times.
+    to quiet and a second look. Resolve each board's CDC port once by
+    its stable serial, then re-read that fixed path up to *attempts*
+    times — without re-scanning USB descriptors between tries, which
+    would re-disturb the very node we are coaxing a line out of.
 
     Returns ``(devices, outcomes)`` — *outcomes* maps each serial to
     ``None`` once read, else its last failure reason, for the caller's
@@ -862,12 +864,21 @@ def _reread_mute_boards(
     recovered = []
     outcomes = {}
     pending = set(mute)
+    # Resolve each board's CDC port ONCE, up front. Every board in
+    # *mute* is — by the caller's construction — already present in
+    # find_pico_ports(), so its node already exists; what failed was the
+    # read, not the enumeration. Re-scanning on every attempt
+    # (list_ports.comports() walks and probes every device on the hub)
+    # re-disturbs a marginal deep-hub node — e.g. the lidar at 1-1.1.1.4
+    # with a dead I2C sensor — which is the very board we want to read.
+    # So scan once, then re-read the fixed paths on an otherwise-quiet
+    # bus.
+    by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
     for attempt in range(1, attempts + 1):
         if not pending:
             break
         if attempt > 1:
             time.sleep(settle)
-        by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
         for serial in sorted(pending):
             data, reason = _read_cdc_outcome(
                 by_serial.get(serial), serial, baud, read_timeout

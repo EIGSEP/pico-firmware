@@ -1552,6 +1552,35 @@ class TestRereadMuteBoards:
         fp._reread_mute_boards({"SER_B"}, 115200, 10)
         assert seen["timeout"] == fp._MUTE_REREAD_TIMEOUT_S
 
+    def test_scans_ports_once_across_attempts(self, monkeypatch):
+        # The marginal lidar node stalls when USB descriptors are
+        # re-scanned mid-readback, so the port map must be resolved a
+        # single time even when recovery spans several read attempts.
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        scans = {"n": 0}
+
+        def fake_find():
+            scans["n"] += 1
+            return {"/dev/ttyACM6": "SER_B"}
+
+        monkeypatch.setattr(fp, "find_pico_ports", fake_find)
+        reads = {"n": 0}
+
+        def read(port, baud, timeout):
+            reads["n"] += 1
+            if reads["n"] < 3:
+                raise RuntimeError("Timed out waiting for JSON")
+            return {"app_id": 5}
+
+        monkeypatch.setattr(fp, "read_json_from_serial", read)
+        devices, outcomes = fp._reread_mute_boards({"SER_B"}, 115200, 10)
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        assert reads["n"] == 3  # took three attempts
+        assert scans["n"] == 1  # but only one USB descriptor scan
+
 
 class TestClassifyReadFailure:
     def test_runtime_timeout_is_silent_firmware(self):
