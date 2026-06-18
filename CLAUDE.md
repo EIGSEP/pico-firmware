@@ -149,7 +149,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 - **Hardware Apps**: 
   - `src/motor.c` - Stepper motor control (APP_MOTOR = 0)
   - `src/tempctrl.c` - Temperature controller (APP_TEMPCTRL = 1)
-  - `src/tempmon.c` - Temperature monitoring (APP_TEMPMON = 2)
+  - `src/potmon.c` - Potentiometer position monitoring (APP_POTMON = 2)
   - `src/imu.c` - IMU sensor interface (APP_IMU_EL = 3, APP_IMU_AZ = 6)
   - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
   - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)

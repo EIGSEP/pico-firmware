@@ -59,7 +59,7 @@ if [ -f "pico_multi.uf2" ]; then
     echo "DIP switch combinations:"
     echo "  000 - Motor app (APP_MOTOR)"
     echo "  001 - Temperature controller (APP_TEMPCTRL)"
-    echo "  010 - Temperature monitor (APP_TEMPMON)"
+    echo "  010 - Potentiometer monitor (APP_POTMON)"
     echo "  011 - IMU sensor, elevation (APP_IMU_EL)"
     echo "  100 - Lidar sensor (APP_LIDAR)"
     echo "  101 - RF switch control (APP_RFSWITCH)"
