@@ -54,13 +54,8 @@ int main(void) {
     // 3) Bring up USB CDC (stdio)
     stdio_init_all();
 
-#ifdef FORCE_APP_ID
-    // Local/test builds can force an app when DIP hardware is absent.
-    uint8_t app_id = (uint8_t)FORCE_APP_ID;
-#else
     // Read DIP code early
     uint8_t app_id = read_dip_code();
-#endif
 
     // Run app-dependent initialization
     switch (app_id) {

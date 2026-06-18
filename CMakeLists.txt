@@ -43,10 +43,6 @@ target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
-if(DEFINED FORCE_APP_ID)
-    target_compile_definitions(pico_multi PRIVATE FORCE_APP_ID=${FORCE_APP_ID})
-endif()
-
 # link against Pico stdlib and required hardware libraries
 target_link_libraries(pico_multi
     pico_stdlib
