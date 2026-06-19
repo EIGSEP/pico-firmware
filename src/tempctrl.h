@@ -27,10 +27,9 @@
 // Stall detection: if the channel is actively driving (drive!=0) but T_now
 // fails to move by at least TEMPCTRL_STALL_MIN_DELTA over a
 // TEMPCTRL_STALL_WINDOW_MS window, the sensor or Peltier is stuck and we
-// trip the channel. The threshold is far above the DS18B20 quantization
-// (1/16 = 0.0625 C) and a healthy half-power Peltier moves the load
-// several C/min, so a healthy run rolls the window forward long before
-// reaching the trip threshold.
+// trip the channel. A healthy half-power Peltier moves the load several
+// C/min, so a healthy run rolls the window forward long before reaching
+// the trip threshold.
 #define TEMPCTRL_STALL_WINDOW_MS   60000
 #define TEMPCTRL_STALL_MIN_DELTA   0.5f
 
@@ -48,13 +47,12 @@
 // channel that is actually controlling.
 #define TEMPCTRL_RUNAWAY_STRIKES   2
 
-// Sensor sanity guard: a DS18B20 that still answers on the bus but returns
-// garbage (a failing thermistor seen cycling 0/40/90 C while the true temp
-// was ~20 C) passes temp_sensor_has_error(), so the raw read would drive the
-// Peltier full-scale on a physically impossible value. Reject any fresh
-// sample whose implied rate of change exceeds TEMPCTRL_MAX_RATE_C_PER_S
-// (well above any real thermal slew — a healthy half-power Peltier moves a
-// few C/min, ~0.1 C/s); hold the last good T_now instead. After
+// Sensor sanity guard: a thermistor/ADC path can return electrically valid
+// but physically impossible values (for example, cycling 0/40/90 C while the
+// true temp is ~20 C). Reject any fresh sample whose implied rate of change
+// exceeds TEMPCTRL_MAX_RATE_C_PER_S (well above any real thermal slew — a
+// healthy half-power Peltier moves a few C/min, ~0.1 C/s); hold the last good
+// T_now instead. After
 // TEMPCTRL_MAX_REJECTS consecutive rejects the sensor is treated as failed
 // (internally_disabled), which gates drive and surfaces LNA/LOAD_status as
 // "error". A lone glitch is absorbed without disabling control.
@@ -105,7 +103,7 @@ typedef struct {
     // or an enable ack.
     uint8_t runaway_strikes;
     // Sensor sanity guard state. rate_ref_ms advances on every fresh sample
-    // (so the rate denominator is one conversion); T_now itself is the value
+    // (so the rate denominator is one sample); T_now itself is the value
     // reference (held on reject). sensor_rejects counts consecutive rejected
     // samples; when it reaches TEMPCTRL_MAX_REJECTS the channel latches via
     // the sticky sensor_tripped flag. sensor_tripped is cleared only by an

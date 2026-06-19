@@ -38,15 +38,6 @@ target_link_libraries(eigsep_command
     cjson
 )
 
-add_library(onewire STATIC lib/onewire/onewire_library.c)
-target_include_directories(onewire PUBLIC lib/onewire)
-target_link_libraries(onewire PUBLIC
-    pico_stdlib
-    hardware_pio
-)
-# Generate PIO header for the onewire library
-pico_generate_pio_header(onewire ${CMAKE_CURRENT_LIST_DIR}/lib/onewire/onewire_library.pio)
-
 target_include_directories(pico_multi PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}/include
@@ -57,13 +48,11 @@ target_link_libraries(pico_multi
     pico_stdlib
     hardware_gpio
     hardware_pwm
-    hardware_pio
     hardware_adc
     pico_unique_id
     pico_rand
     cjson
     eigsep_command
-    onewire
     hardware_i2c
     hardware_uart
 )
@@ -104,4 +93,3 @@ foreach(_recovery_target pico_multi pico_test_blink)
             "Restore `pico_enable_stdio_usb(${_recovery_target} 1)` in CMakeLists.txt.")
     endif()
 endforeach()
-

@@ -15,28 +15,24 @@ from picohost.emulators import (
     PotMonEmulator,
     RFSwitchEmulator,
 )
-from picohost.emulators.tempctrl import OP_TICKS_PER_CONVERSION
 
 
 def _run_to_pi_tick(emu):
-    """Advance the emulator until the next PI tick fires on both channels.
+    """Advance the emulator by one PI tick on both channels.
 
-    Firmware only runs tempctrl_pi_drive on the op tick a DS18B20
-    conversion completes (~1 in OP_TICKS_PER_CONVERSION op ticks), so
-    tests that observe controller state need to step through a full
-    conversion cycle rather than calling op() once.
+    The ADC samples on every read, so the firmware decodes a fresh sample
+    and runs tempctrl_pi_drive on every op tick — one op() is one PI tick.
     """
-    for _ in range(OP_TICKS_PER_CONVERSION):
-        emu.op()
+    emu.op()
 
 
 def _run_to_drive(emu):
-    """Advance to the first conversion that actually engages drive.
+    """Advance to the first sample that actually engages drive.
 
-    Two-to-anchor (tempctrl_update_sensor_drive): the first fresh
-    conversion only takes a candidate reference and control stays gated,
-    so drive engages on the second consistent conversion. Tests that need
-    a channel up and controlling step through both.
+    Two-to-anchor (tempctrl_update_sensor_drive): the first fresh sample
+    only takes a candidate reference and control stays gated, so drive
+    engages on the second consistent sample. Tests that need a channel up
+    and controlling step through both.
     """
     _run_to_pi_tick(emu)  # seed the candidate reference
     _run_to_pi_tick(emu)  # confirm + anchor → control engages
@@ -240,6 +236,8 @@ class TestTempCtrlEmulator:
             "watchdog_timeout_ms",
             "LNA_status",
             "LNA_T_now",
+            "LNA_voltage",
+            "LNA_resistance",
             "LNA_timestamp",
             "LNA_T_target",
             "LNA_drive_level",
@@ -255,6 +253,8 @@ class TestTempCtrlEmulator:
             "LNA_integral",
             "LOAD_status",
             "LOAD_T_now",
+            "LOAD_voltage",
+            "LOAD_resistance",
             "LOAD_timestamp",
             "LOAD_T_target",
             "LOAD_drive_level",
@@ -270,6 +270,10 @@ class TestTempCtrlEmulator:
             "LOAD_integral",
         }
         assert set(status.keys()) == expected_keys
+        assert 0.0 < status["LNA_voltage"] < 3.3
+        assert 0.0 < status["LOAD_voltage"] < 3.3
+        assert status["LNA_resistance"] > 0.0
+        assert status["LOAD_resistance"] > 0.0
 
     def test_integral_eliminates_steady_state_offset(self):
         """With Ki > 0, T_now converges to within the deadband and the

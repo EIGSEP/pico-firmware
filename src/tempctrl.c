@@ -2,8 +2,6 @@
 #include "temp_simple.h"
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
-#include "hardware/pio.h"
-#include "onewire_library.pio.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +17,7 @@ static uint32_t watchdog_timeout_ms = 30000;  // default 30s, 0 = disabled
 static bool watchdog_tripped = false;
 
 // Forward declarations
-static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint, PIO);
+static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint);
 static void tempctrl_update_sensor_drive(TempControl *);
 static void tempctrl_apply_drive(TempControl *);
 static void tempctrl_check_stall(TempControl *);
@@ -28,9 +26,9 @@ static bool tempctrl_drive_allowed(const TempControl *);
 static void tempctrl_pi_drive(TempControl *);
 static void tempctrl_reset_controller_state(TempControl *);
 
-void init_single_tempctrl(TempControl *tempctrl,
-                          uint dir_pin1, uint dir_pin2, uint pwm_pin,
-                          pwm_config *config, uint temp_sensor_pin, PIO pio) {
+static void init_single_tempctrl(TempControl *tempctrl,
+                                 uint dir_pin1, uint dir_pin2, uint pwm_pin,
+                                 pwm_config *config, uint temp_sensor_pin) {
     // Initialize GPIO for Peltier
     gpio_init(dir_pin1);
     gpio_set_dir(dir_pin1, GPIO_OUT);
@@ -41,8 +39,7 @@ void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->pwm_slice = pwm_gpio_to_slice_num(pwm_pin);
     pwm_init(tempctrl->pwm_slice, config, true);
 
-    uint offset = pio_add_program(pio, &onewire_program);
-    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin, pio, offset);
+    temp_sensor_init(&tempctrl->temp_sensor, temp_sensor_pin);
 
     // Initialize Temperature Control structure. Ki defaults to 0 so an
     // un-tuned deployment behaves as pure P + deadband (no integral
@@ -80,9 +77,9 @@ void tempctrl_init(uint8_t app_id) {
     pwm_config_set_clkdiv(&config, 145.0f);         // PWM frequency = System_Clock / (Clock_Divider × (WRAP + 1)), system_clock = 150 MHz default
     pwm_config_set_wrap(&config, PWM_WRAP);
     init_single_tempctrl(&tempctrl_lna, PELTIER_LNA_DIR_PIN1, PELTIER_LNA_DIR_PIN2,
-            PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN, pio0);
+            PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN);
     init_single_tempctrl(&tempctrl_load, PELTIER_LOAD_DIR_PIN3, PELTIER_LOAD_DIR_PIN4,
-            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN, pio1);
+            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN);
     last_cmd_time = get_absolute_time();
 }
 
@@ -169,29 +166,31 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 }
 
 void tempctrl_status(uint8_t app_id) {
-    const uint32_t time_lna = temp_sensor_get_conversion_time(&tempctrl_lna.temp_sensor);
-    const uint32_t time_load = temp_sensor_get_conversion_time(&tempctrl_load.temp_sensor);
+    const uint32_t time_lna = temp_sensor_get_sample_time(&tempctrl_lna.temp_sensor);
+    const uint32_t time_load = temp_sensor_get_sample_time(&tempctrl_load.temp_sensor);
 
     /* internally_disabled is recomputed every op tick from the hardware
        read error OR a latched sensor-sanity reject (see
        tempctrl_update_sensor_drive), so LNA_status / LOAD_status reflect the
-       most recent cycle and surface a garbage-but-valid sensor that the bus
+       most recent cycle and surface a garbage-but-valid sensor that a read
        error alone would miss. Matches the per-cycle status contract enforced
        by eigsep_observing._avg_sensor_values and the emulator's status
        derivation. */
     const char *status_lna = tempctrl_lna.internally_disabled ? "error" : "update";
     const char *status_load = tempctrl_load.internally_disabled ? "error" : "update";
 
-    /* 34 KV pairs: 4 device-wide + 15 per channel * 2 channels. send_json
+    /* 38 KV pairs: 4 device-wide + 17 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(34,
+    send_json(38,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
         KV_INT, "watchdog_timeout_ms", (int)watchdog_timeout_ms,
         KV_STR, "LNA_status", status_lna,
         KV_FLOAT, "LNA_T_now", tempctrl_lna.T_now,
+        KV_FLOAT, "LNA_voltage", tempctrl_lna.temp_sensor.voltage,
+        KV_FLOAT, "LNA_resistance", tempctrl_lna.temp_sensor.resistance,
         KV_FLOAT, "LNA_timestamp", (double)time_lna,
         KV_FLOAT, "LNA_T_target", tempctrl_lna.T_target,
         KV_FLOAT, "LNA_drive_level", tempctrl_lna.drive,
@@ -207,6 +206,8 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LNA_integral", tempctrl_lna.integral,
         KV_STR, "LOAD_status", status_load,
         KV_FLOAT, "LOAD_T_now", tempctrl_load.T_now,
+        KV_FLOAT, "LOAD_voltage", tempctrl_load.temp_sensor.voltage,
+        KV_FLOAT, "LOAD_resistance", tempctrl_load.temp_sensor.resistance,
         KV_FLOAT, "LOAD_timestamp", (double)time_load,
         KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
         KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
@@ -224,15 +225,9 @@ void tempctrl_status(uint8_t app_id) {
 }
 
 void tempctrl_update_sensor_drive(TempControl *tempctrl) {
-    // Start conversions if not already started
-    if (!tempctrl->temp_sensor.conversion_started) {
-        temp_sensor_start_conversion(&tempctrl->temp_sensor);
-    }
-
-    // Attempt a read. `fresh` is true only on the tick a new DS18B20
-    // value was just decoded — gating the PI integrator on this prevents
-    // it from accumulating ~15x per real sample (op() runs every ~50ms,
-    // conversions complete every ~750ms).
+    // Read a fresh sample. The ADC samples on every read, so `fresh` is
+    // true on every op tick a sensor value was decoded (false only on a
+    // read error) — the PI controller runs on each fresh tick.
     bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
     bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
 
@@ -241,7 +236,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // (a failing thermistor returning garbage) and hold the last good
     // T_now; latch the channel after TEMPCTRL_MAX_REJECTS consecutive
     // rejects. rate_ref_ms advances on every fresh sample so the rate
-    // denominator stays ~one conversion; T_now is the value reference.
+    // denominator stays ~one sample; T_now is the value reference.
     //
     // Before the reference is anchored there is nothing to rate-check
     // against, so the first sample is only a candidate (held in T_now,
@@ -305,7 +300,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // rate_ref_valid gates control as well as the guard: until the reference
     // is anchored T_now is only a candidate, so the channel stays idle (the
     // not-allowed branch holds drive at 0) rather than driving on an
-    // unconfirmed reading. Costs at most one extra conversion after enable.
+    // unconfirmed reading. Costs at most one extra sample after enable.
     if (tempctrl_drive_allowed(tempctrl) && tempctrl->rate_ref_valid) {
         if (fresh) {
             tempctrl_pi_drive(tempctrl);

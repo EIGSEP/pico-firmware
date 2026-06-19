@@ -3,45 +3,52 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "hardware/pio.h"
-#include "onewire_library.h"
-#include "ds18b20.h"
+#include "pico/types.h"
 
-// DS18B20 requires up to 750ms for 12-bit temperature conversion
-// (hardware limitation, see DS18B20 datasheet Table 2)
-#define DS18B20_CONVERSION_TIME_MS 750
+// ADC thermistor helper for the tempctrl app. The existing tempctrl app shape
+// is preserved; only the private TempSensor backend reads an ADC divider.
+// The ADC conversion is effectively instantaneous, so every read takes a fresh
+// sample (no sampling interval) and the PI controller runs on every op tick.
+#define THERMISTOR_ADC_MAX_COUNTS     4095.0f
+#define THERMISTOR_SUPPLY_VOLTS       3.3f
+#define THERMISTOR_FIXED_OHMS         10680.0f
+#define THERMISTOR_BOARD_PULLUP_OHMS  4700.0f
+#define THERMISTOR_TOP_OHMS           \
+    ((THERMISTOR_FIXED_OHMS * THERMISTOR_BOARD_PULLUP_OHMS) / \
+     (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS))
 
-// Temperature sensor structure for direct GPIO connection
+// Steinhart-Hart coefficients for resistance in ohms:
+// 95339.0 ohms at 0 C, 16212.0 ohms at 40 C, 5387.4 ohms at 70 C.
+#define THERMISTOR_SH_A               9.2463455e-4f
+#define THERMISTOR_SH_B               2.2246310e-4f
+#define THERMISTOR_SH_C               1.2326590e-7f
+
+// Temperature sensor structure for direct ADC connection.
 typedef struct {
-    OW ow;
     uint gpio_pin;
+    uint adc_input;
     float temperature;
-    uint32_t last_conversion_time;
-    bool conversion_started;
+    float voltage;
+    float resistance;
+    uint32_t last_sample_time;
+    bool adc_configured;
     bool read_error;
 } TempSensor;
 
-// Initialize a temperature sensor on a specific GPIO pin
-void temp_sensor_init(TempSensor *sensor, uint gpio_pin, PIO pio, uint sm_offset);
+// Initialize a temperature sensor on a specific ADC-capable GPIO pin.
+void temp_sensor_init(TempSensor *sensor, uint gpio_pin);
 
-// Start temperature conversion
-void temp_sensor_start_conversion(TempSensor *sensor);
-
-// Attempt to read a new temperature sample. Returns true exactly when
-// a fresh sample was just decoded this call (so callers gating on new
-// data — e.g. a PI controller — can avoid integrating on stale ticks).
-// Returns false when the DS18B20 conversion is not yet ready, or when
+// Read a fresh temperature sample from the ADC. Returns true when a sample
+// was decoded this call (so callers gating on new data — e.g. a PI
+// controller — can skip ticks with no valid sample). Returns false only when
 // the read failed (see temp_sensor_has_error()).
 bool temp_sensor_read(TempSensor *sensor);
 
 // Get current temperature value
 float temp_sensor_get_temp(TempSensor *sensor);
 
-// Returns the absolute time (ms since boot) when the last conversion was
-// started.  Despite the name, this is NOT a duration — it is used by the host
-// to detect stale readings (if the value stops changing, the sensor may have
-// disconnected).
-uint32_t temp_sensor_get_conversion_time(TempSensor *sensor);
+// Returns the absolute time (ms since boot) of the last accepted ADC sample.
+uint32_t temp_sensor_get_sample_time(TempSensor *sensor);
 
 // Get error status
 bool temp_sensor_has_error(TempSensor *sensor);
