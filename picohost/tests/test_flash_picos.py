@@ -1,6 +1,7 @@
 """Tests for picohost.flash_picos.flash_and_discover."""
 
 import errno
+import json
 import logging
 import types
 
@@ -758,101 +759,186 @@ class TestReadDeviceInfo:
         assert [d["usb_serial"] for d in devices] == ["SER_A"]
 
 
-class TestReadJsonFromSerialBoundedTeardown:
-    """read_json_from_serial must never hang the fleet read on a wedged
-    port.
+class TestSerialReaderChild:
+    """The child reader (_serial_reader.run) must deliver its line BEFORE
+    closing the port.
 
-    A board that enumerated but whose USB endpoint is stuck ("-110
-    mute") can block in the kernel's cdc_acm teardown: ``os.close()``
-    inside the ``with Serial(...)`` exit never returns. Observed in the
-    field — flash-picos froze in _read_fleet_cdc on /dev/ttyACM4 after
-    reading the other four boards. pyserial's ``timeout`` bounds reads,
-    not open/close, so the read runs on an abandonable worker bounded by
-    wall clock: a wedged port becomes a classified failure and the rest
-    of the fleet is still read and published.
+    A board whose USB endpoint is stuck ("-110 mute") can block the
+    kernel's cdc_acm teardown: the tty ``os.close()`` never returns. The
+    child therefore writes+flushes its one protocol line first, so a line
+    read just before a wedging close still reaches the parent.
     """
 
-    @staticmethod
-    def _run_bounded(fn, bound=5.0):
-        """Run *fn* on a daemon thread; return ``(finished, box)``.
+    def test_emits_data_before_close(self, monkeypatch):
+        import io
 
-        Lets the test assert the call returned within *bound* without the
-        suite itself hanging when the code under test blocks.
-        """
-        import threading
+        import picohost._serial_reader as sr
 
-        box = {}
+        events = []
 
-        def run():
-            try:
-                box["ret"] = fn()
-            except BaseException as e:  # record for the assertion
-                box["exc"] = e
-
-        t = threading.Thread(target=run, daemon=True)
-        t.start()
-        t.join(bound)
-        return (not t.is_alive()), box
-
-    def test_wedged_close_does_not_hang(self, monkeypatch):
-        import threading
-
-        import picohost.flash_picos as fp
-
-        wedged = threading.Event()  # never set: os.close() never returns
-
-        class WedgedSerial:
-            def __init__(self, port, baudrate=115200, timeout=1):
-                self.port = port
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                wedged.wait()  # block forever in teardown
-
-            def readline(self):
-                return b""  # nothing to read -> inner read times out
-
-        monkeypatch.setattr(fp, "Serial", WedgedSerial)
-        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.3, raising=False)
-
-        finished, box = self._run_bounded(
-            lambda: fp.read_json_from_serial("/dev/ttyACM4", 115200, 0.2)
-        )
-
-        assert finished, "read_json_from_serial hung on a wedged serial close"
-        assert isinstance(box.get("exc"), RuntimeError)
-
-    def test_returns_data_captured_before_blocking_close(self, monkeypatch):
-        import threading
-
-        import picohost.flash_picos as fp
-
-        wedged = threading.Event()  # close blocks, but data already read
-
-        class SlowCloseSerial:
-            def __init__(self, port, baudrate=115200, timeout=1):
-                self.port = port
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                wedged.wait()
+        class FakeSerial:
+            def __init__(self, *a, **k):
+                pass
 
             def readline(self):
                 return b'{"app_id": 5}\n'
 
-        monkeypatch.setattr(fp, "Serial", SlowCloseSerial)
-        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.3, raising=False)
+            def close(self):
+                events.append("close")
 
-        finished, box = self._run_bounded(
-            lambda: fp.read_json_from_serial("/dev/ttyACM4", 115200, 10)
+        class RecordingOut(io.StringIO):
+            def write(self, s):
+                events.append("write")
+                return super().write(s)
+
+        monkeypatch.setattr(sr, "Serial", FakeSerial)
+        out = RecordingOut()
+
+        assert sr.run("/dev/ttyACM4", 115200, 10, out) == 0
+        assert json.loads(out.getvalue()) == {"data": {"app_id": 5}}
+        # The line must be written before the (possibly wedging) close.
+        assert events == ["write", "close"]
+
+    def test_open_error_preserves_errno(self, monkeypatch):
+        import io
+
+        import picohost._serial_reader as sr
+
+        class FailingSerial:
+            def __init__(self, *a, **k):
+                raise OSError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr(sr, "Serial", FailingSerial)
+        out = io.StringIO()
+
+        sr.run("/dev/ttyACM4", 115200, 10, out)
+        msg = json.loads(out.getvalue())
+        assert msg["errno"] == errno.EACCES
+        assert "Permission denied" in msg["err"]
+
+    def test_silent_port_reports_timeout(self, monkeypatch):
+        import io
+
+        import picohost._serial_reader as sr
+
+        class SilentSerial:
+            def __init__(self, *a, **k):
+                pass
+
+            def readline(self):
+                return b""  # never emits a line
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(sr, "Serial", SilentSerial)
+        out = io.StringIO()
+
+        sr.run("/dev/ttyACM4", 115200, 0.1, out)
+        assert json.loads(out.getvalue()) == {"timeout": True}
+
+
+class _FakeReaderProc:
+    """Stand-in for the reader child's Popen, backed by a real OS pipe so
+    the parent's select()/os.read() path is exercised for real.
+
+    With ``eof=False`` the write end is left open, modelling a child that
+    has delivered its line but not exited (its close is wedging). ``wait``
+    always raises :class:`~subprocess.TimeoutExpired`, modelling the worst
+    case — a child that will not reap within the grace — so every parent
+    test also proves :func:`read_json_from_serial` never blocks on it.
+    """
+
+    def __init__(self, payload=b"", *, eof=True):
+        import os
+
+        r, self._w = os.pipe()
+        self.stdout = os.fdopen(r, "rb", buffering=0)
+        if payload:
+            os.write(self._w, payload)
+        if eof:
+            os.close(self._w)
+            self._w = None
+        self.killed = False
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        import subprocess
+
+        raise subprocess.TimeoutExpired("reader", timeout)
+
+    def cleanup(self):
+        import os
+
+        if self._w is not None:
+            os.close(self._w)
+            self._w = None
+
+
+class TestReadJsonFromSerialChildProcess:
+    """read_json_from_serial runs the open/read/close in a child process,
+    not a thread, so a wedged CDC port pins the child (which flash-picos
+    abandons) and never the flash-picos process — a thread stuck in the
+    kernel's uninterruptible cdc_acm close would otherwise keep the
+    process from exiting, hanging ``eigsep-field patch`` forever.
+    """
+
+    def _patch(self, monkeypatch, fake):
+        monkeypatch.setattr(fp.subprocess, "Popen", lambda *a, **k: fake)
+
+    def test_returns_data_even_if_child_does_not_exit(self, monkeypatch):
+        fake = _FakeReaderProc(b'{"data": {"app_id": 5}}\n', eof=False)
+        self._patch(monkeypatch, fake)
+        try:
+            assert fp.read_json_from_serial("/dev/ttyACM4", 115200, 10) == {
+                "app_id": 5
+            }
+        finally:
+            fake.cleanup()
+        assert fake.killed  # the lingering child was abandoned, not awaited
+
+    def test_does_not_leak_a_thread(self, monkeypatch):
+        import threading
+
+        base = threading.active_count()
+        fake = _FakeReaderProc(b'{"data": {"x": 1}}\n')
+        self._patch(monkeypatch, fake)
+        fp.read_json_from_serial("/dev/ttyACM4", 115200, 10)
+        # The read no longer runs on an in-process thread; nothing it spawns
+        # can survive to pin process exit.
+        assert threading.active_count() == base
+
+    def test_no_output_within_bound_raises(self, monkeypatch):
+        fake = _FakeReaderProc(b"", eof=False)  # never speaks, never closes
+        self._patch(monkeypatch, fake)
+        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.2)
+        try:
+            with pytest.raises(RuntimeError, match="wedged"):
+                fp.read_json_from_serial("/dev/ttyACM4", 115200, 0.2)
+        finally:
+            fake.cleanup()
+        assert fake.killed
+
+    def test_err_line_raises_oserror_with_errno(self, monkeypatch):
+        fake = _FakeReaderProc(
+            b'{"err": "could not open port", "errno": %d}\n' % errno.EBUSY
         )
+        self._patch(monkeypatch, fake)
+        with pytest.raises(OSError) as ei:
+            fp.read_json_from_serial("/dev/ttyACM4", 115200, 10)
+        assert ei.value.errno == errno.EBUSY
 
-        assert finished, "did not return data read before the blocking close"
-        assert box.get("ret") == {"app_id": 5}
+    def test_timeout_line_raises_runtimeerror(self, monkeypatch):
+        fake = _FakeReaderProc(b'{"timeout": true}\n')
+        self._patch(monkeypatch, fake)
+        with pytest.raises(RuntimeError, match="Timed out"):
+            fp.read_json_from_serial("/dev/ttyACM4", 115200, 10)
 
 
 class TestResolveBusAddress:

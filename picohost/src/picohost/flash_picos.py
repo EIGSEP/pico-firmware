@@ -3,14 +3,14 @@ import argparse
 import errno
 import json
 import logging
+import os
+import select
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
 from eigsep_redis import Transport
-from serial import Serial
 from serial.tools import list_ports
 
 from . import manager_service
@@ -322,75 +322,124 @@ def flash_uf2(
 # Extra wall-clock budget, beyond the read *timeout*, for the serial
 # port's open and close to complete. A marginal CDC port whose USB
 # endpoint has wedged (the "-110 mute" state) can block in the kernel's
-# cdc_acm teardown — os.close() inside the `with Serial(...)` exit never
-# returns — and pyserial's timeout bounds only reads, not open/close. The
-# read therefore runs on a daemon worker we bound by wall clock and
-# abandon if it overruns, so one wedged port cannot hang the whole fleet
-# readback.
+# cdc_acm teardown — os.close() of the tty never returns — and pyserial's
+# timeout bounds only reads, not open/close.
 _SERIAL_TEARDOWN_GRACE_S = 2.0
+
+# The open/read/close runs in a *child process* (see _serial_reader.py),
+# launched by file path so it does not import the picohost package (and
+# its heavy deps) on every per-board read.
+_SERIAL_READER_SCRIPT = str(Path(__file__).with_name("_serial_reader.py"))
+
+
+def _read_line_bounded(stream, bound):
+    """Return the first newline-terminated line from *stream*, or ``None``.
+
+    Polls the underlying fd with :func:`select.select` so the wait is
+    bounded by *bound* seconds even if the writer never sends a newline or
+    never closes its end (a wedged reader child). Returns ``None`` on
+    timeout or on EOF-without-a-line.
+    """
+    fd = stream.fileno()
+    buf = bytearray()
+    deadline = time.monotonic() + bound
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        readable, _, _ = select.select([fd], [], [], remaining)
+        if not readable:
+            return None
+        chunk = os.read(fd, 4096)
+        if not chunk:  # EOF before any newline
+            return None
+        buf.extend(chunk)
+        nl = buf.find(b"\n")
+        if nl != -1:
+            return bytes(buf[: nl + 1]).decode("utf-8", errors="ignore")
+
+
+def _abandon_reader(proc):
+    """Tear down the reader child without ever blocking on a wedged one.
+
+    A reader stuck in ``os.close()`` of a mute CDC port is in
+    uninterruptible sleep: it will not die on ``SIGKILL`` until the kernel
+    teardown returns, so we must NOT wait for it — flash-picos has to stay
+    free to exit. The orphan is reparented to init, which reaps it once the
+    syscall finally unwinds (and ``subprocess`` reaps any cleanly-finished
+    child on the next :class:`~subprocess.Popen`). A reader that already
+    exited is reaped here with a short, bounded wait so it does not linger.
+    """
+    try:
+        proc.stdout.close()
+    except OSError:
+        pass
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=_SERIAL_TEARDOWN_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def read_json_from_serial(port, baud, timeout):
     """Open *port* and return the first valid JSON line, or raise.
 
-    Runs the open/read/close on a daemon worker bounded by wall clock
-    (*timeout* for the read, plus :data:`_SERIAL_TEARDOWN_GRACE_S` for
-    open and close). A board whose USB endpoint has wedged can block the
-    kernel's cdc_acm teardown indefinitely — ``os.close()`` inside the
-    ``with Serial(...)`` exit never returns, and pyserial's ``timeout``
-    does not cover it. Rather than let that freeze the fleet readback
-    (observed in the field: flash-picos hung in :func:`_read_fleet_cdc`
-    on a mute ``/dev/ttyACMn`` after reading the rest of the fleet), the
-    worker is abandoned and a :class:`RuntimeError` raised so the caller
-    classifies the port as a failed read and moves on. A line read before
-    a blocking close is still returned: the worker publishes it before
-    unwinding the ``with``.
+    The open/read/close runs in a child process (:mod:`_serial_reader`),
+    not a thread, and is bounded by wall clock (*timeout* for the read,
+    plus :data:`_SERIAL_TEARDOWN_GRACE_S` for open and close). A board
+    whose USB endpoint has wedged can block the kernel's cdc_acm teardown
+    indefinitely — ``os.close()`` of the tty never returns, and pyserial's
+    ``timeout`` does not cover it. A *thread* cannot escape that: bounding
+    the wait frees the calling thread, but the worker stays stuck in the
+    kernel and a process cannot finish ``exit_group()`` while any thread is
+    in uninterruptible sleep — so flash-picos hung at exit even after the
+    main thread was done (and ``eigsep-field patch``, waiting on it
+    unbounded, hung forever). Running it in a child process means the wedge
+    pins the child; we abandon it and exit cleanly.
 
-    Raises :class:`RuntimeError` on timeout/wedge, or re-raises the
-    worker's open/read ``OSError`` — mirroring the previous direct-read
+    The child writes one JSON line and flushes *before* its close, so a
+    line read just before a blocking close is still returned. Raises
+    :class:`RuntimeError` on timeout/wedge, or an ``OSError`` (with
+    ``errno`` preserved) on open/read failure — mirroring the previous
     contract so :func:`_classify_read_failure` verdicts are unchanged.
     """
-    result = {}
-    done = threading.Event()
-
-    def _read():
-        try:
-            with Serial(port, baudrate=baud, timeout=1) as ser:
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
-                    line = ser.readline().decode("utf-8", errors="ignore")
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        parsed = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    # Publish before leaving the `with`: if close wedges,
-                    # the caller still gets the line we already read.
-                    result["data"] = parsed
-                    done.set()
-                    return
-        except Exception as e:  # open or read failed
-            result["exc"] = e
-            done.set()
-            return
-        result["exc"] = RuntimeError(f"[{port}] Timed out waiting for JSON")
-        done.set()
-
-    threading.Thread(
-        target=_read, name=f"serial-read-{port}", daemon=True
-    ).start()
-    done.wait(timeout + _SERIAL_TEARDOWN_GRACE_S)
-    if "data" in result:
-        return result["data"]
-    if "exc" in result:
-        raise result["exc"]
-    raise RuntimeError(
-        f"[{port}] serial open/read/close did not complete within "
-        f"{timeout + _SERIAL_TEARDOWN_GRACE_S:.0f}s; the port is wedged "
-        f"(USB endpoint stuck) — abandoning it"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            _SERIAL_READER_SCRIPT,
+            str(port),
+            str(baud),
+            str(timeout),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
+    try:
+        line = _read_line_bounded(
+            proc.stdout, timeout + _SERIAL_TEARDOWN_GRACE_S
+        )
+    finally:
+        _abandon_reader(proc)
+
+    if line is None:
+        raise RuntimeError(
+            f"[{port}] serial open/read/close did not complete within "
+            f"{timeout + _SERIAL_TEARDOWN_GRACE_S:.0f}s; the port is wedged "
+            f"(USB endpoint stuck) — abandoning it"
+        )
+    msg = json.loads(line)
+    if "data" in msg:
+        return msg["data"]
+    if "err" in msg:
+        code = msg.get("errno")
+        if code is not None:
+            raise OSError(code, msg["err"])
+        raise OSError(msg["err"])
+    raise RuntimeError(f"[{port}] Timed out waiting for JSON")
 
 
 _REENUMERATE_TIMEOUT_S = 10.0
