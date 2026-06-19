@@ -15,6 +15,8 @@ from picohost.emulators import (
     PotMonEmulator,
     RFSwitchEmulator,
 )
+
+
 def _run_to_pi_tick(emu):
     """Advance the emulator by one PI tick on both channels.
 
