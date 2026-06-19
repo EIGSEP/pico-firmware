@@ -431,7 +431,12 @@ def read_json_from_serial(port, baud, timeout):
             f"{timeout + _SERIAL_TEARDOWN_GRACE_S:.0f}s; the port is wedged "
             f"(USB endpoint stuck) — abandoning it"
         )
-    msg = json.loads(line)
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"[{port}] serial read returned invalid JSON: {e.msg}"
+        ) from e
     if "data" in msg:
         return msg["data"]
     if "err" in msg:
