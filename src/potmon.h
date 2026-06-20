@@ -6,11 +6,9 @@
 #include "hardware/adc.h"
 #include "eigsep_command.h"
 
-#define POTMON_ADC_CH0          0
-#define POTMON_ADC_CH1          1
+#define POTMON_ADC_CH_AZ        1
 
-#define POTMON_GPIO0            26
-#define POTMON_GPIO1            27
+#define POTMON_GPIO_AZ          27
 
 #define POTMON_ADC_BITS         12
 #define POTMON_ADC_MAX          ((1 << POTMON_ADC_BITS) - 1)

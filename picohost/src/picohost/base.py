@@ -47,7 +47,7 @@ def redis_handler(writer):
     parameters, etc. — must be flattened into per-component scalar
     fields with descriptive suffixes (e.g. ``quat_i/j/k/real`` for a
     quaternion, ``accel_x/y/z`` for an acceleration vector,
-    ``pot_el_cal_slope`` / ``pot_el_cal_intercept`` for a linear
+    ``pot_az_cal_slope`` / ``pot_az_cal_intercept`` for a linear
     calibration). This invariant lets downstream consumers validate
     every field with a per-key schema, lands the data cleanly in HDF5
     attribute storage, and gives every field a meaningful per-type
@@ -882,7 +882,7 @@ class PicoPotentiometer(PicoDevice):
         usb_serial : str, optional
             USB serial number for port re-discovery.
         """
-        self._cal = {"pot_el": None, "pot_az": None}
+        self._cal = {"pot_az": None}
         super().__init__(
             port,
             timeout=timeout,
@@ -897,8 +897,6 @@ class PicoPotentiometer(PicoDevice):
         if pot_cal_store is not None:
             cal_from_redis = pot_cal_store.get()
         if cal_from_redis is not None:
-            if "pot_el" in cal_from_redis:
-                self._cal["pot_el"] = tuple(cal_from_redis["pot_el"])
             if "pot_az" in cal_from_redis:
                 self._cal["pot_az"] = tuple(cal_from_redis["pot_az"])
         elif calibration_file is not None:
@@ -919,7 +917,7 @@ class PicoPotentiometer(PicoDevice):
         calibration state.
         """
         data = data.copy()
-        for key in ("pot_el", "pot_az"):
+        for key in ("pot_az",):
             cal = self._cal[key]
             v = data.get(f"{key}_voltage")
             if cal is not None:
@@ -936,59 +934,51 @@ class PicoPotentiometer(PicoDevice):
                 data[f"{key}_angle"] = None
         self._base_redis_handler(data)
 
-    def set_calibration(self, pot_el_params=None, pot_az_params=None):
-        """Set calibration parameters (m, b) for one or both pots.
+    def set_calibration(self, pot_az_params=None):
+        """Set calibration parameters (m, b) for the az pot.
 
         Parameters
         ----------
-        pot_el_params : tuple of (float, float), optional
-            (slope, intercept) such that angle = m * voltage + b.
         pot_az_params : tuple of (float, float), optional
+            (slope, intercept) such that angle = m * voltage + b.
         """
-        if pot_el_params is not None:
-            self._cal["pot_el"] = tuple(pot_el_params)
         if pot_az_params is not None:
             self._cal["pot_az"] = tuple(pot_az_params)
 
     def load_calibration(self, path):
         """Load calibration from a JSON file.
 
-        Expected format: ``{"pot_el": [m, b], "pot_az": [m, b], ...}``
+        Expected format: ``{"pot_az": [m, b], ...}``
         """
         with open(path, "r") as f:
             cal_data = json.load(f)
-        if "pot_el" in cal_data:
-            self._cal["pot_el"] = tuple(cal_data["pot_el"])
         if "pot_az" in cal_data:
             self._cal["pot_az"] = tuple(cal_data["pot_az"])
 
     @property
     def is_calibrated(self):
-        """True if both pots have calibration parameters."""
-        return (
-            self._cal["pot_el"] is not None and self._cal["pot_az"] is not None
-        )
+        """True if the az pot has calibration parameters."""
+        return self._cal["pot_az"] is not None
 
     def read_voltage(self):
-        """Return the latest voltage readings.
+        """Return the latest az voltage reading.
 
         Returns
         -------
         dict
-            ``{"pot_el_voltage": float, "pot_az_voltage": float}``
+            ``{"pot_az_voltage": float}``
         """
         return {
-            "pot_el_voltage": self.last_status.get("pot_el_voltage"),
             "pot_az_voltage": self.last_status.get("pot_az_voltage"),
         }
 
     def read_angle(self):
-        """Convert current voltage readings to angles using calibration.
+        """Convert current az voltage reading to angle using calibration.
 
         Returns
         -------
         dict
-            ``{"pot_el": float, "pot_az": float}`` in degrees.
+            ``{"pot_az": float}`` in degrees.
 
         Raises
         ------
@@ -996,7 +986,7 @@ class PicoPotentiometer(PicoDevice):
             If calibration has not been set or voltage data is missing.
         """
         result = {}
-        for key in ("pot_el", "pot_az"):
+        for key in ("pot_az",):
             v = self.last_status.get(f"{key}_voltage")
             if v is None:
                 raise RuntimeError(f"No voltage reading for {key}")

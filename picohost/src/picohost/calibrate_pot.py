@@ -59,10 +59,10 @@ def collect_samples(transport, n):
     repeated calls within one calibration sweep don't double-count the
     same firmware tick.
     """
-    samples_el, samples_az = [], []
+    samples_az = []
     last_id = "$"
-    while len(samples_el) < n:
-        remaining = n - len(samples_el)
+    while len(samples_az) < n:
+        remaining = n - len(samples_az)
         resp = transport.r.xread(
             {POTMON_STREAM: last_id},
             block=int(SAMPLE_TIMEOUT_S * 1000),
@@ -76,10 +76,9 @@ def collect_samples(transport, n):
         _stream, messages = resp[0]
         for msg_id, fields in messages:
             value = json.loads(fields[b"value"])
-            samples_el.append(value["pot_el_voltage"])
             samples_az.append(value["pot_az_voltage"])
             last_id = msg_id
-    return float(np.mean(samples_el)), float(np.mean(samples_az))
+    return float(np.mean(samples_az))
 
 
 def compute_linear_fit(voltages, angles):
@@ -100,22 +99,19 @@ def compute_linear_fit(voltages, angles):
 
 def collect_minmax(transport, n_samples, total_degrees):
     """Collect at min and max only (2-point calibration)."""
-    input("\nSet both potentiometers to MINIMUM position, then press Enter.")
+    input("\nSet the az potentiometer to MINIMUM position, then press Enter.")
     print("  averaging samples...")
-    v_min_0, v_min_1 = collect_samples(transport, n_samples)
-    print(f"  pot_el min voltage: {v_min_0:.4f} V")
-    print(f"  pot_az min voltage: {v_min_1:.4f} V")
+    v_min = collect_samples(transport, n_samples)
+    print(f"  pot_az min voltage: {v_min:.4f} V")
 
-    input("\nSet both potentiometers to MAXIMUM position, then press Enter.")
+    input("\nSet the az potentiometer to MAXIMUM position, then press Enter.")
     print("  averaging samples...")
-    v_max_0, v_max_1 = collect_samples(transport, n_samples)
-    print(f"  pot_el max voltage: {v_max_0:.4f} V")
-    print(f"  pot_az max voltage: {v_max_1:.4f} V")
+    v_max = collect_samples(transport, n_samples)
+    print(f"  pot_az max voltage: {v_max:.4f} V")
 
-    voltages_0 = [v_min_0, v_max_0]
-    voltages_1 = [v_min_1, v_max_1]
+    voltages = [v_min, v_max]
     angles = [0.0, total_degrees]
-    return voltages_0, voltages_1, angles
+    return voltages, angles
 
 
 def _per_turn_stops(turns):
@@ -134,32 +130,30 @@ def _per_turn_stops(turns):
 def collect_per_turn(transport, n_samples, turns):
     """Collect at every full turn from min to max (plus a fractional final)."""
     input(
-        "\nSet both potentiometers to MINIMUM position (turn 0), "
+        "\nSet the az potentiometer to MINIMUM position (turn 0), "
         "then press Enter."
     )
     print("  averaging samples...")
-    v0, v1 = collect_samples(transport, n_samples)
-    print(f"  turn  0.00: pot_el={v0:.4f} V, pot_az={v1:.4f} V")
-    voltages_0 = [v0]
-    voltages_1 = [v1]
+    v = collect_samples(transport, n_samples)
+    print(f"  turn  0.00: pot_az={v:.4f} V")
+    voltages = [v]
     angles = [0.0]
 
     prev = 0.0
     for stop in _per_turn_stops(turns):
         delta = stop - prev
         input(
-            f"\nAdvance both pots {delta:.2f} turn(s) (to turn {stop:.2f}), "
+            f"\nAdvance the az pot {delta:.2f} turn(s) (to turn {stop:.2f}), "
             "then press Enter."
         )
         print("  averaging samples...")
-        v0, v1 = collect_samples(transport, n_samples)
-        print(f"  turn {stop:5.2f}: pot_el={v0:.4f} V, pot_az={v1:.4f} V")
-        voltages_0.append(v0)
-        voltages_1.append(v1)
+        v = collect_samples(transport, n_samples)
+        print(f"  turn {stop:5.2f}: pot_az={v:.4f} V")
+        voltages.append(v)
         angles.append(stop * 360.0)
         prev = stop
 
-    return voltages_0, voltages_1, angles
+    return voltages, angles
 
 
 def main():
@@ -241,35 +235,32 @@ def main():
 
     try:
         if args.mode == "minmax":
-            voltages_0, voltages_1, angles = collect_minmax(
+            voltages, angles = collect_minmax(
                 transport, args.n_samples, total_degrees
             )
         else:
-            voltages_0, voltages_1, angles = collect_per_turn(
+            voltages, angles = collect_per_turn(
                 transport, args.n_samples, args.turns
             )
     except (RuntimeError, ConnectionError) as exc:
         print(f"Calibration sample collection failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    cal0 = compute_linear_fit(voltages_0, angles)
-    cal1 = compute_linear_fit(voltages_1, angles)
+    cal = compute_linear_fit(voltages, angles)
 
-    if cal0 is None or cal1 is None:
+    if cal is None:
         print("\nCalibration failed. Exiting.", file=sys.stderr)
         sys.exit(1)
 
     cal_data = {
-        "pot_el": list(cal0),
-        "pot_az": list(cal1),
+        "pot_az": list(cal),
         "metadata": {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "turns": float(args.turns),
             "total_degrees": total_degrees,
             "mode": args.mode,
             "n_points": len(angles),
-            "pot_el_voltages": [float(v) for v in voltages_0],
-            "pot_az_voltages": [float(v) for v in voltages_1],
+            "pot_az_voltages": [float(v) for v in voltages],
             "angles": [float(a) for a in angles],
             "n_samples": args.n_samples,
         },
@@ -293,8 +284,7 @@ def main():
     try:
         pot_proxy.send_command(
             "set_calibration",
-            pot_el_params=list(cal0),
-            pot_az_params=list(cal1),
+            pot_az_params=list(cal),
         )
         print("Live PicoPotentiometer updated with new calibration.")
     except (TimeoutError, RuntimeError) as e:
@@ -304,8 +294,7 @@ def main():
             file=sys.stderr,
         )
 
-    print(f"  pot_el: angle = {cal0[0]:.4f} * V + {cal0[1]:.4f}")
-    print(f"  pot_az: angle = {cal1[0]:.4f} * V + {cal1[1]:.4f}")
+    print(f"  pot_az: angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
     if args.mode == "turns":
         print(f"  ({len(angles)} points used for least-squares fit)")
 

@@ -121,7 +121,7 @@ class PotCalStore:
     Persistent single-key store for potentiometer calibration.
 
     The value under :data:`POT_CAL_KEY` is a JSON object shaped like
-    ``{"pot_el": [m, b], "pot_az": [m, b], "metadata": {...},
+    ``{"pot_az": [m, b], "metadata": {...},
     "upload_time": ...}`` — the canonical ``upload_time`` field is
     injected by :meth:`Transport.upload_dict` at the top level.
     ``metadata`` carries audit fields written by ``calibrate-pot``
@@ -144,7 +144,7 @@ class PotCalStore:
         Parameters
         ----------
         cal : dict
-            Must carry ``pot_el`` and ``pot_az`` entries, each a
+            Must carry a ``pot_az`` entry, a
             ``(slope, intercept)`` pair (list or tuple). Extra
             fields (e.g. ``metadata``) are preserved verbatim.
         """
