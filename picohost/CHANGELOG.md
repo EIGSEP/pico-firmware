@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.8.0](https://github.com/EIGSEP/pico-firmware/compare/v3.7.0...v3.8.0) (2026-06-20)
+
+
+### Features
+
+* **potmon:** drop el channel, read az only ([400e002](https://github.com/EIGSEP/pico-firmware/commit/400e002d8cda44e3a036f46b2e0ba853f11f90cd))
+
+
+### Bug Fixes
+
+* **flash_picos:** run serial readback in a child process so a wedged port can't pin process exit ([d122ceb](https://github.com/EIGSEP/pico-firmware/commit/d122cebc6931af1203bc664c56b476bad65a1a04))
+* raise runtime error instead of json error ([5ab32cc](https://github.com/EIGSEP/pico-firmware/commit/5ab32ccb5a760feae4e53ca380ceccd1609840c8))
+
 ## [3.7.0](https://github.com/EIGSEP/pico-firmware/compare/v3.6.0...v3.7.0) (2026-06-19)
 
 
