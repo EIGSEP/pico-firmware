@@ -41,7 +41,7 @@
 // it before the target. Bring-up knobs: raise RAMP_STEPS / RAMP_START_FACTOR
 // for gentler starts at the cost of slightly slower short moves.
 #define RAMP_STEPS 100
-#define RAMP_START_FACTOR 4.0f
+#define RAMP_START_FACTOR 2.5f
 
 /**
  * @struct Stepper
