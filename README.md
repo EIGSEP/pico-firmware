@@ -175,11 +175,10 @@ JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOA
 
 ### Potentiometer Wiring (APP_POTMON)
 
-Two potentiometers for position feedback, read via the RP2350 ADC:
+Azimuth potentiometer for position feedback, read via the RP2350 ADC:
 
 | Channel | GPIO | ADC Channel | JSON Key |
 |---------|------|-------------|----------|
-| **EL** (elevation) | 26 | 0 | `pot_el_voltage` |
 | **AZ** (azimuth) | 27 | 1 | `pot_az_voltage` |
 
 ### IMU Wiring (APP_IMU_EL / APP_IMU_AZ)

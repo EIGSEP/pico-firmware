@@ -28,17 +28,14 @@ class TestPicoPotentiometer:
         """Potentiometer status should contain voltage fields from emulator."""
         pot = _make_pot()
         assert pot.last_status.get("sensor_name") == "potmon"
-        assert "pot_el_voltage" in pot.last_status
         assert "pot_az_voltage" in pot.last_status
         pot.disconnect()
 
     def test_read_voltage(self):
-        """read_voltage() returns dict with both voltage readings."""
+        """read_voltage() returns dict with az voltage reading."""
         pot = _make_pot()
         volts = pot.read_voltage()
-        assert "pot_el_voltage" in volts
         assert "pot_az_voltage" in volts
-        assert 0.0 <= volts["pot_el_voltage"] <= 3.3
         assert 0.0 <= volts["pot_az_voltage"] <= 3.3
         pot.disconnect()
 
@@ -50,26 +47,19 @@ class TestPicoPotentiometer:
         pot.disconnect()
 
     def test_set_calibration_and_read_angle(self):
-        """After set_calibration(), read_angle() returns computed angles."""
+        """After set_calibration(), read_angle() returns computed angle."""
         pot = _make_pot()
-        pot.set_calibration(
-            pot_el_params=(1000.0, 0.0),
-            pot_az_params=(1000.0, 0.0),
-        )
+        pot.set_calibration(pot_az_params=(1000.0, 0.0))
         angles = pot.read_angle()
-        assert "pot_el" in angles
         assert "pot_az" in angles
         # Emulator base voltage is ~1.5V, so angle should be ~1500
-        assert 1000.0 < angles["pot_el"] < 2000.0
         assert 1000.0 < angles["pot_az"] < 2000.0
         pot.disconnect()
 
     def test_is_calibrated_property(self):
-        """is_calibrated reflects whether both pots have parameters."""
+        """is_calibrated reflects whether the az pot has parameters."""
         pot = _make_pot()
         assert pot.is_calibrated is False
-        pot.set_calibration(pot_el_params=(1.0, 0.0))
-        assert pot.is_calibrated is False  # only pot_el set
         pot.set_calibration(pot_az_params=(1.0, 0.0))
         assert pot.is_calibrated is True
         pot.disconnect()
@@ -77,7 +67,7 @@ class TestPicoPotentiometer:
     def test_load_calibration_from_file(self):
         """load_calibration() reads (m, b) from a JSON file."""
         pot = _make_pot()
-        cal_data = {"pot_el": [100.0, -50.0], "pot_az": [200.0, -100.0]}
+        cal_data = {"pot_az": [200.0, -100.0]}
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False
         ) as f:
@@ -85,7 +75,6 @@ class TestPicoPotentiometer:
             f.flush()
             pot.load_calibration(f.name)
         assert pot.is_calibrated is True
-        assert pot._cal["pot_el"] == (100.0, -50.0)
         assert pot._cal["pot_az"] == (200.0, -100.0)
         pot.disconnect()
 
@@ -93,10 +82,10 @@ class TestPicoPotentiometer:
         """Verify angle = m * voltage + b."""
         pot = _make_pot()
         m, b = 1000.0, -500.0
-        pot.set_calibration(pot_el_params=(m, b), pot_az_params=(m, b))
-        v = pot.last_status["pot_el_voltage"]
+        pot.set_calibration(pot_az_params=(m, b))
+        v = pot.last_status["pot_az_voltage"]
         angles = pot.read_angle()
-        assert angles["pot_el"] == pytest.approx(m * v + b, abs=0.01)
+        assert angles["pot_az"] == pytest.approx(m * v + b, abs=0.01)
         pot.disconnect()
 
 
@@ -126,35 +115,23 @@ class TestPotRedisHandler:
         """Uncalibrated pot publishes voltage + None for cal/angle."""
         pot = _make_pot()
         published = self._capture(pot)
-        for key in ("pot_el", "pot_az"):
-            assert isinstance(published[f"{key}_voltage"], float)
-            assert published[f"{key}_cal_slope"] is None
-            assert published[f"{key}_cal_intercept"] is None
-            assert published[f"{key}_angle"] is None
+        assert isinstance(published["pot_az_voltage"], float)
+        assert published["pot_az_cal_slope"] is None
+        assert published["pot_az_cal_intercept"] is None
+        assert published["pot_az_angle"] is None
         pot.disconnect()
 
     def test_calibrated_publishes_scalar_slope_intercept_angle(self):
         """After set_calibration, slope/intercept/angle are floats."""
         pot = _make_pot()
-        pot.set_calibration(
-            pot_el_params=(100.0, -50.0),
-            pot_az_params=(200.0, -100.0),
-        )
+        pot.set_calibration(pot_az_params=(200.0, -100.0))
         published = self._capture(pot)
-        assert published["pot_el_cal_slope"] == 100.0
-        assert published["pot_el_cal_intercept"] == -50.0
         assert published["pot_az_cal_slope"] == 200.0
         assert published["pot_az_cal_intercept"] == -100.0
-        for key in ("pot_el", "pot_az"):
-            assert isinstance(published[f"{key}_cal_slope"], float)
-            assert isinstance(published[f"{key}_cal_intercept"], float)
-            assert isinstance(published[f"{key}_angle"], float)
-        # angle = m * v + b for each pot
-        v_el = published["pot_el_voltage"]
+        assert isinstance(published["pot_az_cal_slope"], float)
+        assert isinstance(published["pot_az_cal_intercept"], float)
+        assert isinstance(published["pot_az_angle"], float)
         v_az = published["pot_az_voltage"]
-        assert published["pot_el_angle"] == pytest.approx(
-            100.0 * v_el - 50.0, abs=1e-6
-        )
         assert published["pot_az_angle"] == pytest.approx(
             200.0 * v_az - 100.0, abs=1e-6
         )
@@ -168,9 +145,9 @@ class TestPotRedisHandler:
         Both calibrated and uncalibrated states are checked.
         """
         pot = _make_pot()
-        for cal in (None, ((100.0, -50.0), (200.0, -100.0))):
+        for cal in (None, (200.0, -100.0)):
             if cal is not None:
-                pot.set_calibration(pot_el_params=cal[0], pot_az_params=cal[1])
+                pot.set_calibration(pot_az_params=cal)
             published = self._capture(pot)
             for k, v in published.items():
                 assert isinstance(v, self._SCALAR_TYPES), (
@@ -182,14 +159,11 @@ class TestPotRedisHandler:
         """Field set is identical whether calibrated or not."""
         pot = _make_pot()
         before = set(self._capture(pot))
-        pot.set_calibration(pot_el_params=(1.0, 0.0), pot_az_params=(1.0, 0.0))
+        pot.set_calibration(pot_az_params=(1.0, 0.0))
         after = set(self._capture(pot))
         assert before == after
         # And specifically the new flat field names are present
         expected_added = {
-            "pot_el_cal_slope",
-            "pot_el_cal_intercept",
-            "pot_el_angle",
             "pot_az_cal_slope",
             "pot_az_cal_intercept",
             "pot_az_angle",
@@ -203,7 +177,6 @@ class TestPotCalStore:
 
     def _cal_payload(self):
         return {
-            "pot_el": [100.0, -50.0],
             "pot_az": [200.0, -100.0],
             "metadata": {"port": "/dev/ttyACM0", "turns": 10},
         }
@@ -218,7 +191,6 @@ class TestPotCalStore:
         payload = self._cal_payload()
         store.upload(payload)
         loaded = store.get()
-        assert loaded["pot_el"] == payload["pot_el"]
         assert loaded["pot_az"] == payload["pot_az"]
         assert loaded["metadata"] == payload["metadata"]
         # Transport.upload_dict injects an upload_time field on every write.
@@ -250,7 +222,6 @@ class TestPicoPotentiometerCalSource:
 
     def _redis_cal(self):
         return {
-            "pot_el": [100.0, -50.0],
             "pot_az": [200.0, -100.0],
         }
 
@@ -265,7 +236,7 @@ class TestPicoPotentiometerCalSource:
         transport = DummyTransport()
         store = PotCalStore(transport)
         store.upload(self._redis_cal())
-        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        file_cal = {"pot_az": [3.0, 4.0]}
         pot = DummyPicoPotentiometer(
             "/dev/dummy",
             calibration_file=self._json_cal_file(tmp_path, file_cal),
@@ -273,7 +244,6 @@ class TestPicoPotentiometerCalSource:
         )
         try:
             assert pot.is_calibrated
-            assert pot._cal["pot_el"] == (100.0, -50.0)
             assert pot._cal["pot_az"] == (200.0, -100.0)
         finally:
             pot.disconnect()
@@ -281,7 +251,7 @@ class TestPicoPotentiometerCalSource:
     def test_json_fallback_when_redis_empty(self, tmp_path):
         """Redis miss + JSON present → JSON cal is applied."""
         store = PotCalStore(DummyTransport())
-        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        file_cal = {"pot_az": [3.0, 4.0]}
         pot = DummyPicoPotentiometer(
             "/dev/dummy",
             calibration_file=self._json_cal_file(tmp_path, file_cal),
@@ -289,7 +259,6 @@ class TestPicoPotentiometerCalSource:
         )
         try:
             assert pot.is_calibrated
-            assert pot._cal["pot_el"] == (1.0, 2.0)
             assert pot._cal["pot_az"] == (3.0, 4.0)
         finally:
             pot.disconnect()
@@ -299,7 +268,7 @@ class TestPicoPotentiometerCalSource:
         pot = DummyPicoPotentiometer("/dev/dummy")
         try:
             assert pot.is_calibrated is False
-            assert pot._cal == {"pot_el": None, "pot_az": None}
+            assert pot._cal == {"pot_az": None}
         finally:
             pot.disconnect()
 
@@ -307,7 +276,7 @@ class TestPicoPotentiometerCalSource:
         """Garbage in Redis → PotCalStore.get returns None → JSON wins."""
         transport = DummyTransport()
         transport.r.set(POT_CAL_KEY, b"not-json-{")
-        file_cal = {"pot_el": [1.0, 2.0], "pot_az": [3.0, 4.0]}
+        file_cal = {"pot_az": [3.0, 4.0]}
         pot = DummyPicoPotentiometer(
             "/dev/dummy",
             calibration_file=self._json_cal_file(tmp_path, file_cal),
@@ -315,7 +284,6 @@ class TestPicoPotentiometerCalSource:
         )
         try:
             assert pot.is_calibrated
-            assert pot._cal["pot_el"] == (1.0, 2.0)
             assert pot._cal["pot_az"] == (3.0, 4.0)
         finally:
             pot.disconnect()

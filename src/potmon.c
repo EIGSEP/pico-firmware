@@ -4,7 +4,6 @@
 #include "cJSON.h"
 #include <math.h>
 
-static PotSensor pot_el;
 static PotSensor pot_az;
 
 /*helper func to init one pot sensor*/
@@ -20,10 +19,6 @@ static void pot_sensor_init(PotSensor *pot, uint gpio_pin, uint adc_channel)
 static void pot_sensor_read(PotSensor *pot)
 {
     adc_select_input(pot->adc_channel);
-    /* Discard one sample to let the shared S/H cap settle after the
-       mux switch — otherwise a low-impedance neighbour channel bleeds
-       into a high-impedance/floating one (e.g. an unconnected pot). */
-    (void)adc_read();
     uint16_t raw = adc_read();
     pot->voltage = ((float)raw / (float)POTMON_ADC_MAX) * POTMON_VREF;
 }
@@ -33,30 +28,25 @@ static void pot_sensor_read(PotSensor *pot)
 void potmon_init(uint8_t app_id)
 {
     adc_init();
-    pot_sensor_init(&pot_el, POTMON_GPIO0, POTMON_ADC_CH0);
-    pot_sensor_init(&pot_az, POTMON_GPIO1, POTMON_ADC_CH1);
+    pot_sensor_init(&pot_az, POTMON_GPIO_AZ, POTMON_ADC_CH_AZ);
 }
 
 void potmon_server(uint8_t app_id, const char *json_str)
 {
     //potmon does not handle json commands
 }
-/*read both ADC channels on every loop iteration*/
 void potmon_op(uint8_t app_id)
 {
-    pot_sensor_read(&pot_el);
     pot_sensor_read(&pot_az);
 }
 
-/*send status json with voltage, resistance, r_ref, and valid status*/
 void potmon_status(uint8_t app_id)
 {
-    send_json(5,
-        KV_STR,   "sensor_name",     "potmon",
-        KV_INT,   "app_id",          (int)app_id,
-        KV_STR,   "status",          "update",
-        KV_FLOAT, "pot_el_voltage",  pot_el.voltage,
-        KV_FLOAT, "pot_az_voltage",  pot_az.voltage
+    send_json(4,
+        KV_STR,   "sensor_name",    "potmon",
+        KV_INT,   "app_id",         (int)app_id,
+        KV_STR,   "status",         "update",
+        KV_FLOAT, "pot_az_voltage", pot_az.voltage
     );
 }
 
