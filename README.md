@@ -166,10 +166,10 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 Two independent Peltier control channels, each with an ADC thermistor divider and an H-bridge motor driver. The divider is wired `3.3V -> 10.68k fixed resistor -> ADC pin -> thermistor -> GND`, with the carrier board adding a 4.7k pull-up from each ADC node to 3.3V.
 
-| Channel | Thermistor GPIO | ADC Input | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO |
-|---------|-----------------|-----------|----------|----------------|----------------|
-| **LNA** | 27 | 1 | 8 | 10 | 12 |
-| **LOAD** | 26 | 0 | 9 | 11 | 13 |
+| Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
+|---------|-----------------|----------|---------------|---------------|-----|
+| **LNA** | 27 | 8 | 10 | 12 | PIO0 |
+| **LOAD** | 26 | 9 | 11 | 13 | PIO1 |
 
 JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`). Status includes per-channel temperature plus thermistor diagnostics (`LNA_voltage`, `LNA_resistance`, `LOAD_voltage`, `LOAD_resistance`).
 
