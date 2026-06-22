@@ -36,15 +36,18 @@ The build produces `build/pico_multi.uf2` which can be flashed to the Pico by co
 ### Flashing and Development Commands
 
 ```bash
-# Flash all Picos at once (GPIO mass-BOOTSEL — default on the hub;
-# requires the bussed BOOTSEL/RUN wiring and the `pinctrl` CLI that
-# ships with Raspberry Pi OS)
+# Flash all Picos at once (DEFAULT: USB per-device path — triggers
+# BOOTSEL via the firmware {"cmd":"bootsel"} command, falling back to
+# picotool reboot; no GPIO wiring needed). --expected defaults to 7
+# (the fleet size) and prints a loud warning, not a failure, if fewer
+# report.
 flash-picos --uf2 build/pico_multi.uf2
 
-# Hosts without the GPIO wiring: per-device USB reboot path
-flash-picos --uf2 build/pico_multi.uf2 --no-gpio
+# Opt into the GPIO mass-BOOTSEL flow (requires the bussed BOOTSEL/RUN
+# wiring and the `pinctrl` CLI that ships with Raspberry Pi OS)
+flash-picos --uf2 build/pico_multi.uf2 --gpio
 
-# Target a single Pico (automatically uses the USB path)
+# Target a single Pico (always uses the USB path; --expected is ignored)
 flash-picos --uf2 build/pico_multi.uf2 --usb-serial <ID>
 
 # Flash with custom parameters
@@ -193,8 +196,8 @@ with MotorDevice() as motor:
 ### flash-picos
 
 CLI tool (installed as `flash-picos` entry point from picohost package) for flashing and configuring multiple Picos. Two flash paths:
-- **GPIO mass-BOOTSEL (default)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. The lines are driven through the `pinctrl` CLI (`pinctrl set 17/18 op dh|dl`), so there is no GPIO library or pin-factory backend to install. One GPIO sequence (`17 dh → 18 dh → 17 dl → 18 dl`, i.e. reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then one mass reset boots everything. Fails fast with a pointer to `--no-gpio` if `pinctrl` is not on PATH
-- **USB per-device (`--no-gpio`, or automatic with `--port`/`--usb-serial`)**: reboots each CDC Pico into BOOTSEL via `picotool reboot --bus/--address`, then loads — for hosts without the GPIO wiring
+- **USB per-device (DEFAULT; also automatic with `--port`/`--usb-serial`)**: triggers BOOTSEL **primarily via the firmware's universal `{"cmd":"bootsel"}` CDC command** (handled in `main.c` before app dispatch → `reset_usb_boot()` from the main loop), and **falls back to `picotool reboot -f --bus/--address`**. The firmware command is the reliable trigger because picotool's own USB reset (the SDK vendor reset interface) is unreliable on long-running boards on the deep hub — it ACKs the request but the board never actually resets; the same board honors it again right after a fresh boot, so it's an uptime degradation, not dead hardware. A board on older firmware ignores the command and the picotool fallback handles it. This default needs no GPIO wiring and avoids the flaky BOOTSEL/CS seat entirely. Also: settles the CDC device set before flashing (no single-snapshot misses), recovers boards already stranded in BOOTSEL from a prior aborted run, emits a per-serial reconciliation report naming any board that flashed but didn't report (and why), and `--expected N` (default 7 = the fleet size, bypassed when targeting one board) prints a loud **warning** — not a failure — when fewer than N report
+- **GPIO mass-BOOTSEL (opt in with `--gpio`)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. The lines are driven through the `pinctrl` CLI (`pinctrl set 17/18 op dh|dl`), so there is no GPIO library or pin-factory backend to install. One GPIO sequence (`17 dh → 18 dh → 17 dl → 18 dl`, i.e. reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware, including boards on old firmware that lacks the bootsel command), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then one mass reset boots everything. Fails fast with a pointer to drop `--gpio` if `pinctrl` is not on PATH. This is the bootstrap path to get the bootsel-command firmware onto boards the first time
 - `picotool` targets devices by USB bus/address resolved from sysfs (never `--ser`, whose descriptor read corrupts under hub contention)
 - Stops an active `picomanager.service` before flashing and restarts it afterwards — the manager owns every Pico's CDC port (no exclusive open on either side), so a live manager races the post-flash readback. Restart happens **only if flash-picos itself stopped the unit**, so `eigsep-field patch pico-firmware` (which stops/starts the unit around its own flash-picos call and inserts an ExecStart drop-in in between) is unaffected. `--keep-manager` opts out; unprivileged runs fall back to `sudo -n systemctl`, and an active manager that cannot be stopped aborts the flash with a pointer to `--keep-manager`
 - Reads JSON device info from each Pico after flashing and publishes the device list to Redis (optionally `--output-file`)

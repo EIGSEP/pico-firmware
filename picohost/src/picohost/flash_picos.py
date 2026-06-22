@@ -232,6 +232,70 @@ def _picotool_load(bus, address, uf2_path, execute=True):
     )
 
 
+# The firmware exposes a universal {"cmd":"bootsel"} command that calls
+# reset_usb_boot() from its main loop. This is the no-gpio path's PRIMARY
+# BOOTSEL trigger: picotool's own USB reset (reboot -f / the vendor reset
+# interface) is unreliable on long-running boards on the observatory hub —
+# it ACKs the request but the board never resets — whereas the main-loop
+# reset_usb_boot reached over the (working) CDC data path is reliable. A
+# board running older firmware without the command silently ignores it, so
+# the caller falls back to picotool's reset.
+_SERIAL_WRITER_SCRIPT = str(Path(__file__).with_name("_serial_writer.py"))
+_BOOTSEL_COMMAND = '{"cmd":"bootsel"}'
+_SERIAL_WRITE_TIMEOUT_S = 5.0
+# After the CDC command the board re-enumerates in BOOTSEL quickly; keep
+# the wait short so a board on older firmware (which ignores the command)
+# falls through to the picotool reset without a long stall.
+_CDC_BOOTSEL_WAIT_S = 6.0
+
+
+def _send_serial_line(port, line, baud, timeout):
+    """Write *line* to *port* via the abandonable :mod:`_serial_writer` child.
+
+    Fire-and-forget: opening or closing a marginal / about-to-reboot CDC
+    port can wedge in the kernel, so the write runs in a child process
+    bounded by *timeout*; a wedged child is abandoned (its ``TimeoutExpired``
+    swallowed) rather than allowed to block flash-picos. Success is
+    confirmed by the caller watching sysfs for BOOTSEL, not here.
+    """
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                _SERIAL_WRITER_SCRIPT,
+                str(port),
+                str(baud),
+                line,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _enter_bootsel_via_cdc(usb_serial, baud=115200):
+    """Trigger BOOTSEL on *usb_serial* via the firmware CDC command.
+
+    Resolves the board's current CDC port, sends ``{"cmd":"bootsel"}``,
+    and waits for it to re-enumerate as a BOOTSEL device. Returns the
+    BOOTSEL ``(bus, address)`` on success, or ``(None, None)`` if the
+    board has no CDC port right now or never enters BOOTSEL (e.g. it runs
+    older firmware without the command) — the caller then falls back to
+    picotool's reset.
+    """
+    port = None
+    for dev, sn in find_pico_ports().items():
+        if sn == usb_serial:
+            port = dev
+            break
+    if port is None:
+        return (None, None)
+    _send_serial_line(port, _BOOTSEL_COMMAND, baud, _SERIAL_WRITE_TIMEOUT_S)
+    return _wait_for_bootsel(usb_serial, timeout=_CDC_BOOTSEL_WAIT_S)
+
+
 def flash_uf2(
     uf2_path,
     usb_serial,
@@ -271,30 +335,40 @@ def flash_uf2(
             logger.warning("%s (attempt %d/%d)", detail, attempt, attempts)
         else:
             if not in_bootsel:
-                rb = subprocess.run(
-                    [
-                        "picotool",
-                        "reboot",
-                        "-u",
-                        "-f",
-                        "--bus",
-                        str(bus),
-                        "--address",
-                        str(address),
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    errors="replace",
-                )
-                bus, address = _wait_for_bootsel(usb_serial)
-                if bus is None:
-                    detail = (rb.stdout or "").strip() or (
-                        f"serial={usb_serial} did not reboot into BOOTSEL"
+                # PRIMARY: ask the firmware to enter BOOTSEL over CDC
+                # ({"cmd":"bootsel"} -> reset_usb_boot in its main loop).
+                # This is reliable on long-running boards where picotool's
+                # own USB reset is not. A board on older firmware ignores
+                # the command and this returns (None, None).
+                bb, ba = _enter_bootsel_via_cdc(usb_serial)
+                if bb is None:
+                    # FALLBACK: picotool's reset interface, targeting the
+                    # original CDC bus/address resolved above.
+                    rb = subprocess.run(
+                        [
+                            "picotool",
+                            "reboot",
+                            "-u",
+                            "-f",
+                            "--bus",
+                            str(bus),
+                            "--address",
+                            str(address),
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        errors="replace",
                     )
-                    logger.warning(
-                        "%s (attempt %d/%d)", detail, attempt, attempts
-                    )
+                    bb, ba = _wait_for_bootsel(usb_serial)
+                    if bb is None:
+                        detail = (rb.stdout or "").strip() or (
+                            f"serial={usb_serial} did not reboot into BOOTSEL"
+                        )
+                        logger.warning(
+                            "%s (attempt %d/%d)", detail, attempt, attempts
+                        )
+                bus, address = bb, ba
             if bus is not None:
                 res = _picotool_load(bus, address, uf2_path, execute=True)
                 if res.returncode == 0:
@@ -730,12 +804,54 @@ def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
         )
 
 
+_CDC_SET_TIMEOUT_S = 10.0
+_CDC_SET_STABLE_S = 1.5
+_CDC_SET_POLL_S = 0.3
+
+
+def _wait_for_stable_cdc_set(
+    timeout=_CDC_SET_TIMEOUT_S,
+    stable=_CDC_SET_STABLE_S,
+    poll=_CDC_SET_POLL_S,
+):
+    """Poll :func:`find_pico_ports` until the CDC device set stops changing.
+
+    The no-gpio path used a single ``find_pico_ports()`` snapshot to decide
+    which boards to flash; on the contended hub ``list_ports.comports()``
+    can intermittently omit a board that is present, which then never gets
+    flashed and is silently dropped. Waiting until the set of CDC *serials*
+    is non-empty and unchanged for *stable* seconds closes that window, the
+    same way :func:`_wait_for_stable_bootsel_set` does for the GPIO path.
+
+    Returns the settled ``{device: serial}`` map, or the last observation
+    if it never settles within *timeout* (possibly empty — the caller may
+    still have BOOTSEL boards to recover, or should warn).
+    """
+    deadline = time.monotonic() + timeout
+    last = {}
+    last_keys = None
+    stable_since = None
+    while time.monotonic() < deadline:
+        ports = find_pico_ports()
+        keys = frozenset(ports.values())
+        now = time.monotonic()
+        if keys != last_keys:
+            last_keys = keys
+            last = ports
+            stable_since = now
+        elif keys and now - stable_since >= stable:
+            return ports
+        time.sleep(poll)
+    return last
+
+
 def flash_and_discover(
     uf2_path="build/pico_multi.uf2",
     port=None,
     usb_serial=None,
     baud=115200,
     timeout=10,
+    expected=None,
 ):
     """
     Flash all attached Picos and read device config from each.
@@ -772,31 +888,93 @@ def flash_and_discover(
     if not uf2_path.is_file():
         raise FileNotFoundError(f"UF2 file not found: {uf2_path}")
 
-    ports = find_pico_ports()
+    targeting = bool(port or usb_serial)
+
+    # Settle the CDC device set (unless targeting a single board) so a
+    # board slow to enumerate on the contended hub is not silently dropped
+    # by a single snapshot and then never flashed.
+    ports = find_pico_ports() if targeting else _wait_for_stable_cdc_set()
     if port:
         ports = {k: v for k, v in ports.items() if k == port}
     if usb_serial:
         ports = {k: v for k, v in ports.items() if v == usb_serial}
 
-    if not ports:
-        logger.info("No Raspberry Pi Pico serial ports found")
+    # Recover boards already stranded in BOOTSEL from a prior aborted run.
+    # They are invisible to find_pico_ports (CDC only), so the old path
+    # could never pick them up. A --port value identifies a CDC tty, not a
+    # BOOTSEL device, so skip recovery when targeting by --port.
+    bootsel = [] if port else _find_bootsel_devices()
+    if usb_serial:
+        bootsel = [d for d in bootsel if d["usb_serial"] == usb_serial]
+    cdc_serials = set(ports.values())
+    bootsel = [
+        d
+        for d in bootsel
+        if d["usb_serial"] and d["usb_serial"] not in cdc_serials
+    ]
+
+    if not ports and not bootsel:
+        logger.info("No Raspberry Pi Pico devices found")
         return []
 
-    logger.info(f"Found Picos on: {ports}")
-    all_devices = []
+    logger.info(
+        "Found %d CDC Pico(s)%s",
+        len(ports),
+        f" and {len(bootsel)} stranded in BOOTSEL" if bootsel else "",
+    )
+    expected_serials = set(ports.values()) | {d["usb_serial"] for d in bootsel}
+    if expected is not None and len(expected_serials) < expected:
+        logger.warning(
+            "discovered %d Pico(s) but --expected %d: %d not visible as CDC "
+            "or BOOTSEL — check power/cable/DIP before trusting the result",
+            len(expected_serials),
+            expected,
+            expected - len(expected_serials),
+        )
 
-    for idx, (port_dev, port_serial) in enumerate(ports.items()):
-        if idx > 0:
+    all_devices = []
+    outcomes = {}
+    flashed_any = False
+
+    # Recover stranded BOOTSEL boards first: load and run directly (they
+    # are already in BOOTSEL, so no reboot trigger is needed).
+    for dev in bootsel:
+        serial = dev["usb_serial"]
+        logger.info(
+            "Recovering BOOTSEL Pico serial=%s (bus=%d address=%d)",
+            serial,
+            dev["bus"],
+            dev["address"],
+        )
+        flashed_any = True
+        if not _load_bootsel_device(dev, uf2_path, execute=True):
+            outcomes[serial] = "picotool load failed while in BOOTSEL"
+            continue
+        data = _read_device_info(serial, baud, timeout)
+        outcomes[serial] = (
+            None
+            if data is not None
+            else "flashed from BOOTSEL but device-info read failed"
+        )
+        if data is not None:
+            all_devices.append(data)
+            logger.info("Read device info from %s", data["port"])
+
+    # Flash the CDC boards.
+    for port_dev, port_serial in ports.items():
+        if flashed_any:
             # Let the bus quiet after the previous Pico's post-flash
             # re-enumeration before forcing the next one into BOOTSEL.
             # Back-to-back resets on a shared hub disturb siblings and
             # cause cascading "not found in BOOTSEL" failures.
             time.sleep(_INTER_DEVICE_SETTLE_S)
+        flashed_any = True
         logger.info(f"Flashing Pico on port: {port_dev}")
         try:
             flash_uf2(uf2_path, port_serial)
         except RuntimeError as e:
             logger.error(f"Flash failed on {port_dev}: {e}")
+            outcomes[port_serial] = f"flash failed: {e}"
             continue
 
         # picotool load reboots the Pico, which re-enumerates as a
@@ -804,9 +982,19 @@ def flash_and_discover(
         # the stable usb_serial (the kernel may assign a different
         # /dev/ttyACMn than it had pre-flash) and reads its JSON.
         data = _read_device_info(port_serial, baud, timeout)
+        outcomes[port_serial] = (
+            None if data is not None else "flashed but device-info read failed"
+        )
         if data is not None:
             all_devices.append(data)
             logger.info(f"Read device info from {data['port']}")
+
+    # Per-serial reconciliation: name every board that was flashed but did
+    # not report, and why — the "which board, which stage" detail the
+    # no-gpio path previously lacked (it only logged inline errors).
+    _log_readback_reconciliation(
+        expected_serials, set(find_pico_ports().values()), outcomes
+    )
 
     return all_devices
 
@@ -816,8 +1004,14 @@ def _load_bootsel_device(
     uf2_path,
     attempts=_FLASH_MAX_ATTEMPTS,
     backoff=_FLASH_RETRY_BACKOFF_S,
+    execute=False,
 ):
-    """Load *uf2_path* onto the BOOTSEL device *dev* (no execute).
+    """Load *uf2_path* onto the BOOTSEL device *dev*.
+
+    The GPIO mass-flash path uses *execute*=``False``: the device stays in
+    BOOTSEL until a single mass reset boots the whole fleet. The no-gpio
+    BOOTSEL-recovery path uses *execute*=``True`` so the lone recovered
+    board loads and runs immediately (no fleet reset follows).
 
     Plain ``picotool load`` does not re-enumerate the device, so the
     bus/address normally stay valid; between retries the address is
@@ -829,7 +1023,7 @@ def _load_bootsel_device(
     bus, address = dev["bus"], dev["address"]
     serial = dev["usb_serial"]
     for attempt in range(1, attempts + 1):
-        res = _picotool_load(bus, address, uf2_path, execute=False)
+        res = _picotool_load(bus, address, uf2_path, execute=execute)
         if res.returncode == 0:
             return True
         logger.warning(
@@ -1033,7 +1227,7 @@ def flash_and_discover_gpio(
     Raises ``FileNotFoundError`` for a missing UF2 and ``RuntimeError``
     when no Pico enters BOOTSEL (bad wiring, or no GPIO access).
     """
-    from . import gpio  # deferred so --no-gpio paths never import gpio
+    from . import gpio  # deferred so the USB default never imports gpio
 
     uf2_path = Path(uf2_path)
     if not uf2_path.is_file():
@@ -1046,7 +1240,7 @@ def flash_and_discover_gpio(
     if not bootsel_devices:
         raise RuntimeError(
             "no Picos entered BOOTSEL after the mass GPIO entry; check "
-            "the BOOTSEL/RUN wiring or re-run with --no-gpio"
+            "the BOOTSEL/RUN wiring or drop --gpio to use the USB default"
         )
     seen = {d["usb_serial"] for d in bootsel_devices}
     missing = sorted(set(snapshot.values()) - seen)
@@ -1233,12 +1427,27 @@ def main(argv=None):
         ),
     )
     p.add_argument(
-        "--no-gpio",
+        "--gpio",
         action="store_true",
         help=(
-            "Skip the GPIO mass-BOOTSEL flash flow and reboot each "
-            "Pico into BOOTSEL over USB instead. Required on hosts "
-            "without the bussed BOOTSEL/RUN wiring."
+            "Use the GPIO mass-BOOTSEL flash flow instead of the default "
+            "USB per-device path. Requires the bussed BOOTSEL/RUN wiring "
+            "and the `pinctrl` CLI on the Pi hub. The USB default triggers "
+            'BOOTSEL via the firmware {"cmd":"bootsel"} command (falling '
+            "back to picotool reboot), which avoids the bussed BOOTSEL/CS "
+            "wiring (and a flaky seat) entirely."
+        ),
+    )
+    p.add_argument(
+        "--expected",
+        type=int,
+        default=7,
+        help=(
+            "Number of Picos expected to flash and report (the fleet "
+            "size). If fewer report device info, flash-picos prints a loud "
+            "warning naming the shortfall (it does NOT fail the run — "
+            "whatever reported is still published). Ignored when targeting "
+            "a single board with --port/--usb-serial."
         ),
     )
     p.add_argument(
@@ -1262,22 +1471,25 @@ def main(argv=None):
     )
 
     targeting = bool(args.port or args.usb_serial)
-    use_gpio = not args.no_gpio and not targeting
-    if targeting and not args.no_gpio:
+    use_gpio = args.gpio and not targeting
+    # When targeting a single board, the GPIO mass reset cannot pick one
+    # out, so fall back to the USB per-device path.
+    effective_expected = None if targeting else args.expected
+    if targeting and args.gpio:
         logger.info(
             "--port/--usb-serial target a single Pico; using the USB "
             "per-device flash path (the GPIO mass reset cannot target "
             "one Pico)"
         )
     if use_gpio:
-        from . import gpio  # deferred so --no-gpio paths never import gpio
+        from . import gpio  # deferred so the USB default never imports gpio
 
         if not gpio.available():
             print(
                 "GPIO backend unavailable: the `pinctrl` CLI was not "
                 "found on PATH. Run on the Pi hub (pinctrl ships with "
-                "Raspberry Pi OS), or re-run with --no-gpio to use the "
-                "USB per-device flash path.",
+                "Raspberry Pi OS), or drop --gpio to use the USB "
+                "per-device flash path (the default).",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1311,6 +1523,7 @@ def main(argv=None):
                     usb_serial=args.usb_serial,
                     baud=args.baud,
                     timeout=args.timeout,
+                    expected=effective_expected,
                 )
         except (FileNotFoundError, RuntimeError) as e:
             print(str(e), file=sys.stderr)
@@ -1342,6 +1555,24 @@ def main(argv=None):
             with open(args.output_file, "w") as f:
                 json.dump(all_devices, f, indent=2)
             print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
+
+        # Loud (non-fatal) under-count warning: a board that flashed but
+        # never reported is already named in the per-serial reconciliation
+        # above; this is the one-line "you got fewer than the fleet"
+        # banner. It does NOT fail the run — whatever reported is already
+        # published — so an operator notices the shortfall without the
+        # exit blocking partial progress (or eigsep-field patch).
+        if (
+            effective_expected is not None
+            and len(all_devices) < effective_expected
+        ):
+            print(
+                f"WARNING: expected {effective_expected} Pico(s) but only "
+                f"{len(all_devices)} reported device info — see the "
+                f"per-serial reconciliation above for which boards dropped "
+                f"and why. Re-run flash-picos to retry the stragglers.",
+                file=sys.stderr,
+            )
     finally:
         # Restart ONLY if we stopped it: under `eigsep-field patch`
         # the unit is already stopped by the coordinator, which must

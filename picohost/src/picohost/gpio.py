@@ -149,7 +149,8 @@ def available():
     """Return True if the ``pinctrl`` CLI is on PATH.
 
     False on hosts without it (e.g. a dev laptop) — callers should fall
-    back to the USB flash path or tell the user to pass ``--no-gpio``.
+    back to the USB flash path (the default) or tell the user to drop
+    ``--gpio``.
     """
     return shutil.which("pinctrl") is not None
 

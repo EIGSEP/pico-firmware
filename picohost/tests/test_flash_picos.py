@@ -27,14 +27,13 @@ def _mock_flash(monkeypatch, tmp_path):
     uf2 = tmp_path / "test.uf2"
     uf2.write_bytes(b"\x00")
 
-    monkeypatch.setattr(
-        fp,
-        "find_pico_ports",
-        lambda: {
-            "/dev/ttyACM0": "SER_A",
-            "/dev/ttyACM1": "SER_B",
-        },
-    )
+    cdc = {
+        "/dev/ttyACM0": "SER_A",
+        "/dev/ttyACM1": "SER_B",
+    }
+    monkeypatch.setattr(fp, "find_pico_ports", lambda: dict(cdc))
+    monkeypatch.setattr(fp, "_wait_for_stable_cdc_set", lambda: dict(cdc))
+    monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
 
     flashed = []
     monkeypatch.setattr(
@@ -61,6 +60,19 @@ def _mock_flash(monkeypatch, tmp_path):
 
 
 class TestFlashAndDiscover:
+    @pytest.fixture(autouse=True)
+    def _stub_discovery(self, monkeypatch):
+        # The no-gpio path settles the CDC set and scans for stranded
+        # BOOTSEL boards; by default delegate the settle to each test's
+        # find_pico_ports mock and report no BOOTSEL boards. Tests that
+        # exercise recovery override _find_bootsel_devices.
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_wait_for_stable_cdc_set", lambda: fp.find_pico_ports()
+        )
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
+
     def test_returns_device_list(self, _mock_flash):
         uf2, flashed = _mock_flash
         devices = flash_and_discover(uf2_path=uf2)
@@ -342,6 +354,105 @@ class TestFlashAndDiscover:
             ("read", "/dev/ttyACM2"),
         ]
 
+    def test_recovers_board_stranded_in_bootsel(self, monkeypatch, tmp_path):
+        # A board left in BOOTSEL by a prior aborted run is invisible to
+        # find_pico_ports (CDC only); the no-gpio path now recovers it by
+        # loading + running it directly (no reboot trigger needed).
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(fp, "find_pico_ports", lambda: {})
+        monkeypatch.setattr(
+            fp,
+            "_find_bootsel_devices",
+            lambda *a, **k: [{"usb_serial": "SER_B", "bus": 1, "address": 50}],
+        )
+        loaded = []
+        monkeypatch.setattr(
+            fp,
+            "_load_bootsel_device",
+            lambda dev, path, execute=False: (
+                loaded.append((dev["usb_serial"], execute)) or True
+            ),
+        )
+        monkeypatch.setattr(
+            fp,
+            "_read_device_info",
+            lambda serial, baud, timeout: {
+                "app_id": 5,
+                "port": "/dev/ttyACM9",
+                "usb_serial": serial,
+            },
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        devices = fp.flash_and_discover(uf2_path=uf2)
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        # Recovered boards load WITH execute=True (run immediately).
+        assert loaded == [("SER_B", True)]
+
+    def test_reconciliation_names_flashed_but_unread_board(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        import logging
+
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            fp,
+            "find_pico_ports",
+            lambda: {"/dev/ttyACM0": "SER_A", "/dev/ttyACM1": "SER_B"},
+        )
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        # SER_A reads back; SER_B flashes but never reports.
+        monkeypatch.setattr(
+            fp,
+            "_read_device_info",
+            lambda serial, baud, timeout: (
+                {"app_id": 0, "port": "/dev/ttyACM0", "usb_serial": serial}
+                if serial == "SER_A"
+                else None
+            ),
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        with caplog.at_level(logging.WARNING):
+            devices = fp.flash_and_discover(uf2_path=uf2)
+        assert [d["usb_serial"] for d in devices] == ["SER_A"]
+        assert "SER_B" in caplog.text
+        assert "NOT reported" in caplog.text
+
+    def test_expected_warns_when_fewer_discovered(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        import logging
+
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
+        )
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        monkeypatch.setattr(
+            fp,
+            "_read_device_info",
+            lambda serial, baud, timeout: {
+                "app_id": 0,
+                "port": "/dev/ttyACM0",
+                "usb_serial": serial,
+            },
+        )
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        with caplog.at_level(logging.WARNING):
+            fp.flash_and_discover(uf2_path=uf2, expected=3)
+        assert "--expected 3" in caplog.text
+
 
 class TestFlashUf2:
     """flash_uf2 reboots a CDC Pico into BOOTSEL with ``picotool reboot``
@@ -352,11 +463,50 @@ class TestFlashUf2:
     backoff.
     """
 
+    def test_cdc_command_enters_bootsel_skips_picotool_reboot(
+        self, monkeypatch
+    ):
+        # PRIMARY path: the firmware {"cmd":"bootsel"} command puts the
+        # board into BOOTSEL, so picotool reboot is never run — only load.
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "_resolve_bus_address", lambda s: (1, 104, False)
+        )
+        monkeypatch.setattr(fp, "_enter_bootsel_via_cdc", lambda s: (1, 200))
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout="")
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        fp.flash_uf2("x.uf2", "SER_A")
+        assert cmds == [
+            [
+                "picotool",
+                "load",
+                "--bus",
+                "1",
+                "--address",
+                "200",
+                "-x",
+                "x.uf2",
+            ],
+        ]
+        assert all(c[1] != "reboot" for c in cmds)
+
     def test_cdc_device_rebooted_then_loaded(self, monkeypatch):
         import picohost.flash_picos as fp
 
         monkeypatch.setattr(
             fp, "_resolve_bus_address", lambda s: (1, 104, False)
+        )
+        # CDC command fails -> fall back to picotool's USB reset.
+        monkeypatch.setattr(
+            fp, "_enter_bootsel_via_cdc", lambda s: (None, None)
         )
         monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s: (1, 107))
         cmds = []
@@ -514,6 +664,9 @@ class TestFlashUf2:
         monkeypatch.setattr(
             fp, "_resolve_bus_address", lambda s: next(resolves)
         )
+        monkeypatch.setattr(
+            fp, "_enter_bootsel_via_cdc", lambda s: (None, None)
+        )
         monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s: (1, 107))
         codes = iter([1, 0])
         cmds = []
@@ -570,6 +723,9 @@ class TestFlashUf2:
         monkeypatch.setattr(
             fp, "_resolve_bus_address", lambda s: (1, 104, False)
         )
+        monkeypatch.setattr(
+            fp, "_enter_bootsel_via_cdc", lambda s: (None, None)
+        )
         monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s: (None, None))
         cmds = []
 
@@ -602,6 +758,92 @@ class TestFlashUf2:
         with pytest.raises(RuntimeError, match="after 3 attempts"):
             fp.flash_uf2("x.uf2", "SER_A", attempts=3, backoff=0.0)
         assert ran == []
+
+
+class TestSendSerialLine:
+    def test_runs_writer_child_with_argv(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            captured["timeout"] = kw.get("timeout")
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        fp._send_serial_line("/dev/ttyACM3", '{"cmd":"bootsel"}', 115200, 5.0)
+        assert captured["cmd"][1] == fp._SERIAL_WRITER_SCRIPT
+        assert captured["cmd"][2:] == [
+            "/dev/ttyACM3",
+            "115200",
+            '{"cmd":"bootsel"}',
+        ]
+        assert captured["timeout"] == 5.0
+
+    def test_swallows_writer_timeout(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        def fake_run(cmd, **kw):
+            raise fp.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        # Must not raise — a wedged writer child is abandoned, not awaited.
+        fp._send_serial_line("/dev/ttyACM3", "x", 115200, 0.1)
+
+
+class TestEnterBootselViaCdc:
+    """The no-gpio path triggers BOOTSEL via the firmware CDC command
+    ({"cmd":"bootsel"} -> reset_usb_boot in the main loop) first, because
+    picotool's own USB reset is unreliable on long-running boards. This
+    resolves the board's CDC port, sends the command, and waits for it to
+    re-enumerate in BOOTSEL.
+    """
+
+    def test_sends_command_and_returns_bootsel_address(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM3": "SER_A"}
+        )
+        sent = {}
+        monkeypatch.setattr(
+            fp,
+            "_send_serial_line",
+            lambda port, line, baud, timeout: sent.update(
+                port=port, line=line
+            ),
+        )
+        monkeypatch.setattr(fp, "_wait_for_bootsel", lambda s, **k: (1, 77))
+
+        assert fp._enter_bootsel_via_cdc("SER_A") == (1, 77)
+        assert sent["port"] == "/dev/ttyACM3"
+        assert sent["line"] == fp._BOOTSEL_COMMAND
+
+    def test_no_port_does_not_send_and_returns_none(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM3": "OTHER"}
+        )
+
+        def must_not_send(*a, **k):
+            raise AssertionError("must not send to an unresolved port")
+
+        monkeypatch.setattr(fp, "_send_serial_line", must_not_send)
+        assert fp._enter_bootsel_via_cdc("SER_A") == (None, None)
+
+    def test_returns_none_when_board_never_enters_bootsel(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM3": "SER_A"}
+        )
+        monkeypatch.setattr(fp, "_send_serial_line", lambda *a, **k: None)
+        monkeypatch.setattr(
+            fp, "_wait_for_bootsel", lambda s, **k: (None, None)
+        )
+        assert fp._enter_bootsel_via_cdc("SER_A") == (None, None)
 
 
 class TestWaitForBootsel:
@@ -836,6 +1078,48 @@ class TestSerialReaderChild:
 
         sr.run("/dev/ttyACM4", 115200, 0.1, out)
         assert json.loads(out.getvalue()) == {"timeout": True}
+
+
+class TestSerialWriterChild:
+    """The child writer (_serial_writer.run) sends one line to the CDC
+    port (the {"cmd":"bootsel"} reflash trigger) and closes.
+
+    It is fire-and-forget: the caller confirms the reboot by watching
+    sysfs for BOOTSEL, not by this child. The newline terminator is added
+    by the writer so callers pass the bare command.
+    """
+
+    def test_writes_line_with_newline_then_closes(self, monkeypatch):
+        import picohost._serial_writer as sw
+
+        events = []
+
+        class FakeSerial:
+            def __init__(self, *a, **k):
+                pass
+
+            def write(self, b):
+                events.append(("write", b))
+
+            def flush(self):
+                events.append("flush")
+
+            def close(self):
+                events.append("close")
+
+        monkeypatch.setattr(sw, "Serial", FakeSerial)
+        assert sw.run("/dev/ttyACM4", 115200, '{"cmd":"bootsel"}') == 0
+        assert events == [("write", b'{"cmd":"bootsel"}\n'), "flush", "close"]
+
+    def test_open_failure_returns_nonzero(self, monkeypatch):
+        import picohost._serial_writer as sw
+
+        class FailingSerial:
+            def __init__(self, *a, **k):
+                raise OSError(errno.EBUSY, "resource busy")
+
+        monkeypatch.setattr(sw, "Serial", FailingSerial)
+        assert sw.run("/dev/ttyACM4", 115200, '{"cmd":"bootsel"}') == 1
 
 
 class _FakeReaderProc:
@@ -1247,6 +1531,60 @@ class TestWaitForStableBootselSet:
             timeout=0.05, stable=10.0, poll=0.005
         )
         assert result == [d1]
+
+
+class TestWaitForStableCdcSet:
+    """The no-gpio path settles the CDC device set before flashing, so a
+    board slow to enumerate on the contended hub is not silently skipped
+    by a single snapshot (the way `find_pico_ports()` alone would)."""
+
+    def _scanner(self, monkeypatch, frames):
+        import picohost.flash_picos as fp
+
+        calls = {"n": 0}
+
+        def fake_find():
+            idx = min(calls["n"], len(frames) - 1)
+            calls["n"] += 1
+            return frames[idx]
+
+        monkeypatch.setattr(fp, "find_pico_ports", fake_find)
+        return calls
+
+    def test_returns_after_set_stabilizes(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        self._scanner(
+            monkeypatch,
+            [
+                {"/dev/ttyACM0": "A"},
+                {"/dev/ttyACM0": "A", "/dev/ttyACM1": "B"},
+            ],
+        )
+        result = fp._wait_for_stable_cdc_set(
+            timeout=5.0, stable=0.05, poll=0.005
+        )
+        assert result == {"/dev/ttyACM0": "A", "/dev/ttyACM1": "B"}
+
+    def test_waits_through_growing_set(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        d1 = {"/dev/ttyACM0": "A"}
+        d2 = {"/dev/ttyACM0": "A", "/dev/ttyACM1": "B"}
+        self._scanner(monkeypatch, [d1, d1, d1, d2])
+        result = fp._wait_for_stable_cdc_set(
+            timeout=5.0, stable=0.3, poll=0.005
+        )
+        assert result == d2
+
+    def test_returns_last_seen_on_timeout(self, monkeypatch):
+        import picohost.flash_picos as fp
+
+        self._scanner(monkeypatch, [{"/dev/ttyACM0": "A"}])
+        result = fp._wait_for_stable_cdc_set(
+            timeout=0.05, stable=10.0, poll=0.005
+        )
+        assert result == {"/dev/ttyACM0": "A"}
 
 
 @pytest.fixture
@@ -1867,18 +2205,20 @@ class TestMainRouting:
         fp.main(argv + ["--no-redis"])
         return calls
 
-    def test_default_routes_to_gpio(self, monkeypatch):
+    def test_default_routes_to_usb(self, monkeypatch):
+        # The USB per-device path is the default; --gpio opts into the
+        # GPIO mass-BOOTSEL flow.
         calls = self._run_main(monkeypatch, ["--uf2", "x.uf2"])
-        assert [c[0] for c in calls] == ["gpio"]
-
-    def test_no_gpio_flag_routes_to_usb(self, monkeypatch):
-        calls = self._run_main(monkeypatch, ["--uf2", "x.uf2", "--no-gpio"])
         assert [c[0] for c in calls] == ["usb"]
 
+    def test_gpio_flag_routes_to_gpio(self, monkeypatch):
+        calls = self._run_main(monkeypatch, ["--uf2", "x.uf2", "--gpio"])
+        assert [c[0] for c in calls] == ["gpio"]
+
     def test_port_targeting_routes_to_usb(self, monkeypatch):
-        # GPIO mass reset cannot target a single Pico.
+        # GPIO mass reset cannot target a single Pico (even with --gpio).
         calls = self._run_main(
-            monkeypatch, ["--uf2", "x.uf2", "--port", "/dev/ttyACM0"]
+            monkeypatch, ["--uf2", "x.uf2", "--gpio", "--port", "/dev/ttyACM0"]
         )
         assert [c[0] for c in calls] == ["usb"]
         assert calls[0][1]["port"] == "/dev/ttyACM0"
@@ -1891,14 +2231,14 @@ class TestMainRouting:
         assert calls[0][1]["usb_serial"] == "SER_A"
 
     def test_gpio_unavailable_fails_fast(self, monkeypatch, capsys):
-        # No silent fallback: tell the operator to fix the backend or
-        # pass --no-gpio explicitly.
+        # --gpio requested but pinctrl missing: no silent fallback — tell
+        # the operator to fix the backend or drop --gpio.
         with pytest.raises(SystemExit) as excinfo:
             self._run_main(
-                monkeypatch, ["--uf2", "x.uf2"], gpio_available=False
+                monkeypatch, ["--uf2", "x.uf2", "--gpio"], gpio_available=False
             )
         assert excinfo.value.code == 1
-        assert "--no-gpio" in capsys.readouterr().err
+        assert "--gpio" in capsys.readouterr().err
 
     def test_gpio_flow_runtime_error_exits_nonzero(self, monkeypatch, capsys):
         import picohost.flash_picos as fp
@@ -1916,9 +2256,59 @@ class TestMainRouting:
 
         monkeypatch.setattr(fp, "flash_and_discover_gpio", boom)
         with pytest.raises(SystemExit) as excinfo:
-            fp.main(["--uf2", "x.uf2", "--no-redis"])
+            fp.main(["--uf2", "x.uf2", "--gpio", "--no-redis"])
         assert excinfo.value.code == 1
         assert "BOOTSEL" in capsys.readouterr().err
+
+    def test_expected_passed_through_to_usb_flash(self, monkeypatch):
+        calls = self._run_main(
+            monkeypatch, ["--uf2", "x.uf2", "--expected", "1"]
+        )
+        assert calls[0][1]["expected"] == 1
+
+    def test_default_expected_is_seven(self, monkeypatch):
+        # With no --expected, the default fleet size of 7 is passed down.
+        calls = self._run_main(monkeypatch, ["--uf2", "x.uf2"])
+        assert calls[0][1]["expected"] == 7
+
+    def test_expected_shortfall_warns_does_not_fail(self, monkeypatch, capsys):
+        # Fewer boards report than --expected: a loud warning, NOT a
+        # failure — the run still publishes whatever reported and exits 0.
+        import picohost.flash_picos as fp
+        import picohost.gpio as gpio_mod
+
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
+        monkeypatch.setattr(gpio_mod, "available", lambda: True)
+        monkeypatch.setattr(
+            fp, "flash_and_discover", lambda **kw: [{"app_id": 0}]
+        )
+        # Must NOT raise SystemExit.
+        fp.main(["--uf2", "x.uf2", "--no-redis", "--expected", "3"])
+        err = capsys.readouterr().err
+        assert "warning" in err.lower()
+        assert "expected 3" in err.lower()
+
+    def test_targeting_bypasses_expected_warning(self, monkeypatch, capsys):
+        # A deliberate single-board flash must not warn about the fleet
+        # count: targeting sets the effective expected to None.
+        import picohost.flash_picos as fp
+        import picohost.gpio as gpio_mod
+
+        monkeypatch.setattr(
+            fp.manager_service, "manager_is_active", lambda: False
+        )
+        monkeypatch.setattr(gpio_mod, "available", lambda: True)
+        calls = []
+        monkeypatch.setattr(
+            fp,
+            "flash_and_discover",
+            lambda **kw: calls.append(kw) or [{"app_id": 0}],
+        )
+        fp.main(["--uf2", "x.uf2", "--no-redis", "--usb-serial", "SER_A"])
+        assert "expected" not in capsys.readouterr().err.lower()
+        assert calls[0]["expected"] is None
 
 
 class TestManagerAutoStop:
@@ -1954,7 +2344,7 @@ class TestManagerAutoStop:
         return uf2, events
 
     def _argv(self, uf2):
-        return ["--uf2", str(uf2), "--no-gpio", "--no-redis"]
+        return ["--uf2", str(uf2), "--no-redis"]
 
     def test_stops_then_flashes_then_restarts(self, monkeypatch, tmp_path):
         uf2, events = self._setup(
