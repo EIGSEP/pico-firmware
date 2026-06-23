@@ -266,21 +266,28 @@ class TestFlashAndDiscover:
         uf2 = tmp_path / "test.uf2"
         uf2.write_bytes(b"\x00")
 
+        # SER_A is discovered (so it is flashed) but never re-enumerates —
+        # absent from find_pico_ports post-flash — so neither the first-pass
+        # read nor the sweep can recover it; only SER_B is published.
+        monkeypatch.setattr(
+            fp,
+            "_wait_for_stable_cdc_set",
+            lambda: {"/dev/ttyACM0": "SER_A", "/dev/ttyACM1": "SER_B"},
+        )
+        # Post-flash CDC view: SER_A never re-enumerated.
         monkeypatch.setattr(
             fp,
             "find_pico_ports",
-            lambda: {
-                "/dev/ttyACM0": "SER_A",
-                "/dev/ttyACM1": "SER_B",
-            },
+            lambda: {"/dev/ttyACM1": "SER_B"},
         )
-
         # SER_A never re-appears; SER_B comes back fine.
         monkeypatch.setattr(
             fp,
             "_resolve_post_flash_port",
             lambda serial, **k: {"SER_B": "/dev/ttyACM1"}.get(serial),
         )
+        # No boards stranded in BOOTSEL (deterministic; avoids real sysfs).
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
 
         monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
         monkeypatch.setattr(
@@ -290,12 +297,6 @@ class TestFlashAndDiscover:
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        # This test exercises the first-pass re-enumeration check only; stub
-        # out the post-loop sweep so SER_A (still visible in find_pico_ports)
-        # is not incidentally recovered by the sweep.
-        monkeypatch.setattr(
-            fp, "_reconcile_usb_stragglers", lambda *a, **k: ([], {})
-        )
 
         devices = flash_and_discover(uf2_path=uf2)
         assert len(devices) == 1
