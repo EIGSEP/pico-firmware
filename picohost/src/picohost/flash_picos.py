@@ -1009,6 +1009,15 @@ def flash_and_discover(
             all_devices.append(data)
             logger.info(f"Read device info from {data['port']}")
 
+    # Reconcile stragglers on the now-quiet bus: pass 1 gave up fast on any
+    # board lost to contention; re-read or reload them here before the report.
+    reported = {d["usb_serial"] for d in all_devices}
+    sweep_devices, sweep_outcomes = _reconcile_usb_stragglers(
+        expected_serials, reported, uf2_path, baud
+    )
+    all_devices.extend(sweep_devices)
+    outcomes.update(sweep_outcomes)
+
     # Per-serial reconciliation: name every board that was flashed but did
     # not report, and why — the "which board, which stage" detail the
     # no-gpio path previously lacked (it only logged inline errors).

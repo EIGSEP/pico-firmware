@@ -290,6 +290,12 @@ class TestFlashAndDiscover:
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        # This test exercises the first-pass re-enumeration check only; stub
+        # out the post-loop sweep so SER_A (still visible in find_pico_ports)
+        # is not incidentally recovered by the sweep.
+        monkeypatch.setattr(
+            fp, "_reconcile_usb_stragglers", lambda *a, **k: ([], {})
+        )
 
         devices = flash_and_discover(uf2_path=uf2)
         assert len(devices) == 1
@@ -482,6 +488,46 @@ class TestFlashAndDiscover:
 
         assert seen["read_timeout"] == fp._FIRST_PASS_READ_TIMEOUT_S
         assert seen["reenum_timeout"] == fp._FIRST_PASS_REENUM_TIMEOUT_S
+
+    def test_straggler_recovered_by_sweep(self, monkeypatch, tmp_path):
+        """A board whose first-pass read fails is recovered by the post-loop
+        sweep and ends up in the published set."""
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        cdc = {"/dev/ttyACM0": "SER_A", "/dev/ttyACM1": "SER_B"}
+        monkeypatch.setattr(fp, "find_pico_ports", lambda: dict(cdc))
+        monkeypatch.setattr(fp, "_wait_for_stable_cdc_set", lambda: dict(cdc))
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+        monkeypatch.setattr(
+            fp, "_resolve_post_flash_port", lambda serial, **k: {
+                "SER_A": "/dev/ttyACM0", "SER_B": "/dev/ttyACM1"
+            }[serial]
+        )
+
+        # SER_B is mute on its first read (pass 1); every later read succeeds
+        # (the quiet-bus sweep).
+        state = {"ser_b_reads": 0}
+
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM1":
+                state["ser_b_reads"] += 1
+                if state["ser_b_reads"] == 1:
+                    raise RuntimeError("Timed out waiting for JSON")
+                return {"app_id": 5}
+            return {"app_id": 0}
+
+        monkeypatch.setattr(fp, "read_json_from_serial", read)
+
+        devices = fp.flash_and_discover(uf2_path=uf2)
+        by_serial = {d["usb_serial"]: d for d in devices}
+        assert set(by_serial) == {"SER_A", "SER_B"}  # SER_B recovered
+        assert by_serial["SER_B"]["app_id"] == 5
 
 
 class TestFlashUf2:
