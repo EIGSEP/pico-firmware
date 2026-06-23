@@ -1211,6 +1211,77 @@ def _reread_mute_boards(
     return recovered, outcomes
 
 
+# The reconcile sweep runs after the flash loop, on a now-quiet bus. Settle
+# briefly first so nothing is mid-re-enumeration, then give each straggler a
+# capped number of snappy reads — on a quiet bus a healthy board answers on
+# the first one, so a second miss means it is genuinely not reporting and we
+# fail it fast rather than burning the full _MUTE_REREAD_ATTEMPTS.
+_PRE_SWEEP_SETTLE_S = 2.0
+_SWEEP_REREAD_ATTEMPTS = 2
+
+
+def _reconcile_usb_stragglers(expected_serials, reported, uf2_path, baud):
+    """Recover boards flashed in pass 1 but not yet reported, on a quiet bus.
+
+    Pass 1 reads each board inline with short timeouts (fast give-up); a
+    board lost to transient contention — re-enumerated but momentarily mute,
+    re-enumerated just after the short window, or left in BOOTSEL — is
+    deferred to here. After a brief settle so nothing is re-enumerating:
+
+    * a board now present as CDC is re-read with the patient
+      :func:`_reread_mute_boards`, capped at :data:`_SWEEP_REREAD_ATTEMPTS`;
+    * a board now in BOOTSEL is reloaded-and-run, then read patiently;
+    * a board that is neither is left for the caller to report.
+
+    Returns ``(devices, outcomes)`` for the boards handled here. ``outcomes``
+    maps each recovered serial to ``None`` and each still-failing serial to a
+    reason, for the caller's reconciliation report.
+    """
+    pending = set(expected_serials) - set(reported)
+    devices = []
+    outcomes = {}
+    if not pending:
+        return devices, outcomes
+
+    time.sleep(_PRE_SWEEP_SETTLE_S)
+
+    # Boards back as CDC: re-read on the now-quiet bus (capped attempts).
+    cdc_pending = pending & set(find_pico_ports().values())
+    if cdc_pending:
+        reread, reread_outcomes = _reread_mute_boards(
+            cdc_pending, baud, attempts=_SWEEP_REREAD_ATTEMPTS
+        )
+        devices.extend(reread)
+        outcomes.update(reread_outcomes)
+        pending -= {d["usb_serial"] for d in reread}
+
+    # Boards still in BOOTSEL (their load -x "run" did not take): reload and
+    # run, then read patiently.
+    bootsel = {
+        d["usb_serial"]: d
+        for d in _find_bootsel_devices()
+        if d["usb_serial"] in pending
+    }
+    for serial, dev in sorted(bootsel.items()):
+        logger.info(
+            "sweep: recovering serial=%s from BOOTSEL (bus=%d address=%d)",
+            serial,
+            dev["bus"],
+            dev["address"],
+        )
+        if not _load_bootsel_device(dev, uf2_path, execute=True):
+            outcomes[serial] = "still in BOOTSEL; reload failed during sweep"
+            continue
+        data = _read_device_info(serial, baud)
+        if data is not None:
+            devices.append(data)
+            outcomes[serial] = None
+        else:
+            outcomes[serial] = "reloaded from BOOTSEL but device-info read failed"
+
+    return devices, outcomes
+
+
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,

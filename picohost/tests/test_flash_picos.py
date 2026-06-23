@@ -2455,3 +2455,102 @@ class TestManagerAutoStop:
         assert excinfo.value.code == 1
         assert "cannot stop" in capsys.readouterr().err
         assert events == []
+
+
+class TestReconcileUsbStragglers:
+    """The post-loop sweep recovers boards flashed but unreported, on a
+    now-quiet bus: re-read CDC-present boards, reload BOOTSEL-stuck ones."""
+
+    def _patch_quiet(self, monkeypatch, fp):
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+    def test_no_pending_is_noop(self, monkeypatch, tmp_path):
+        import picohost.flash_picos as fp
+
+        self._patch_quiet(monkeypatch, fp)
+
+        def boom(*a, **k):
+            raise AssertionError("must not touch the bus when nothing pends")
+
+        monkeypatch.setattr(fp, "find_pico_ports", boom)
+        monkeypatch.setattr(fp, "_find_bootsel_devices", boom)
+
+        devices, outcomes = fp._reconcile_usb_stragglers(
+            {"SER_A", "SER_B"}, {"SER_A", "SER_B"}, tmp_path / "x.uf2", 115200
+        )
+        assert devices == []
+        assert outcomes == {}
+
+    def test_rereads_cdc_straggler(self, monkeypatch, tmp_path):
+        import picohost.flash_picos as fp
+
+        self._patch_quiet(monkeypatch, fp)
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM6": "SER_B"}
+        )
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
+        monkeypatch.setattr(
+            fp, "read_json_from_serial", lambda port, baud, timeout: {"app_id": 5}
+        )
+
+        devices, outcomes = fp._reconcile_usb_stragglers(
+            {"SER_A", "SER_B"}, {"SER_A"}, tmp_path / "x.uf2", 115200
+        )
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        assert outcomes["SER_B"] is None
+
+    def test_recovers_bootsel_straggler(self, monkeypatch, tmp_path):
+        import picohost.flash_picos as fp
+
+        self._patch_quiet(monkeypatch, fp)
+        # Not present as CDC, but sitting in BOOTSEL.
+        monkeypatch.setattr(fp, "find_pico_ports", lambda: {})
+        monkeypatch.setattr(
+            fp,
+            "_find_bootsel_devices",
+            lambda *a, **k: [{"usb_serial": "SER_B", "bus": 1, "address": 9}],
+        )
+        loaded = []
+        monkeypatch.setattr(
+            fp,
+            "_load_bootsel_device",
+            lambda dev, uf2, execute=False: loaded.append(dev["usb_serial"]) or True,
+        )
+        monkeypatch.setattr(
+            fp,
+            "_read_device_info",
+            lambda serial, baud, **k: {
+                "app_id": 5, "port": "/dev/ttyACM6", "usb_serial": serial
+            },
+        )
+
+        devices, outcomes = fp._reconcile_usb_stragglers(
+            {"SER_B"}, set(), tmp_path / "x.uf2", 115200
+        )
+        assert loaded == ["SER_B"]
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        assert outcomes["SER_B"] is None
+
+    def test_gives_up_after_cap_on_silent_cdc(self, monkeypatch, tmp_path):
+        import picohost.flash_picos as fp
+
+        self._patch_quiet(monkeypatch, fp)
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM6": "SER_B"}
+        )
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
+        reads = {"n": 0}
+
+        def always_fail(port, baud, timeout):
+            reads["n"] += 1
+            raise RuntimeError("Timed out waiting for JSON")
+
+        monkeypatch.setattr(fp, "read_json_from_serial", always_fail)
+
+        devices, outcomes = fp._reconcile_usb_stragglers(
+            {"SER_B"}, set(), tmp_path / "x.uf2", 115200
+        )
+        assert devices == []
+        assert outcomes["SER_B"] is not None
+        assert reads["n"] == fp._SWEEP_REREAD_ATTEMPTS  # capped, not 5
