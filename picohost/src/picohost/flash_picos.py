@@ -535,6 +535,13 @@ _CDC_DISCOVER_POLL_S = 0.3
 _MUTE_REREAD_TIMEOUT_S = 5
 _MUTE_REREAD_ATTEMPTS = 5
 _MUTE_REREAD_SETTLE_S = 1.5
+# First-pass (busy-bus) readback is impatient: a healthy board answers in
+# well under a second (status every 200 ms), and a board mute under
+# contention will not answer within 10 s either — it needs the bus to
+# quiet, which the post-loop reconcile sweep provides. So give up fast and
+# defer stragglers to the sweep rather than stalling the run.
+_FIRST_PASS_READ_TIMEOUT_S = 2.0
+_FIRST_PASS_REENUM_TIMEOUT_S = 4.0
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -989,7 +996,12 @@ def flash_and_discover(
         # CDC device. _read_device_info resolves the current path from
         # the stable usb_serial (the kernel may assign a different
         # /dev/ttyACMn than it had pre-flash) and reads its JSON.
-        data = _read_device_info(port_serial, baud)
+        data = _read_device_info(
+            port_serial,
+            baud,
+            read_timeout=_FIRST_PASS_READ_TIMEOUT_S,
+            reenum_timeout=_FIRST_PASS_REENUM_TIMEOUT_S,
+        )
         outcomes[port_serial] = (
             None if data is not None else "flashed but device-info read failed"
         )

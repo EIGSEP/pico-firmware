@@ -453,6 +453,36 @@ class TestFlashAndDiscover:
             fp.flash_and_discover(uf2_path=uf2, expected=3)
         assert "--expected 3" in caplog.text
 
+    def test_first_pass_uses_fast_timeouts(self, monkeypatch, tmp_path):
+        """The per-board inline read gives up fast (short timeouts), so a
+        failing board does not stall the run."""
+        import picohost.flash_picos as fp
+
+        uf2 = tmp_path / "test.uf2"
+        uf2.write_bytes(b"\x00")
+
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
+        )
+        monkeypatch.setattr(fp, "_wait_for_stable_cdc_set", lambda: {"/dev/ttyACM0": "SER_A"})
+        monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
+        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+        seen = {}
+
+        def fake_read_device_info(serial, baud, read_timeout=None, reenum_timeout=None):
+            seen["read_timeout"] = read_timeout
+            seen["reenum_timeout"] = reenum_timeout
+            return {"app_id": 0, "port": "/dev/ttyACM0", "usb_serial": serial}
+
+        monkeypatch.setattr(fp, "_read_device_info", fake_read_device_info)
+        # No stragglers, so the sweep (added later) is a no-op here.
+        fp.flash_and_discover(uf2_path=uf2)
+
+        assert seen["read_timeout"] == fp._FIRST_PASS_READ_TIMEOUT_S
+        assert seen["reenum_timeout"] == fp._FIRST_PASS_REENUM_TIMEOUT_S
+
 
 class TestFlashUf2:
     """flash_uf2 reboots a CDC Pico into BOOTSEL with ``picotool reboot``
