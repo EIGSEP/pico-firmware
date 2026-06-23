@@ -529,6 +529,12 @@ _INTER_DEVICE_SETTLE_S = 1.0
 # re-enumerate as CDC before reading any of them.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
+# A board that re-enumerated as CDC emits a status line every 200 ms, so
+# a short read is plenty; keep re-reads snappy rather than waiting out the
+# full per-device timeout on every attempt.
+_MUTE_REREAD_TIMEOUT_S = 5
+_MUTE_REREAD_ATTEMPTS = 5
+_MUTE_REREAD_SETTLE_S = 1.5
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -693,17 +699,22 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     return data
 
 
-def _read_device_info(usb_serial, baud, timeout):
+def _read_device_info(
+    usb_serial,
+    baud,
+    read_timeout=_MUTE_REREAD_TIMEOUT_S,
+    reenum_timeout=_REENUMERATE_TIMEOUT_S,
+):
     """Resolve the post-flash CDC port for *usb_serial* and read its JSON.
 
     Used by the USB per-device path, which already knows each Pico by
     its (stable) CDC serial.
     """
-    port = _resolve_post_flash_port(usb_serial)
-    return _read_cdc_port(port, usb_serial, baud, timeout)
+    port = _resolve_post_flash_port(usb_serial, timeout=reenum_timeout)
+    return _read_cdc_port(port, usb_serial, baud, read_timeout)
 
 
-def _read_fleet_cdc(expected, baud, timeout):
+def _read_fleet_cdc(expected, baud):
     """Read device-info JSON from every Pico now in CDC mode.
 
     Polls :func:`find_pico_ports` until at least *expected* Picos have
@@ -735,7 +746,7 @@ def _read_fleet_cdc(expected, baud, timeout):
     devices = []
     outcomes = {}
     for port, serial in sorted(ports.items()):
-        data, reason = _read_cdc_outcome(port, serial, baud, timeout)
+        data, reason = _read_cdc_outcome(port, serial, baud, _MUTE_REREAD_TIMEOUT_S)
         outcomes[serial] = reason
         if data is not None:
             devices.append(data)
@@ -850,7 +861,6 @@ def flash_and_discover(
     port=None,
     usb_serial=None,
     baud=115200,
-    timeout=10,
     expected=None,
 ):
     """
@@ -870,8 +880,6 @@ def flash_and_discover(
         device must match both.
     baud : int
         Serial baud rate for reading JSON after flash.
-    timeout : int
-        Seconds to wait for each Pico's JSON response.
 
     Returns
     -------
@@ -950,7 +958,7 @@ def flash_and_discover(
         if not _load_bootsel_device(dev, uf2_path, execute=True):
             outcomes[serial] = "picotool load failed while in BOOTSEL"
             continue
-        data = _read_device_info(serial, baud, timeout)
+        data = _read_device_info(serial, baud)
         outcomes[serial] = (
             None
             if data is not None
@@ -981,7 +989,7 @@ def flash_and_discover(
         # CDC device. _read_device_info resolves the current path from
         # the stable usb_serial (the kernel may assign a different
         # /dev/ttyACMn than it had pre-flash) and reads its JSON.
-        data = _read_device_info(port_serial, baud, timeout)
+        data = _read_device_info(port_serial, baud)
         outcomes[port_serial] = (
             None if data is not None else "flashed but device-info read failed"
         )
@@ -1133,18 +1141,9 @@ def _boot_fleet_staggered(
     return booted
 
 
-_MUTE_REREAD_ATTEMPTS = 5
-_MUTE_REREAD_SETTLE_S = 1.5
-# A board that re-enumerated as CDC emits a status line every 200 ms, so
-# a short read is plenty; keep re-reads snappy rather than waiting out the
-# full per-device timeout on every attempt.
-_MUTE_REREAD_TIMEOUT_S = 5
-
-
 def _reread_mute_boards(
     mute,
     baud,
-    timeout,
     attempts=_MUTE_REREAD_ATTEMPTS,
     settle=_MUTE_REREAD_SETTLE_S,
 ):
@@ -1164,7 +1163,7 @@ def _reread_mute_boards(
     ``None`` once read, else its last failure reason, for the caller's
     reconciliation report.
     """
-    read_timeout = min(timeout, _MUTE_REREAD_TIMEOUT_S)
+    read_timeout = _MUTE_REREAD_TIMEOUT_S
     recovered = []
     outcomes = {}
     pending = set(mute)
@@ -1203,7 +1202,6 @@ def _reread_mute_boards(
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
-    timeout=10,
 ):
     """Mass-flash all Picos via the bussed GPIO BOOTSEL/RUN lines.
 
@@ -1287,7 +1285,7 @@ def flash_and_discover_gpio(
     # board never re-enumerates), then read each. The readback keys off
     # the CDC serial, not the BOOTSEL serial used for loading, so a board
     # whose BOOTSEL serial differed or was absent is still reported.
-    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, timeout)
+    all_devices, outcomes = _read_fleet_cdc(len(booted), baud)
     reported = {d["usb_serial"] for d in all_devices}
 
     # Staggered boot should leave no board mute, but if one still lost its
@@ -1298,7 +1296,7 @@ def flash_and_discover_gpio(
     # board is reported, not re-flashed.
     mute = (expected_serials - reported) & set(find_pico_ports().values())
     if mute:
-        reread, reread_outcomes = _reread_mute_boards(mute, baud, timeout)
+        reread, reread_outcomes = _reread_mute_boards(mute, baud)
         all_devices.extend(reread)
         outcomes.update(reread_outcomes)
         reported |= {d["usb_serial"] for d in reread}
@@ -1392,12 +1390,6 @@ def main(argv=None):
         type=int,
         default=115200,
         help="Serial baud rate.",
-    )
-    p.add_argument(
-        "--timeout",
-        type=int,
-        default=10,
-        help="Seconds to wait for each Pico's JSON",
     )
     p.add_argument(
         "--redis-host",
@@ -1514,7 +1506,6 @@ def main(argv=None):
                 all_devices = flash_and_discover_gpio(
                     uf2_path=args.uf2,
                     baud=args.baud,
-                    timeout=args.timeout,
                 )
             else:
                 all_devices = flash_and_discover(
@@ -1522,7 +1513,6 @@ def main(argv=None):
                     port=args.port,
                     usb_serial=args.usb_serial,
                     baud=args.baud,
-                    timeout=args.timeout,
                     expected=effective_expected,
                 )
         except (FileNotFoundError, RuntimeError) as e:

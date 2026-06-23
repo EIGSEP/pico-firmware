@@ -231,7 +231,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_resolve_post_flash_port",
-            lambda serial: post_flash[serial],
+            lambda serial, **k: post_flash[serial],
         )
 
         monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
@@ -279,7 +279,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_resolve_post_flash_port",
-            lambda serial: {"SER_B": "/dev/ttyACM1"}.get(serial),
+            lambda serial, **k: {"SER_B": "/dev/ttyACM1"}.get(serial),
         )
 
         monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
@@ -323,7 +323,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_resolve_post_flash_port",
-            lambda serial: {
+            lambda serial, **k: {
                 "SER_A": "/dev/ttyACM0",
                 "SER_B": "/dev/ttyACM1",
                 "SER_C": "/dev/ttyACM2",
@@ -379,7 +379,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_read_device_info",
-            lambda serial, baud, timeout: {
+            lambda serial, baud, **k: {
                 "app_id": 5,
                 "port": "/dev/ttyACM9",
                 "usb_serial": serial,
@@ -411,7 +411,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_read_device_info",
-            lambda serial, baud, timeout: (
+            lambda serial, baud, **k: (
                 {"app_id": 0, "port": "/dev/ttyACM0", "usb_serial": serial}
                 if serial == "SER_A"
                 else None
@@ -441,7 +441,7 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp,
             "_read_device_info",
-            lambda serial, baud, timeout: {
+            lambda serial, baud, **k: {
                 "app_id": 0,
                 "port": "/dev/ttyACM0",
                 "usb_serial": serial,
@@ -935,7 +935,7 @@ class TestReadDeviceInfo:
 
         self._patch_common(monkeypatch, fp)
         monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda s: "/dev/ttyACM0"
+            fp, "_resolve_post_flash_port", lambda s, **k: "/dev/ttyACM0"
         )
         monkeypatch.setattr(
             fp,
@@ -955,7 +955,7 @@ class TestReadDeviceInfo:
 
         self._patch_common(monkeypatch, fp)
         monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda s: "/dev/ttyACM0"
+            fp, "_resolve_post_flash_port", lambda s, **k: "/dev/ttyACM0"
         )
 
         calls = {"n": 0}
@@ -975,7 +975,7 @@ class TestReadDeviceInfo:
         import picohost.flash_picos as fp
 
         self._patch_common(monkeypatch, fp)
-        monkeypatch.setattr(fp, "_resolve_post_flash_port", lambda s: None)
+        monkeypatch.setattr(fp, "_resolve_post_flash_port", lambda s, **k: None)
 
         def fail_read(port, baud, timeout):
             raise AssertionError("must not read without a port")
@@ -2035,7 +2035,7 @@ class TestRereadMuteBoards:
             return {"app_id": 5}
 
         monkeypatch.setattr(fp, "read_json_from_serial", read)
-        devices, outcomes = fp._reread_mute_boards({"SER_B"}, 115200, 10)
+        devices, outcomes = fp._reread_mute_boards({"SER_B"}, 115200)
         assert [d["usb_serial"] for d in devices] == ["SER_B"]
         assert devices[0]["port"] == "/dev/ttyACM6"
         assert outcomes == {"SER_B": None}
@@ -2052,7 +2052,7 @@ class TestRereadMuteBoards:
             ),
         )
         devices, outcomes = fp._reread_mute_boards(
-            {"SER_B"}, 115200, 10, attempts=2
+            {"SER_B"}, 115200, attempts=2
         )
         assert devices == []
         assert outcomes["SER_B"] is not None
@@ -2068,7 +2068,7 @@ class TestRereadMuteBoards:
             return {"app_id": 5}
 
         monkeypatch.setattr(fp, "read_json_from_serial", read)
-        fp._reread_mute_boards({"SER_B"}, 115200, 10)
+        fp._reread_mute_boards({"SER_B"}, 115200)
         assert seen["timeout"] == fp._MUTE_REREAD_TIMEOUT_S
 
     def test_scans_ports_once_across_attempts(self, monkeypatch):
@@ -2095,7 +2095,7 @@ class TestRereadMuteBoards:
             return {"app_id": 5}
 
         monkeypatch.setattr(fp, "read_json_from_serial", read)
-        devices, outcomes = fp._reread_mute_boards({"SER_B"}, 115200, 10)
+        devices, outcomes = fp._reread_mute_boards({"SER_B"}, 115200)
         assert [d["usb_serial"] for d in devices] == ["SER_B"]
         assert reads["n"] == 3  # took three attempts
         assert scans["n"] == 1  # but only one USB descriptor scan
@@ -2309,6 +2309,13 @@ class TestMainRouting:
         fp.main(["--uf2", "x.uf2", "--no-redis", "--usb-serial", "SER_A"])
         assert "expected" not in capsys.readouterr().err.lower()
         assert calls[0]["expected"] is None
+
+    def test_timeout_flag_removed(self):
+        """--timeout was removed; argparse must reject it."""
+        import picohost.flash_picos as fp
+
+        with pytest.raises(SystemExit):
+            fp.main(["--uf2", "x.uf2", "--no-redis", "--timeout", "5"])
 
 
 class TestManagerAutoStop:
