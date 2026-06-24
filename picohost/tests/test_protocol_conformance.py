@@ -416,6 +416,25 @@ class TestLidarProtocol:
         emu.op()
         assert isinstance(emu.get_status()["distance_m"], float)
 
+    def test_current_voltage_is_float(self):
+        """currentmon.c reports the raw divided ADC voltage as a float."""
+        emu = LidarEmulator()
+        emu.op()
+        assert isinstance(emu.get_status()["current_voltage"], float)
+
+    def test_current_independent_of_lidar_failure(self):
+        """currentmon_op() is a separate dispatch call: the current voltage
+        refreshes every cycle even when the lidar I2C read fails."""
+        emu = LidarEmulator()
+        emu.op()
+        first = emu.get_status()["current_voltage"]
+        emu.simulate_sensor_failure()
+        emu.op()
+        bad = emu.get_status()
+        assert bad["status"] == "error"          # lidar half failed
+        assert "current_voltage" in bad           # current half still present
+        assert isinstance(bad["current_voltage"], float)
+
     def test_status_is_per_cycle(self):
         """lidar.c: status="update" iff op() refreshed distance this cycle."""
         emu = LidarEmulator()
