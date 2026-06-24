@@ -1030,7 +1030,7 @@ class TestLidarEmulator:
     def test_status_fields(self):
         emu = LidarEmulator()
         status = emu.get_status()
-        expected_keys = {"sensor_name", "status", "app_id", "distance_m"}
+        expected_keys = {"sensor_name", "status", "app_id", "distance_m", "current_voltage"}
         assert set(status.keys()) == expected_keys
 
     def test_failure_then_recovery_returns_to_update(self):
@@ -1198,6 +1198,7 @@ class TestLidarStatusTypes:
         assert isinstance(status["status"], str)
         assert isinstance(status["app_id"], int)
         assert isinstance(status["distance_m"], float)
+        assert isinstance(status["current_voltage"], float)
 
 
 class TestRFSwitchStatusTypes:
