@@ -753,7 +753,9 @@ def _read_fleet_cdc(expected, baud):
     devices = []
     outcomes = {}
     for port, serial in sorted(ports.items()):
-        data, reason = _read_cdc_outcome(port, serial, baud, _MUTE_REREAD_TIMEOUT_S)
+        data, reason = _read_cdc_outcome(
+            port, serial, baud, _MUTE_REREAD_TIMEOUT_S
+        )
         outcomes[serial] = reason
         if data is not None:
             devices.append(data)
@@ -1286,7 +1288,9 @@ def _reconcile_usb_stragglers(expected_serials, reported, uf2_path, baud):
             devices.append(data)
             outcomes[serial] = None
         else:
-            outcomes[serial] = "reloaded from BOOTSEL but device-info read failed"
+            outcomes[serial] = (
+                "reloaded from BOOTSEL but device-info read failed"
+            )
 
     return devices, outcomes
 

@@ -471,14 +471,18 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(
             fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
         )
-        monkeypatch.setattr(fp, "_wait_for_stable_cdc_set", lambda: {"/dev/ttyACM0": "SER_A"})
+        monkeypatch.setattr(
+            fp, "_wait_for_stable_cdc_set", lambda: {"/dev/ttyACM0": "SER_A"}
+        )
         monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
         monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
 
         seen = {}
 
-        def fake_read_device_info(serial, baud, read_timeout=None, reenum_timeout=None):
+        def fake_read_device_info(
+            serial, baud, read_timeout=None, reenum_timeout=None
+        ):
             seen["read_timeout"] = read_timeout
             seen["reenum_timeout"] = reenum_timeout
             return {"app_id": 0, "port": "/dev/ttyACM0", "usb_serial": serial}
@@ -506,9 +510,12 @@ class TestFlashAndDiscover:
         monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda serial, **k: {
-                "SER_A": "/dev/ttyACM0", "SER_B": "/dev/ttyACM1"
-            }[serial]
+            fp,
+            "_resolve_post_flash_port",
+            lambda serial, **k: {
+                "SER_A": "/dev/ttyACM0",
+                "SER_B": "/dev/ttyACM1",
+            }[serial],
         )
 
         # SER_B is mute on its first read (pass 1); every later read succeeds
@@ -1052,7 +1059,9 @@ class TestReadDeviceInfo:
         import picohost.flash_picos as fp
 
         self._patch_common(monkeypatch, fp)
-        monkeypatch.setattr(fp, "_resolve_post_flash_port", lambda s, **k: None)
+        monkeypatch.setattr(
+            fp, "_resolve_post_flash_port", lambda s, **k: None
+        )
 
         def fail_read(port, baud, timeout):
             raise AssertionError("must not read without a port")
@@ -2538,7 +2547,9 @@ class TestReconcileUsbStragglers:
         )
         monkeypatch.setattr(fp, "_find_bootsel_devices", lambda *a, **k: [])
         monkeypatch.setattr(
-            fp, "read_json_from_serial", lambda port, baud, timeout: {"app_id": 5}
+            fp,
+            "read_json_from_serial",
+            lambda port, baud, timeout: {"app_id": 5},
         )
 
         devices, outcomes = fp._reconcile_usb_stragglers(
@@ -2562,13 +2573,17 @@ class TestReconcileUsbStragglers:
         monkeypatch.setattr(
             fp,
             "_load_bootsel_device",
-            lambda dev, uf2, execute=False: loaded.append(dev["usb_serial"]) or True,
+            lambda dev, uf2, execute=False: (
+                loaded.append(dev["usb_serial"]) or True
+            ),
         )
         monkeypatch.setattr(
             fp,
             "_read_device_info",
             lambda serial, baud, **k: {
-                "app_id": 5, "port": "/dev/ttyACM6", "usb_serial": serial
+                "app_id": 5,
+                "port": "/dev/ttyACM6",
+                "usb_serial": serial,
             },
         )
 
