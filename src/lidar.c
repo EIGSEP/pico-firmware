@@ -3,6 +3,7 @@
 #include "hardware/i2c.h"
 #include "eigsep_command.h"
 #include "cJSON.h"
+#include "currentmon.h"
 #include <stdio.h>
 
 #define I2C_PORT i2c0
@@ -62,11 +63,12 @@ void lidar_server(uint8_t app_id, const char *json_str) {
 
 void lidar_status(uint8_t app_id) {
     const char *status = lidar_data.last_op_ok ? "update" : "error";
-    send_json(4,
+    send_json(5,
         KV_STR, "sensor_name", "lidar",
         KV_STR, "status", status,
         KV_INT, "app_id", app_id,
-        KV_FLOAT, "distance_m", lidar_data.distance
+        KV_FLOAT, "distance_m", lidar_data.distance,
+        KV_FLOAT, "current_voltage", currentmon_voltage()
     );
     lidar_data.last_op_ok = false;
 }

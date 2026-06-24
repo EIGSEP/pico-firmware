@@ -21,6 +21,7 @@ add_executable(pico_multi
     src/temp_simple.c
     src/imu.c
     src/lidar.c
+    src/currentmon.c
 )
 
 
