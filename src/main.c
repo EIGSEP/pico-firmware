@@ -13,6 +13,7 @@
 #include "potmon.h"
 #include "imu.h"
 #include "lidar.h"
+#include "currentmon.h"
 
 
 // Read 3-bit DIP switch code
@@ -85,7 +86,10 @@ int main(void) {
         case APP_POTMON: potmon_init(app_id); break;
         case APP_IMU_EL:
         case APP_IMU_AZ: imu_init(app_id); break;
-        case APP_LIDAR: lidar_init(app_id); break;
+        case APP_LIDAR:
+            lidar_init(app_id);
+            currentmon_init();
+            break;
         default: break;
     }
    
@@ -144,7 +148,10 @@ int main(void) {
             case APP_POTMON: potmon_op(app_id); break;
             case APP_IMU_EL:
             case APP_IMU_AZ: imu_op(app_id); break;
-            case APP_LIDAR: lidar_op(app_id); break;
+            case APP_LIDAR:
+                lidar_op(app_id);
+                currentmon_op();
+                break;
             default:
                 break;
         }
