@@ -179,7 +179,7 @@ Azimuth potentiometer for position feedback, read via the RP2350 ADC:
 
 | Channel | GPIO | ADC Channel | JSON Key |
 |---------|------|-------------|----------|
-| **AZ** (azimuth) | 27 | 1 | `pot_az_voltage` |
+| **AZ** (azimuth) | 26 | 0 | `pot_az_voltage` |
 
 ### IMU Wiring (APP_IMU_EL / APP_IMU_AZ)
 
