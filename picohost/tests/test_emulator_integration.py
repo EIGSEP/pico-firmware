@@ -86,7 +86,7 @@ IMU_FIELDS = {
     "accel_z",
 }
 
-LIDAR_FIELDS = {"sensor_name", "status", "app_id", "distance_m"}
+LIDAR_FIELDS = {"sensor_name", "status", "app_id", "distance_m", "current_voltage"}
 
 RFSWITCH_FIELDS = {"sensor_name", "status", "app_id", "sw_state"}
 

@@ -842,9 +842,55 @@ class PicoIMU(PicoDevice):
 
 
 class PicoLidar(PicoDevice):
-    """Specialized class for lidar distance sensor devices."""
+    """Lidar distance sensor; also hosts the whole-system current monitor.
 
-    pass
+    The lidar Pico carries an ACS724 current sensor on GP28/ADC2 (it uses no
+    other ADC). The firmware merges the raw ``current_voltage`` into the lidar
+    status line; this class fans that out into a separate
+    ``metadata['system_current']`` entry so the user-facing key never names
+    lidar. The publish stays additive (raw ``current_voltage`` + derived
+    ``current_a``) and scalar-only.
+    """
+
+    # ACS724-10AB (bidirectional, Vcc/2 zero point, 200 mV/A) read through a
+    # 3.3k (top) / 4.7k (bottom) divider into GP28. Nominal conversion only;
+    # a measured zero-offset calibration is deferred (see design doc).
+    _DIVIDER_RATIO = 4.7 / (3.3 + 4.7)   # = 0.5875
+    _SENSOR_VQ = 2.5                     # volts at 0 A (Vcc/2)
+    _SENSOR_SENSITIVITY = 0.2            # volts per amp
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._lidar_redis_handler
+
+    def _v_to_current(self, v_adc):
+        """Convert the raw ADC-pin voltage to amps (nominal, no zero cal)."""
+        v_sensor = v_adc / self._DIVIDER_RATIO
+        return (v_sensor - self._SENSOR_VQ) / self._SENSOR_SENSITIVITY
+
+    def _lidar_redis_handler(self, data):
+        """Split the merged lidar line into two metadata keys.
+
+        ``metadata['lidar']`` keeps the distance reading (current stripped);
+        ``metadata['system_current']`` carries the current. The current
+        entry's status is hard-set to ``"update"`` — the ADC read is
+        independent of lidar's I2C result, so a lidar failure must not mark
+        the current reading errored.
+        """
+        data = data.copy()
+        v = data.pop("current_voltage", None)
+        self._base_redis_handler(data)
+        if v is not None:
+            self._base_redis_handler(
+                {
+                    "sensor_name": "system_current",
+                    "status": "update",
+                    "current_voltage": v,
+                    "current_a": self._v_to_current(v),
+                }
+            )
 
 
 class PicoPotentiometer(PicoDevice):
