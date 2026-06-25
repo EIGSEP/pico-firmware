@@ -59,6 +59,9 @@ ADC_VREF = 3.3
 # Warn if the operating window leaves less than this much travel (in az
 # degrees) before a rail/electrical end (~0.2 turn).
 HEADROOM_WARN_DEG = 72.0
+# Motor az should read ~0 at home; warn beyond this if the operator
+# forgot to home before pressing Enter.
+HOME_AZ_TOL_DEG = 5.0
 
 
 def collect_samples(transport, n):
@@ -240,6 +243,44 @@ def collect_per_turn(transport, n_samples, turns):
         prev = stop
 
     return voltages, angles
+
+
+def collect_azimuth(transport, n_samples, motor_cfg):
+    """In-box sweep: operator drives the motor; we record (az, voltage).
+
+    The operator moves the motor with ``motor_manual`` and presses Enter
+    at each stop; calibrate-pot reads the current az from ``stream:motor``
+    (read-only) and averages the pot voltage. The first stop is motor-home
+    and *defines* az=0. Returns ``(voltages, angles, v0)``.
+    """
+    input("\nDrive the motor to HOME (az 0), stop there, then press Enter.")
+    az_home = read_motor_az_deg(transport, **motor_cfg)
+    if abs(az_home) > HOME_AZ_TOL_DEG:
+        print(
+            f"  WARNING: motor az reads {az_home:.1f} deg at 'home' "
+            "(expected ~0). Did you home the motor first?"
+        )
+    print("  averaging samples...")
+    v0 = collect_samples(transport, n_samples)
+    print(f"  home: az=0.00 deg (motor reads {az_home:.2f}), pot_az={v0:.4f} V")
+    voltages = [v0]
+    angles = [0.0]
+
+    while True:
+        resp = input(
+            "\nDrive to the next stop, stop there, then press Enter "
+            "(or type 'q' then Enter to finish): "
+        ).strip().lower()
+        if resp == "q":
+            break
+        az = read_motor_az_deg(transport, **motor_cfg)
+        print("  averaging samples...")
+        v = collect_samples(transport, n_samples)
+        print(f"  az={az:8.2f} deg: pot_az={v:.4f} V")
+        voltages.append(v)
+        angles.append(az)
+
+    return voltages, angles, v0
 
 
 def main():
