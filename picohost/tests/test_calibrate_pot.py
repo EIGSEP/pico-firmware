@@ -239,3 +239,90 @@ def test_main_rezero_mode(monkeypatch):
     action, kwargs = fake_proxy.calls[0]
     assert action == "set_calibration"
     assert kwargs["pot_az_params"] == pytest.approx([100.0, -100.0])
+
+
+# ---------------------------------------------------------------------------
+# compute_fit_residuals
+# ---------------------------------------------------------------------------
+
+
+def test_compute_fit_residuals_perfect_linear():
+    """Points that lie exactly on the line produce zero residuals."""
+    voltages = [0.0, 1.0, 2.0]
+    angles = [10.0, 20.0, 30.0]
+    r = calibrate_pot.compute_fit_residuals(voltages, angles, m=10.0, b=10.0)
+    assert r["max_abs_deg"] == pytest.approx(0.0)
+    assert r["rms_deg"] == pytest.approx(0.0)
+
+
+def test_compute_fit_residuals_known_nonlinear():
+    """A point 10 deg off the line yields a hand-computable max residual."""
+    # Line: angle = 10*V + 10  => at V=2 perfect would be 30, but we give 40
+    voltages = [0.0, 1.0, 2.0]
+    angles = [10.0, 20.0, 40.0]   # last point is 10 deg above the line
+    r = calibrate_pot.compute_fit_residuals(voltages, angles, m=10.0, b=10.0)
+    # residuals: 0, 0, +10  → max_abs = 10.0
+    assert r["max_abs_deg"] == pytest.approx(10.0)
+    # rms = sqrt((0 + 0 + 100) / 3) = sqrt(100/3)
+    import math
+    assert r["rms_deg"] == pytest.approx(math.sqrt(100.0 / 3.0))
+
+
+# ---------------------------------------------------------------------------
+# azimuth main() — linearity report and new metadata fields
+# ---------------------------------------------------------------------------
+
+
+def test_main_azimuth_prints_linearity_report(monkeypatch, capsys):
+    """main() --mode azimuth must print a 'Linearity check' block."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+
+    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "Linearity check" in out
+    assert "pinned b" in out
+    assert "free-fit b" in out
+    assert "residuals about free-fit line" in out
+
+
+def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
+    """main() --mode azimuth must store free_fit_intercept, residual_max_deg,
+    and residual_rms_deg in the calibration metadata."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+
+    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    stored = PotCalStore(dummy_transport).get()
+    meta = stored["metadata"]
+    assert "free_fit_intercept" in meta
+    assert "residual_max_deg" in meta
+    assert "residual_rms_deg" in meta
+    # Values must be finite floats (not None / NaN)
+    import math
+    assert math.isfinite(meta["free_fit_intercept"])
+    assert math.isfinite(meta["residual_max_deg"])
+    assert math.isfinite(meta["residual_rms_deg"])
+    # For perfectly linear 2-point data the residuals must be exactly zero.
+    assert meta["residual_max_deg"] == pytest.approx(0.0)
+    assert meta["residual_rms_deg"] == pytest.approx(0.0)
