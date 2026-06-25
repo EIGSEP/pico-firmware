@@ -137,3 +137,19 @@ def test_rezero_without_stored_cal_raises(monkeypatch):
     monkeypatch.setattr("builtins.input", _seq([""]))
     with pytest.raises(RuntimeError, match="No stored calibration"):
         calibrate_pot.rezero(t, n_samples=10)
+
+
+def test_build_parser_accepts_new_modes_and_motor_cfg():
+    p = calibrate_pot.build_parser()
+
+    a = p.parse_args(["--mode", "azimuth", "--gear-teeth", "200"])
+    assert a.mode == "azimuth"
+    assert a.gear_teeth == 200
+
+    assert p.parse_args(["--mode", "rezero"]).mode == "rezero"
+
+    d = p.parse_args([])
+    assert d.mode == "minmax"  # unchanged default
+    assert d.step_angle_deg == pytest.approx(1.8)
+    assert d.gear_teeth == 113
+    assert d.microstep == 1
