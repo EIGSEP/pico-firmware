@@ -369,7 +369,7 @@ def main():
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    if args.turns <= 0:
+    if args.mode in ("minmax", "turns") and args.turns <= 0:
         print("turns must be positive.", file=sys.stderr)
         sys.exit(1)
 
@@ -386,10 +386,13 @@ def main():
 
     total_degrees = 360.0 * args.turns
 
-    print(
-        f"Mode: {args.mode} ({args.turns:g} turns, {args.n_samples} "
-        f"samples/position)"
-    )
+    if args.mode in ("minmax", "turns"):
+        print(
+            f"Mode: {args.mode} ({args.turns:g} turns, {args.n_samples} "
+            f"samples/position)"
+        )
+    else:
+        print(f"Mode: {args.mode} ({args.n_samples} samples/position)")
     print(f"Reading voltages from {POTMON_STREAM}.")
 
     motor_cfg = {
