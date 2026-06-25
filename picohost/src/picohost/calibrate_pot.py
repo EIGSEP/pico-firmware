@@ -139,10 +139,11 @@ def compute_linear_fit(voltages, angles):
     Returns None if the voltage range is too small to calibrate.
     """
     voltages = np.asarray(voltages)
-    if np.abs(voltages[-1] - voltages[0]) < 1e-6:
+    span = voltages.max() - voltages.min()
+    if np.abs(span) < 1e-6:
         print(
-            f"  ERROR: min and max voltages are identical "
-            f"({voltages[0]:.4f} V). Cannot calibrate."
+            f"  ERROR: voltage span is too small to calibrate "
+            f"(range {span:.4f} V). Cannot calibrate."
         )
         return None
     m, b = np.polyfit(voltages, angles, 1)
@@ -163,6 +164,17 @@ def fit_slope_pin_zero(voltages, angles, v0):
         return None
     m, _b_free = fit
     return (float(m), float(-m * v0))
+
+
+def compute_fit_residuals(voltages, angles, m, b):
+    """Max-abs and RMS residual (in degrees) of points about the line angle = m*V + b."""
+    v = np.asarray(voltages, dtype=float)
+    a = np.asarray(angles, dtype=float)
+    resid = a - (m * v + b)
+    return {
+        "max_abs_deg": float(np.max(np.abs(resid))),
+        "rms_deg": float(np.sqrt(np.mean(resid ** 2))),
+    }
 
 
 def compute_headroom(voltages, m, vref=ADC_VREF):
@@ -401,6 +413,8 @@ def main():
         "microstep": args.microstep,
     }
     headroom = None
+    free = None
+    resid = None
     try:
         if args.mode == "minmax":
             voltages, angles = collect_minmax(
@@ -425,6 +439,8 @@ def main():
             cal = fit_slope_pin_zero(voltages, angles, v0)
             if cal is not None:
                 headroom = compute_headroom(voltages, cal[0])
+                free = compute_linear_fit(voltages, angles)
+                resid = compute_fit_residuals(voltages, angles, free[0], free[1])
         else:  # rezero
             cal, v0 = rezero(transport, args.n_samples)
             voltages, angles = [v0], [0.0]
@@ -436,6 +452,17 @@ def main():
         print("\nCalibration failed. Exiting.", file=sys.stderr)
         sys.exit(1)
 
+    if free is not None and resid is not None:
+        print("\nLinearity check (azimuth fit):")
+        print(f"  slope m = {cal[0]:.4f} deg/V")
+        print(
+            f"  intercept: pinned b = {cal[1]:.4f}  (free-fit b = {free[1]:.4f})"
+        )
+        print(
+            f"  residuals about free-fit line: "
+            f"max |{resid['max_abs_deg']:.2f}| deg, RMS {resid['rms_deg']:.2f} deg"
+        )
+
     if headroom is not None:
         print("\nHeadroom to the pot's electrical ends (via the ADC rails):")
         print(
@@ -443,11 +470,11 @@ def main():
             f"(span {headroom['span_v']:.4f} V)"
         )
         print(
-            f"  below low end:  {headroom['headroom_low_v']:.4f} V "
+            f"  margin to 0 V rail:   {headroom['headroom_low_v']:.4f} V "
             f"~ {headroom['headroom_low_deg']:.0f} deg"
         )
         print(
-            f"  above high end: {headroom['headroom_high_v']:.4f} V "
+            f"  margin to {ADC_VREF:.1f} V rail: {headroom['headroom_high_v']:.4f} V "
             f"~ {headroom['headroom_high_deg']:.0f} deg"
         )
         if min(
@@ -474,6 +501,9 @@ def main():
         cal_data["metadata"]["total_degrees"] = total_degrees
     if args.mode == "azimuth":
         cal_data["metadata"]["motor_cfg"] = motor_cfg
+        cal_data["metadata"]["free_fit_intercept"] = float(free[1])
+        cal_data["metadata"]["residual_max_deg"] = resid["max_abs_deg"]
+        cal_data["metadata"]["residual_rms_deg"] = resid["rms_deg"]
     if args.mode == "rezero":
         cal_data["metadata"]["slope_reused"] = True
 
