@@ -283,6 +283,28 @@ def collect_azimuth(transport, n_samples, motor_cfg):
     return voltages, angles, v0
 
 
+def rezero(transport, n_samples):
+    """Re-pin the zero using the stored slope (needs only motor access).
+
+    Loads the slope ``m`` from :class:`PotCalStore`, captures the pot
+    voltage at motor-home, and returns ``((m, -m*v0), v0)``. The slope is
+    reused verbatim — never re-fit. Raises if no calibration is stored.
+    """
+    stored = PotCalStore(transport).get()
+    if not stored or "pot_az" not in stored:
+        raise RuntimeError(
+            "No stored calibration to re-zero. Run '--mode azimuth' (or a "
+            "bench mode) first to establish the slope."
+        )
+    m = float(stored["pot_az"][0])
+    input("\nDrive the motor to HOME (az 0), stop there, then press Enter.")
+    print("  averaging samples...")
+    v0 = collect_samples(transport, n_samples)
+    b = -m * v0
+    print(f"  reused slope m={m:.4f}; V0={v0:.4f} V -> new intercept b={b:.4f}")
+    return (m, b), v0
+
+
 def main():
     parser = ArgumentParser(
         description="Calibrate potentiometer voltage-to-angle mapping.",

@@ -117,3 +117,23 @@ def test_collect_azimuth_warns_when_not_homed(monkeypatch, capsys):
     cfg = {"step_angle_deg": 1.8, "gear_teeth": 113, "microstep": 1}
     calibrate_pot.collect_azimuth(DummyTransport(), 10, cfg)
     assert "WARNING" in capsys.readouterr().out
+
+
+def test_rezero_reuses_stored_slope(monkeypatch):
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [100.0, -50.0]})
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0]))
+    monkeypatch.setattr("builtins.input", _seq([""]))
+
+    (m, b), v0 = calibrate_pot.rezero(t, n_samples=10)
+
+    assert m == pytest.approx(100.0)  # slope reused, not refit
+    assert v0 == pytest.approx(1.0)
+    assert b == pytest.approx(-100.0)  # b = -m * v0
+
+
+def test_rezero_without_stored_cal_raises(monkeypatch):
+    t = DummyTransport()
+    monkeypatch.setattr("builtins.input", _seq([""]))
+    with pytest.raises(RuntimeError, match="No stored calibration"):
+        calibrate_pot.rezero(t, n_samples=10)
