@@ -97,6 +97,22 @@ def compute_linear_fit(voltages, angles):
     return (float(m), float(b))
 
 
+def fit_slope_pin_zero(voltages, angles, v0):
+    """Least-squares slope, with the intercept pinned to motor-home.
+
+    Fits the best slope ``m`` over all (voltage, angle) points, then
+    overrides the intercept so that ``angle = 0`` exactly at ``v0`` (the
+    pot voltage at motor-home): ``b = -m * v0``. Returns ``None`` when
+    the voltage span is too small to fit (delegated to
+    :func:`compute_linear_fit`).
+    """
+    fit = compute_linear_fit(voltages, angles)
+    if fit is None:
+        return None
+    m, _b_free = fit
+    return (float(m), float(-m * v0))
+
+
 def collect_minmax(transport, n_samples, total_degrees):
     """Collect at min and max only (2-point calibration)."""
     input("\nSet the az potentiometer to MINIMUM position, then press Enter.")
