@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "hardware/gpio.h"
 #include "hardware/watchdog.h"
 #include <stdio.h>
@@ -30,6 +31,25 @@ static void init_dip_switches(void) {
         gpio_pull_up(dip_pins[i]);
     }
     sleep_ms(10); // allow switches to settle
+}
+
+// Universal command, recognised for every app (and the unknown-app
+// default) before the per-app dispatch: {"cmd":"bootsel"} reboots the
+// Pico into USB BOOTSEL via reset_usb_boot(). A manual recovery hatch
+// for reflashing a single board over USB without the bussed GPIO
+// BOOTSEL/RUN lines — send it over CDC (e.g. from a serial terminal)
+// when the GPIO mass-BOOTSEL path is unavailable or you only want to
+// reflash one board.
+static bool is_bootsel_command(const char *line) {
+    cJSON *root = cJSON_Parse(line);
+    if (!root) {
+        return false;
+    }
+    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
+    bool match = cJSON_IsString(cmd) && cmd->valuestring != NULL &&
+                 strcmp(cmd->valuestring, "bootsel") == 0;
+    cJSON_Delete(root);
+    return match;
 }
 
 // Initialize LED GPIO
@@ -77,6 +97,13 @@ int main(void) {
             if (c == '\n') {
                 line[index] = '\0';
                 index = 0;
+                // Universal bootsel command: enter USB BOOTSEL for a
+                // manual single-board reflash. Checked before the
+                // per-app dispatch so it works regardless of app_id.
+                // reset_usb_boot() does not return.
+                if (is_bootsel_command(line)) {
+                    reset_usb_boot(0, 0);
+                }
                 // Dispatch command to appropriate app
                 switch (app_id) {
                     case APP_MOTOR: motor_server(app_id, line); break;
