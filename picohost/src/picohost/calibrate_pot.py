@@ -40,12 +40,15 @@ import numpy as np
 from eigsep_redis import Transport
 
 from .buses import PotCalStore
+from .motor import steps_to_deg
 from .proxy import PicoProxy
 
 logger = logging.getLogger(__name__)
 
 POTMON_NAME = "potmon"
 POTMON_STREAM = f"stream:{POTMON_NAME}"
+MOTOR_NAME = "motor"
+MOTOR_STREAM = f"stream:{MOTOR_NAME}"
 # Producer cadence is 200 ms (STATUS_CADENCE_MS), so a 5 s budget per
 # entry is ~25x — long enough to ride out a single reconnect blip but
 # short enough to fail fast when the manager isn't actually publishing.
@@ -85,6 +88,44 @@ def collect_samples(transport, n):
             samples_az.append(value["pot_az_voltage"])
             last_id = msg_id
     return float(np.mean(samples_az))
+
+
+def read_motor_az_steps(transport, start_id="$"):
+    """Return the current az_pos (motor steps) from ``stream:motor``.
+
+    Read-only: calibrate-pot never commands the motor. Mirrors
+    :func:`collect_samples`' fail-fast semantics — if PicoManager isn't
+    publishing motor status within ``SAMPLE_TIMEOUT_S``, raise rather
+    than silently using a stale value.
+    """
+    resp = transport.r.xread(
+        {MOTOR_STREAM: start_id},
+        block=int(SAMPLE_TIMEOUT_S * 1000),
+        count=1,
+    )
+    if not resp:
+        raise RuntimeError(
+            f"No entries on {MOTOR_STREAM} within {SAMPLE_TIMEOUT_S}s. "
+            "Is PicoManager publishing motor status? (motor app running "
+            "and driven via motor_manual)"
+        )
+    _stream, messages = resp[0]
+    _msg_id, fields = messages[0]
+    value = json.loads(fields[b"value"])
+    return float(value["az_pos"])
+
+
+def read_motor_az_deg(
+    transport, *, step_angle_deg, gear_teeth, microstep, start_id="$"
+):
+    """Current motor az in degrees (steps converted via motor geometry)."""
+    steps = read_motor_az_steps(transport, start_id=start_id)
+    return steps_to_deg(
+        steps,
+        step_angle_deg=step_angle_deg,
+        gear_teeth=gear_teeth,
+        microstep=microstep,
+    )
 
 
 def compute_linear_fit(voltages, angles):

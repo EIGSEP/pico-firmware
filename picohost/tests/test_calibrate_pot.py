@@ -49,3 +49,34 @@ def test_compute_headroom_uses_abs_slope():
     h = calibrate_pot.compute_headroom([1.0, 1.9], m=-100.0, vref=3.3)
     assert h["headroom_low_deg"] == pytest.approx(100.0)
     assert h["headroom_high_deg"] == pytest.approx(140.0)
+
+
+def _xadd_motor(transport, az_pos):
+    transport.r.xadd(
+        calibrate_pot.MOTOR_STREAM,
+        {"value": json.dumps({"sensor_name": "motor", "az_pos": az_pos})},
+    )
+
+
+def test_read_motor_az_steps_reads_latest():
+    t = DummyTransport()
+    _xadd_motor(t, 22600)
+    # start_id="0-0" reads from the beginning so the test doesn't have to
+    # race the "$" (new-entries-only) production default.
+    assert calibrate_pot.read_motor_az_steps(t, start_id="0-0") == 22600.0
+
+
+def test_read_motor_az_deg_converts_with_geometry():
+    t = DummyTransport()
+    _xadd_motor(t, 22600)
+    deg = calibrate_pot.read_motor_az_deg(
+        t, step_angle_deg=1.8, gear_teeth=113, microstep=1, start_id="0-0"
+    )
+    assert deg == pytest.approx(360.0)
+
+
+def test_read_motor_az_steps_raises_when_silent():
+    t = DummyTransport()
+    with pytest.raises(RuntimeError, match="motor"):
+        # Nothing ever published; "$" returns after the block timeout.
+        calibrate_pot.read_motor_az_steps(t, start_id="$")
