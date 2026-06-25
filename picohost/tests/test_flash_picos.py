@@ -844,18 +844,57 @@ class TestFlashUf2:
         assert ran == []
 
 
+class _FakeWriterProc:
+    """Stand-in for the writer child's Popen.
+
+    With ``wedged=True`` it models the worst case the writer must survive:
+    a child whose ``ser.close()`` landed in the kernel's uninterruptible
+    cdc_acm teardown after the board yanked its CDC interface off the bus
+    (``reset_usb_boot`` runs the instant the firmware reads
+    ``{"cmd":"bootsel"}``). Such a child never reaps — every bounded
+    ``wait(timeout=...)`` raises :class:`~subprocess.TimeoutExpired` and
+    ``poll()`` stays ``None`` even after a kill — so a parent that awaits it
+    *unbounded* (what ``subprocess.run(timeout=...)`` does on POSIX, via a
+    ``process.wait()`` after the kill) would hang forever. The writer must
+    instead kill-and-abandon it within the grace.
+    """
+
+    def __init__(self, *a, wedged=True, **k):
+        self.killed = False
+        self.returncode = None
+        self.wedged = wedged
+        self.wait_timeouts = []
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True  # a wedged (D-state) child stays unreaped
+
+    def wait(self, timeout=None):
+        self.wait_timeouts.append(timeout)
+        if self.wedged:
+            import subprocess
+
+            raise subprocess.TimeoutExpired("writer", timeout)
+        self.returncode = 0
+        return 0
+
+
 class TestSendSerialLine:
     def test_runs_writer_child_with_argv(self, monkeypatch):
         import picohost.flash_picos as fp
 
         captured = {}
+        fake = _FakeWriterProc(wedged=False)
 
-        def fake_run(cmd, **kw):
+        def fake_popen(cmd, **kw):
             captured["cmd"] = cmd
-            captured["timeout"] = kw.get("timeout")
-            return types.SimpleNamespace(returncode=0)
+            captured["stdout"] = kw.get("stdout")
+            captured["stderr"] = kw.get("stderr")
+            return fake
 
-        monkeypatch.setattr(fp.subprocess, "run", fake_run)
+        monkeypatch.setattr(fp.subprocess, "Popen", fake_popen)
         fp._send_serial_line("/dev/ttyACM3", '{"cmd":"bootsel"}', 115200, 5.0)
         assert captured["cmd"][1] == fp._SERIAL_WRITER_SCRIPT
         assert captured["cmd"][2:] == [
@@ -863,17 +902,28 @@ class TestSendSerialLine:
             "115200",
             '{"cmd":"bootsel"}',
         ]
-        assert captured["timeout"] == 5.0
+        # No stdout/stderr to read back — fire-and-forget — so both go to
+        # DEVNULL, and the read timeout bounds proc.wait(), not Popen itself.
+        assert captured["stdout"] == fp.subprocess.DEVNULL
+        assert captured["stderr"] == fp.subprocess.DEVNULL
+        assert fake.wait_timeouts[0] == 5.0
+        assert not fake.killed
 
-    def test_swallows_writer_timeout(self, monkeypatch):
+    def test_abandons_wedged_writer_child(self, monkeypatch):
         import picohost.flash_picos as fp
 
-        def fake_run(cmd, **kw):
-            raise fp.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
-
-        monkeypatch.setattr(fp.subprocess, "run", fake_run)
-        # Must not raise — a wedged writer child is abandoned, not awaited.
-        fp._send_serial_line("/dev/ttyACM3", "x", 115200, 0.1)
+        # The board re-enumerates as BOOTSEL the instant it reads the
+        # command, so the child's close() can wedge in an uninterruptible
+        # cdc_acm teardown and never reap. _send_serial_line must kill it and
+        # move on within the grace — NOT await it unbounded (which is the
+        # "flash-picos hangs after N devices" failure). The fake's wait()
+        # always times out, so this test only completes if the writer never
+        # makes an unbounded wait.
+        fake = _FakeWriterProc(wedged=True)
+        monkeypatch.setattr(fp.subprocess, "Popen", lambda *a, **k: fake)
+        monkeypatch.setattr(fp, "_SERIAL_TEARDOWN_GRACE_S", 0.1)
+        fp._send_serial_line("/dev/ttyACM3", '{"cmd":"bootsel"}', 115200, 0.1)
+        assert fake.killed  # the wedged child was abandoned, not awaited
 
 
 class TestEnterBootselViaCdc:

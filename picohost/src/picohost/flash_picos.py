@@ -252,27 +252,36 @@ _CDC_BOOTSEL_WAIT_S = 6.0
 def _send_serial_line(port, line, baud, timeout):
     """Write *line* to *port* via the abandonable :mod:`_serial_writer` child.
 
-    Fire-and-forget: opening or closing a marginal / about-to-reboot CDC
-    port can wedge in the kernel, so the write runs in a child process
-    bounded by *timeout*; a wedged child is abandoned (its ``TimeoutExpired``
-    swallowed) rather than allowed to block flash-picos. Success is
-    confirmed by the caller watching sysfs for BOOTSEL, not here.
+    Fire-and-forget. The board enters BOOTSEL the instant the firmware reads
+    ``{"cmd":"bootsel"}`` (``reset_usb_boot`` runs from its main loop),
+    yanking its CDC interface off the bus *while the child is mid-close* — so
+    the child's ``ser.close()`` can land in the kernel's uninterruptible
+    cdc_acm teardown and never return. The child therefore runs under
+    :class:`~subprocess.Popen` with a BOUNDED ``wait`` and is **abandoned** on
+    timeout (killed, then bounded-waited, then left for init to reap) — never
+    a ``subprocess.run(timeout=...)``, whose POSIX path does an *unbounded*
+    ``process.wait()`` after the kill and so would pin flash-picos on exactly
+    that wedge (the "flash-picos hangs after N devices" failure). This mirrors
+    the reader's :func:`_abandon_reader`. Success is confirmed by the caller
+    watching sysfs for BOOTSEL, not by this child's exit.
     """
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            _SERIAL_WRITER_SCRIPT,
+            str(port),
+            str(baud),
+            line,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     try:
-        subprocess.run(
-            [
-                sys.executable,
-                _SERIAL_WRITER_SCRIPT,
-                str(port),
-                str(baud),
-                line,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
-        )
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        pass
+        pass  # wedged close — _abandon_child kills and abandons it below
+    finally:
+        _abandon_child(proc)
 
 
 def _enter_bootsel_via_cdc(usb_serial, baud=115200):
@@ -433,6 +442,29 @@ def _read_line_bounded(stream, bound):
             return bytes(buf[: nl + 1]).decode("utf-8", errors="ignore")
 
 
+def _abandon_child(proc):
+    """Kill *proc* if still running and reap it with a BOUNDED wait.
+
+    Never waits unbounded. A child wedged in the kernel's uninterruptible
+    cdc_acm teardown (the "-110 mute" ``os.close()`` that never returns) will
+    not die on ``SIGKILL`` until the syscall unwinds, so awaiting it would pin
+    flash-picos — and a process cannot finish ``exit_group()`` while any of
+    its threads is in uninterruptible sleep. The bounded wait reaps a
+    cleanly-finished child; a wedged one is abandoned (reparented to init,
+    which reaps it once the syscall returns, and ``subprocess`` reaps any
+    finished child on the next :class:`~subprocess.Popen`).
+    """
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=_SERIAL_TEARDOWN_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _abandon_reader(proc):
     """Tear down the reader child without ever blocking on a wedged one.
 
@@ -448,15 +480,7 @@ def _abandon_reader(proc):
         proc.stdout.close()
     except OSError:
         pass
-    if proc.poll() is None:
-        try:
-            proc.kill()
-        except OSError:
-            pass
-    try:
-        proc.wait(timeout=_SERIAL_TEARDOWN_GRACE_S)
-    except subprocess.TimeoutExpired:
-        pass
+    _abandon_child(proc)
 
 
 def read_json_from_serial(port, baud, timeout):
