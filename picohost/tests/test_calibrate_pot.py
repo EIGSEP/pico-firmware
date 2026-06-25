@@ -30,3 +30,22 @@ def test_fit_slope_pin_zero_uses_v0_not_freefit_intercept():
 
 def test_fit_slope_pin_zero_returns_none_for_flat_voltages():
     assert calibrate_pot.fit_slope_pin_zero([1.0, 1.0], [0.0, 100.0], 1.0) is None
+
+
+def test_compute_headroom_basic():
+    h = calibrate_pot.compute_headroom([1.0, 1.9], m=100.0, vref=3.3)
+    assert h["v_lo"] == pytest.approx(1.0)
+    assert h["v_hi"] == pytest.approx(1.9)
+    assert h["span_v"] == pytest.approx(0.9)
+    assert h["headroom_low_v"] == pytest.approx(1.0)
+    assert h["headroom_high_v"] == pytest.approx(1.4)
+    assert h["headroom_low_deg"] == pytest.approx(100.0)
+    assert h["headroom_high_deg"] == pytest.approx(140.0)
+
+
+def test_compute_headroom_uses_abs_slope():
+    # Negative slope (voltage falls as az rises) must still give
+    # positive degree headroom.
+    h = calibrate_pot.compute_headroom([1.0, 1.9], m=-100.0, vref=3.3)
+    assert h["headroom_low_deg"] == pytest.approx(100.0)
+    assert h["headroom_high_deg"] == pytest.approx(140.0)

@@ -50,6 +50,12 @@ POTMON_STREAM = f"stream:{POTMON_NAME}"
 # entry is ~25x — long enough to ride out a single reconnect blip but
 # short enough to fail fast when the manager isn't actually publishing.
 SAMPLE_TIMEOUT_S = 5.0
+# Pot wiper spans ~0..Vref, so the ADC rails approximate the pot's
+# electrical ends. Mirrors firmware POTMON_VREF (src/potmon.h).
+ADC_VREF = 3.3
+# Warn if the operating window leaves less than this much travel (in az
+# degrees) before a rail/electrical end (~0.2 turn).
+HEADROOM_WARN_DEG = 72.0
 
 
 def collect_samples(transport, n):
@@ -111,6 +117,29 @@ def fit_slope_pin_zero(voltages, angles, v0):
         return None
     m, _b_free = fit
     return (float(m), float(-m * v0))
+
+
+def compute_headroom(voltages, m, vref=ADC_VREF):
+    """Margin from the swept window's endpoints to the ADC rails.
+
+    The pot wiper spans roughly 0..vref, so distance to the rails is a
+    proxy for distance to the pot's electrical ends. Degrees use the
+    magnitude of the slope so both directions report positive margin.
+    """
+    v_lo = min(voltages)
+    v_hi = max(voltages)
+    deg_per_v = abs(m)
+    headroom_low_v = v_lo
+    headroom_high_v = vref - v_hi
+    return {
+        "v_lo": v_lo,
+        "v_hi": v_hi,
+        "span_v": v_hi - v_lo,
+        "headroom_low_v": headroom_low_v,
+        "headroom_high_v": headroom_high_v,
+        "headroom_low_deg": headroom_low_v * deg_per_v,
+        "headroom_high_deg": headroom_high_v * deg_per_v,
+    }
 
 
 def collect_minmax(transport, n_samples, total_degrees):
