@@ -644,7 +644,7 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     return data
 
 
-def _read_device_info(usb_serial, baud, timeout):
+def _read_device_info(usb_serial, baud, timeout=_CDC_READ_TIMEOUT_S):
     """Resolve the post-flash CDC port for *usb_serial* and read its JSON.
 
     Used by the USB per-device path, which already knows each Pico by
@@ -778,7 +778,6 @@ def flash_and_discover(
     port=None,
     usb_serial=None,
     baud=115200,
-    timeout=10,
 ):
     """
     Flash all attached Picos and read device config from each.
@@ -797,8 +796,6 @@ def flash_and_discover(
         device must match both.
     baud : int
         Serial baud rate for reading JSON after flash.
-    timeout : int
-        Seconds to wait for each Pico's JSON response.
 
     Returns
     -------
@@ -846,7 +843,7 @@ def flash_and_discover(
         # CDC device. _read_device_info resolves the current path from
         # the stable usb_serial (the kernel may assign a different
         # /dev/ttyACMn than it had pre-flash) and reads its JSON.
-        data = _read_device_info(port_serial, baud, timeout)
+        data = _read_device_info(port_serial, baud)
         if data is not None:
             all_devices.append(data)
             logger.info(f"Read device info from {data['port']}")
@@ -1045,7 +1042,6 @@ def _reconcile_silent_boards(
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
-    timeout=10,
 ):
     """Mass-flash all Picos via the bussed GPIO BOOTSEL/RUN lines.
 
@@ -1152,7 +1148,6 @@ def flash_and_discover_gpio(
     sweep_devices, sweep_outcomes = _reconcile_silent_boards(
         expected_serials - reported,
         baud,
-        read_timeout=min(timeout, _CDC_READ_TIMEOUT_S),
     )
     all_devices.extend(sweep_devices)
     outcomes.update(sweep_outcomes)
@@ -1296,12 +1291,6 @@ def main(argv=None):
         help="Serial baud rate.",
     )
     p.add_argument(
-        "--timeout",
-        type=int,
-        default=10,
-        help="Seconds to wait for each Pico's JSON",
-    )
-    p.add_argument(
         "--redis-host",
         default="localhost",
         help="Redis host for PicoConfigStore publication",
@@ -1398,7 +1387,6 @@ def main(argv=None):
                 all_devices = flash_and_discover_gpio(
                     uf2_path=args.uf2,
                     baud=args.baud,
-                    timeout=args.timeout,
                 )
             else:
                 all_devices = flash_and_discover(
@@ -1406,7 +1394,6 @@ def main(argv=None):
                     port=args.port,
                     usb_serial=args.usb_serial,
                     baud=args.baud,
-                    timeout=args.timeout,
                 )
         except (FileNotFoundError, RuntimeError) as e:
             print(str(e), file=sys.stderr)
