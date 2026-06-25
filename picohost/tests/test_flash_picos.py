@@ -1564,6 +1564,30 @@ class TestFlashAndDiscoverGpio:
             "Read device info from /dev/ttyACM6 (serial=SER_B)" in caplog.text
         )
 
+    def test_board_silent_in_discovery_recovered_by_sweep(
+        self, _mock_gpio_flash, caplog
+    ):
+        # SER_B is alive and emitting but loses its reads during the busy
+        # fast-give-up discovery pass (short timeout); on the quiet-bus sweep
+        # (patient timeout) it answers. Distinguish the phases by the read
+        # timeout: the sweep reads with the full timeout, discovery with the
+        # short one.
+        m = _mock_gpio_flash
+        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.05)
+
+        def read(port, baud, timeout):
+            if port == "/dev/ttyACM6":  # SER_B
+                if timeout < m.fp._CDC_READ_TIMEOUT_S:  # discovery (fast)
+                    raise RuntimeError("Timed out waiting for JSON")
+                return {"app_id": 5}  # sweep (patient)
+            return m.reads[port]
+
+        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
+        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
+            devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
+        assert "reconcile sweep recovered serial=SER_B" in caplog.text
+
     def test_absent_board_reported_not_recovered(
         self, _mock_gpio_flash, caplog
     ):
@@ -1779,6 +1803,79 @@ class TestReadFleetCdcPatient:
         devices, outcomes = fp._read_fleet_cdc(2, 115200)
         assert [d["usb_serial"] for d in devices] == ["SER_A"]
         assert "SER_B" not in outcomes
+
+
+class TestReconcileSilentBoards:
+    """_reconcile_silent_boards gives boards that enumerated but stayed
+    silent during the busy discovery pass a patient re-read on a now-quiet
+    bus — the recovery the fast-give-up first pass deliberately defers."""
+
+    def _patch(self, monkeypatch):
+        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
+        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
+
+    def test_recovers_board_that_answers_on_a_later_attempt(self, monkeypatch):
+        self._patch(monkeypatch)
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
+        )
+        calls = {"n": 0}
+
+        def read(port, baud, timeout):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise RuntimeError("Timed out waiting for JSON")
+            return {"app_id": 5}
+
+        monkeypatch.setattr(fp, "read_json_from_serial", read)
+        devices, outcomes = fp._reconcile_silent_boards({"SER_B"}, 115200)
+        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        assert outcomes["SER_B"] is None
+
+    def test_skips_board_not_present_as_cdc(self, monkeypatch):
+        # A board that never enumerated cannot be re-read over USB; the
+        # sweep only touches boards that are present.
+        self._patch(monkeypatch)
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
+        )
+
+        def read(port, baud, timeout):
+            raise AssertionError("must not read an absent board")
+
+        monkeypatch.setattr(fp, "read_json_from_serial", read)
+        devices, outcomes = fp._reconcile_silent_boards({"SER_GONE"}, 115200)
+        assert devices == []
+        assert "SER_GONE" not in outcomes
+
+    def test_persistently_silent_board_returns_reason(self, monkeypatch):
+        self._patch(monkeypatch)
+        monkeypatch.setattr(
+            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
+        )
+        monkeypatch.setattr(
+            fp,
+            "read_json_from_serial",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("Timed out waiting for JSON")
+            ),
+        )
+        devices, outcomes = fp._reconcile_silent_boards(
+            {"SER_B"}, 115200, attempts=2
+        )
+        assert devices == []
+        assert outcomes["SER_B"] is not None
+
+    def test_no_missing_boards_is_a_noop(self, monkeypatch):
+        self._patch(monkeypatch)
+
+        def boom():
+            raise AssertionError("must not scan when nothing is missing")
+
+        monkeypatch.setattr(fp, "find_pico_ports", boom)
+        devices, outcomes = fp._reconcile_silent_boards(set(), 115200)
+        assert devices == []
+        assert outcomes == {}
 
 
 class TestClassifyReadFailure:

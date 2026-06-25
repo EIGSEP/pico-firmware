@@ -460,11 +460,26 @@ _INTER_DEVICE_SETTLE_S = 1.0
 # never (re)enumerates cannot stall the run.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
-# Per-board read timeout. A board that re-enumerated as CDC emits a status
-# line every 200 ms, so a short read is plenty; one that stays mute will not
-# answer within a long timeout either — keep reads snappy so a mute board
-# does not eat the readback deadline.
+# Per-board read timeout for the reconcile sweep, on a quiet bus. A board
+# that re-enumerated as CDC emits a status line every 200 ms, so this is
+# plenty; one that stays mute this long is genuinely not reporting.
 _CDC_READ_TIMEOUT_S = 5
+# Discovery-pass read timeout: deliberately short. The first pass runs while
+# the bus is still busy from the staggered boot and must keep cycling to
+# catch boards as they (re)enumerate — it must NOT spend the whole readback
+# budget blocking on a board that is momentarily mute. A board mute under
+# that contention is deferred to the quiet-bus sweep below, not waited on
+# here.
+_FIRST_PASS_READ_TIMEOUT_S = 2
+# Quiet-bus reconcile sweep: settle briefly so nothing is mid-re-enumeration,
+# then give each board that enumerated but stayed silent a couple of patient
+# reads on the now-idle bus (the first pass gave up on it fast). A board that
+# is alive answers on the first sweep read (status every 200 ms vs a 5 s
+# read); the second is a hedge for one still coming alive. Kept at 2 so the
+# sweep cannot stall long on genuinely-silent boards (each costs its full
+# read timeout per attempt).
+_PRE_SWEEP_SETTLE_S = 2.0
+_SWEEP_REREAD_ATTEMPTS = 2
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -967,6 +982,66 @@ def _boot_fleet_staggered(
     return booted
 
 
+def _reconcile_silent_boards(
+    missing,
+    baud,
+    attempts=_SWEEP_REREAD_ATTEMPTS,
+    settle=_PRE_SWEEP_SETTLE_S,
+    read_timeout=_CDC_READ_TIMEOUT_S,
+):
+    """Re-read boards that enumerated as CDC but stayed silent, on a quiet bus.
+
+    The discovery pass (:func:`_read_fleet_cdc`) runs while the bus is still
+    busy from the staggered boot and gives up *fast* on any board that does
+    not answer immediately, so it does not burn the whole readback budget
+    blocking on one mute board. That leaves a gap: a board that is alive and
+    emitting status every 200 ms, but whose reads lost out to contention in
+    that busy window, would be reported missing even though it is fine. This
+    sweep closes it — after a *settle* it gives each still-missing board that
+    is *present* as CDC a few patient reads on the now-idle bus.
+
+    Only boards in *missing* that currently appear in
+    :func:`find_pico_ports` are touched: a board that never (re)enumerated
+    cannot be read over USB, and there is no re-flash fallback (re-flashing a
+    healthy board only re-introduces a BOOTSEL round-trip). Each board's CDC
+    port is resolved once up front, then its fixed path is re-read up to
+    *attempts* times — without re-scanning USB descriptors between tries,
+    which would re-disturb the marginal deep-hub node we are coaxing a line
+    out of.
+
+    Returns ``(devices, outcomes)`` — *outcomes* maps each swept serial to
+    ``None`` once read, else its last failure reason, for the caller's
+    reconciliation report.
+    """
+    if not missing:
+        return [], {}
+    time.sleep(settle)
+    by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
+    pending = {s for s in missing if s in by_serial}
+    recovered = []
+    outcomes = {}
+    for attempt in range(1, attempts + 1):
+        if not pending:
+            break
+        if attempt > 1:
+            time.sleep(settle)
+        for serial in sorted(pending):
+            data, reason = _read_cdc_outcome(
+                by_serial[serial], serial, baud, read_timeout
+            )
+            outcomes[serial] = reason
+            if data is not None:
+                recovered.append(data)
+                pending.discard(serial)
+                logger.info(
+                    "reconcile sweep recovered serial=%s on %s (was silent "
+                    "during the busy discovery pass)",
+                    serial,
+                    data["port"],
+                )
+    return recovered, outcomes
+
+
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
@@ -1050,19 +1125,37 @@ def flash_and_discover_gpio(
     expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
     booted = _boot_fleet_staggered(flashed)
 
-    # Wait only for the boards that actually booted (a hardware-stuck
-    # board never re-enumerates), then read each. The readback keys off
-    # the CDC serial, not the BOOTSEL serial used for loading, so a board
-    # whose BOOTSEL serial differed or was absent is still reported. It is
-    # *patient*: it keeps polling and reading boards as they (re)appear, so
-    # a board whose CDC enumeration flickers on the contended hub is not
-    # dropped just because it was absent at one read instant. There is no
-    # re-flash fallback — a genuinely mute board cannot be reached over USB
-    # to re-flash, and re-flashing a healthy board only re-introduces a
-    # BOOTSEL round-trip — so a still-missing board is reported, not
-    # re-flashed.
-    read_timeout = min(timeout, _CDC_READ_TIMEOUT_S)
-    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, read_timeout)
+    # Readback in two phases, keyed off the CDC serial (not the BOOTSEL
+    # serial used for loading, so a board whose BOOTSEL serial differed or
+    # was absent is still reported). There is no re-flash fallback — a
+    # genuinely mute board cannot be reached over USB to re-flash, and
+    # re-flashing a healthy board only re-introduces a BOOTSEL round-trip —
+    # so a still-missing board is reported, not re-flashed.
+    #
+    # Phase 3a — patient discovery with a FAST give-up: while the bus is
+    # still busy from the staggered boot, keep polling and reading boards as
+    # they (re)appear (so a board whose CDC enumeration flickers is not
+    # dropped for being absent at one instant), but give up quickly on any
+    # board that does not answer at once rather than draining the budget
+    # blocking on it.
+    all_devices, outcomes = _read_fleet_cdc(
+        len(booted), baud, _FIRST_PASS_READ_TIMEOUT_S
+    )
+    reported = {d["usb_serial"] for d in all_devices}
+
+    # Phase 3b — quiet-bus reconcile sweep: give any board that enumerated
+    # but stayed silent in that busy window a few patient reads on the now-
+    # idle bus. A board that is alive and emitting (its heartbeat LED and
+    # status share one code path in the firmware) but lost its reads to
+    # contention is recovered here; one that is genuinely silent (stuck in
+    # init, wrong DIP/app) is reported missing for the operator.
+    sweep_devices, sweep_outcomes = _reconcile_silent_boards(
+        expected_serials - reported,
+        baud,
+        read_timeout=min(timeout, _CDC_READ_TIMEOUT_S),
+    )
+    all_devices.extend(sweep_devices)
+    outcomes.update(sweep_outcomes)
 
     _log_readback_reconciliation(
         expected_serials, set(find_pico_ports().values()), outcomes
