@@ -11,6 +11,16 @@ from .base import PicoDevice
 logger = logging.getLogger(__name__)
 
 
+def steps_to_deg(steps, *, step_angle_deg, gear_teeth, microstep):
+    """Convert motor pulses to degrees (pure; no device state).
+
+    Shared by :meth:`PicoMotor.steps_to_deg` and ``calibrate-pot`` so the
+    geometry formula lives in exactly one place.
+    """
+    s = steps / microstep / gear_teeth
+    return float(s * step_angle_deg)
+
+
 class PicoMotor(PicoDevice):
     """Specialized class for motor control Pico devices."""
 
@@ -228,9 +238,12 @@ class PicoMotor(PicoDevice):
 
     def steps_to_deg(self, steps: int) -> float:
         """Convert motor pulses to degrees."""
-        s = steps / self.microstep / self.gear_teeth
-        deg = s * self.step_angle_deg
-        return float(deg)
+        return steps_to_deg(
+            steps,
+            step_angle_deg=self.step_angle_deg,
+            gear_teeth=self.gear_teeth,
+            microstep=self.microstep,
+        )
 
     def motor_command(self, **kwargs):
         """Send a json motor command with specified keys."""
