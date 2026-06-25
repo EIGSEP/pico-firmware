@@ -451,10 +451,20 @@ _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
 _INTER_DEVICE_SETTLE_S = 1.0
-# After the staggered fleet boot, wait for the booted boards to
-# re-enumerate as CDC before reading any of them.
+# After the staggered fleet boot, the booted boards re-enumerate as CDC.
+# On the contended hub that enumeration *flickers*: a board can be absent
+# from find_pico_ports() at one instant and back a second later (the LED
+# keeps blinking throughout — the firmware is up, only USB is intermittent).
+# The readback therefore keeps polling for this long, reading each board as
+# it appears, rather than reading a single snapshot. Bounded so a board that
+# never (re)enumerates cannot stall the run.
 _CDC_DISCOVER_TIMEOUT_S = 15.0
 _CDC_DISCOVER_POLL_S = 0.3
+# Per-board read timeout. A board that re-enumerated as CDC emits a status
+# line every 200 ms, so a short read is plenty; one that stays mute will not
+# answer within a long timeout either — keep reads snappy so a mute board
+# does not eat the readback deadline.
+_CDC_READ_TIMEOUT_S = 5
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -629,44 +639,62 @@ def _read_device_info(usb_serial, baud, timeout):
     return _read_cdc_port(port, usb_serial, baud, timeout)
 
 
-def _read_fleet_cdc(expected, baud, timeout):
-    """Read device-info JSON from every Pico now in CDC mode.
+def _read_fleet_cdc(expected, baud, read_timeout=_CDC_READ_TIMEOUT_S):
+    """Read device-info JSON from every Pico that boots into CDC, riding
+    out enumeration flicker.
 
-    Polls :func:`find_pico_ports` until at least *expected* Picos have
-    re-enumerated (or ``_CDC_DISCOVER_TIMEOUT_S`` elapses), then reads
-    each by its **CDC** serial. The GPIO mass-flash path uses this rather
-    than mapping the BOOTSEL-mode serial used for loading: a wiped or odd
-    board can present a different (or absent) serial in BOOTSEL, which
-    would leave it flashed but unreported. Keying off the CDC serial —
-    the same identity ``find_pico_ports`` and PicoManager use — reports
-    every Pico that actually booted into firmware.
+    On the contended observatory hub a freshly-booted board's CDC
+    enumeration flickers: it may be absent from :func:`find_pico_ports` at
+    one instant and back a second later, and the set rarely shows all
+    *expected* boards simultaneously even though each appears at *some*
+    instant. A single snapshot read therefore silently drops whichever
+    boards happened to be absent at the read instant — even though they
+    flashed fine and their LED is blinking. This instead keeps polling
+    until *expected* boards have reported or ``_CDC_DISCOVER_TIMEOUT_S``
+    elapses: each pass it reads every currently-enumerated board not yet
+    read, remembering successes (so a board that flickers out after it is
+    read is kept), retrying boards that opened but stayed mute, and picking
+    up boards still mid-(re)enumeration as they appear.
 
-    Returns ``(devices, outcomes)`` where *outcomes* maps each read
-    serial to ``None`` (read succeeded) or a failure reason. The caller
-    reconciles that against the flashed set, recovers any straggler, and
-    emits the per-serial report.
+    Boards are keyed by their **CDC** serial, not the BOOTSEL-mode serial
+    used to load: a wiped or odd board can present a different (or absent)
+    serial in BOOTSEL, which would leave it flashed but unreported. Keying
+    off the CDC serial — the same identity ``find_pico_ports`` and
+    PicoManager use — reports every Pico that actually booted into
+    firmware. A board that never (re)enumerates only costs the bounded
+    deadline.
+
+    Returns ``(devices, outcomes)`` where *outcomes* maps each
+    read-attempted serial to ``None`` (read succeeded) or its last failure
+    reason. The caller reconciles that against the flashed set and emits
+    the per-serial report.
     """
     deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
-    ports = find_pico_ports()
-    while len(ports) < expected and time.monotonic() < deadline:
+    devices = {}  # cdc_serial -> device-info (first successful read wins)
+    outcomes = {}
+    while True:
+        for port, serial in sorted(find_pico_ports().items()):
+            if serial in devices:
+                continue  # already read this board; don't re-disturb it
+            data, reason = _read_cdc_outcome(port, serial, baud, read_timeout)
+            outcomes[serial] = reason
+            if data is not None:
+                devices[serial] = data
+                logger.info(
+                    "Read device info from %s (serial=%s)", port, serial
+                )
+        if len(devices) >= expected or time.monotonic() >= deadline:
+            break
         time.sleep(_CDC_DISCOVER_POLL_S)
-        ports = find_pico_ports()
-    if len(ports) < expected:
+    if len(devices) < expected:
         logger.warning(
-            "only %d of %d flashed Pico(s) re-enumerated as CDC within %.0fs",
-            len(ports),
+            "only %d of %d booted Pico(s) reported device info within "
+            "%.0fs (the rest never (re)enumerated as CDC, or stayed mute)",
+            len(devices),
             expected,
             _CDC_DISCOVER_TIMEOUT_S,
         )
-    devices = []
-    outcomes = {}
-    for port, serial in sorted(ports.items()):
-        data, reason = _read_cdc_outcome(port, serial, baud, timeout)
-        outcomes[serial] = reason
-        if data is not None:
-            devices.append(data)
-            logger.info("Read device info from %s (serial=%s)", port, serial)
-    return devices, outcomes
+    return list(devices.values()), outcomes
 
 
 def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
@@ -939,73 +967,6 @@ def _boot_fleet_staggered(
     return booted
 
 
-_MUTE_REREAD_ATTEMPTS = 5
-_MUTE_REREAD_SETTLE_S = 1.5
-# A board that re-enumerated as CDC emits a status line every 200 ms, so
-# a short read is plenty; keep re-reads snappy rather than waiting out the
-# full per-device timeout on every attempt.
-_MUTE_REREAD_TIMEOUT_S = 5
-
-
-def _reread_mute_boards(
-    mute,
-    baud,
-    timeout,
-    attempts=_MUTE_REREAD_ATTEMPTS,
-    settle=_MUTE_REREAD_SETTLE_S,
-):
-    """Re-read boards that re-enumerated as CDC but lost the first read.
-
-    A board can lose its first read in a momentary enumeration race — its
-    CDC port opens but the read times out — even though the firmware is up
-    and emitting status every 200 ms. Such a board does not need
-    re-flashing (which a genuinely mute board is not even reachable for,
-    and which only re-introduces a BOOTSEL round-trip); it needs the bus
-    to quiet and a second look. Resolve each board's CDC port once by
-    its stable serial, then re-read that fixed path up to *attempts*
-    times — without re-scanning USB descriptors between tries, which
-    would re-disturb the very node we are coaxing a line out of.
-
-    Returns ``(devices, outcomes)`` — *outcomes* maps each serial to
-    ``None`` once read, else its last failure reason, for the caller's
-    reconciliation report.
-    """
-    read_timeout = min(timeout, _MUTE_REREAD_TIMEOUT_S)
-    recovered = []
-    outcomes = {}
-    pending = set(mute)
-    # Resolve each board's CDC port ONCE, up front. Every board in
-    # *mute* is — by the caller's construction — already present in
-    # find_pico_ports(), so its node already exists; what failed was the
-    # read, not the enumeration. Re-scanning on every attempt
-    # (list_ports.comports() walks and probes every device on the hub)
-    # re-disturbs a marginal deep-hub node — e.g. the lidar at 1-1.1.1.4
-    # with a dead I2C sensor — which is the very board we want to read.
-    # So scan once, then re-read the fixed paths on an otherwise-quiet
-    # bus.
-    by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
-    for attempt in range(1, attempts + 1):
-        if not pending:
-            break
-        if attempt > 1:
-            time.sleep(settle)
-        for serial in sorted(pending):
-            data, reason = _read_cdc_outcome(
-                by_serial.get(serial), serial, baud, read_timeout
-            )
-            outcomes[serial] = reason
-            if data is not None:
-                recovered.append(data)
-                pending.discard(serial)
-                logger.info(
-                    "re-read recovered serial=%s on %s (was mute after the "
-                    "mass reset)",
-                    serial,
-                    data["port"],
-                )
-    return recovered, outcomes
-
-
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
     baud=115200,
@@ -1092,22 +1053,16 @@ def flash_and_discover_gpio(
     # Wait only for the boards that actually booted (a hardware-stuck
     # board never re-enumerates), then read each. The readback keys off
     # the CDC serial, not the BOOTSEL serial used for loading, so a board
-    # whose BOOTSEL serial differed or was absent is still reported.
-    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, timeout)
-    reported = {d["usb_serial"] for d in all_devices}
-
-    # Staggered boot should leave no board mute, but if one still lost its
-    # first read, re-read it on the quiet bus (the firmware emits status
-    # every 200 ms). There is no re-flash fallback: a genuinely mute board
-    # cannot be reached over USB to re-flash, and re-flashing a healthy
-    # board only re-introduces a BOOTSEL round-trip — so a still-missing
-    # board is reported, not re-flashed.
-    mute = (expected_serials - reported) & set(find_pico_ports().values())
-    if mute:
-        reread, reread_outcomes = _reread_mute_boards(mute, baud, timeout)
-        all_devices.extend(reread)
-        outcomes.update(reread_outcomes)
-        reported |= {d["usb_serial"] for d in reread}
+    # whose BOOTSEL serial differed or was absent is still reported. It is
+    # *patient*: it keeps polling and reading boards as they (re)appear, so
+    # a board whose CDC enumeration flickers on the contended hub is not
+    # dropped just because it was absent at one read instant. There is no
+    # re-flash fallback — a genuinely mute board cannot be reached over USB
+    # to re-flash, and re-flashing a healthy board only re-introduces a
+    # BOOTSEL round-trip — so a still-missing board is reported, not
+    # re-flashed.
+    read_timeout = min(timeout, _CDC_READ_TIMEOUT_S)
+    all_devices, outcomes = _read_fleet_cdc(len(booted), baud, read_timeout)
 
     _log_readback_reconciliation(
         expected_serials, set(find_pico_ports().values()), outcomes
@@ -1154,17 +1109,65 @@ def flash_and_discover_gpio(
     return all_devices
 
 
+def _merge_device_lists(existing, fresh):
+    """Merge *fresh* device dicts over *existing* by ``usb_serial``.
+
+    Returns ``(merged_list, preserved_serials)``. A board read this run
+    overrides its prior entry; a board present in *existing* but absent
+    from *fresh* — flashed and running, but lost to a flaky readback this
+    run — keeps its last-known entry rather than vanishing. This matters
+    because :meth:`PicoConfigStore.upload` overwrites the device list
+    wholesale and PicoManager treats it as the source of truth, so a
+    partial readback would otherwise silently de-register working boards.
+    *preserved_serials* names the carried-over boards so the caller can
+    warn that they rode on stale data.
+
+    *existing* may be ``None`` (nothing published yet) — then the result
+    is *fresh* unchanged with no preserved boards. Devices without a
+    ``usb_serial`` cannot be keyed; fresh ones are kept as-is and existing
+    ones are dropped (they cannot be matched or trusted).
+    """
+    merged = {}  # usb_serial -> device-info
+    for dev in existing or []:
+        serial = dev.get("usb_serial")
+        if serial is not None:
+            merged[serial] = dev
+    preserved = set(merged)
+    extras = []  # fresh devices with no serial: keep, but cannot dedup
+    for dev in fresh:
+        serial = dev.get("usb_serial")
+        if serial is None:
+            extras.append(dev)
+            continue
+        merged[serial] = dev
+        preserved.discard(serial)
+    return list(merged.values()) + extras, preserved
+
+
 def _publish_to_redis(devices, host, port):
     """Publish *devices* to Redis via :class:`PicoConfigStore`.
 
-    Returns the :class:`PicoConfigStore` on success. Raises on
-    connection failure so ``main`` can fall back to file output if the
-    user asked for that.
+    Merges *devices* over the list already in Redis by ``usb_serial``
+    (see :func:`_merge_device_lists`) rather than overwriting it, so a
+    board that flashed and is running but was missed by this run's
+    readback is not dropped from PicoManager's source of truth. Returns
+    the merged device list that was published. Raises on connection
+    failure so ``main`` can fall back to file output if the user asked
+    for that.
     """
     transport = Transport(host=host, port=port)
     store = PicoConfigStore(transport)
-    store.upload(devices)
-    return store
+    merged, preserved = _merge_device_lists(store.get(), devices)
+    if preserved:
+        logger.warning(
+            "%d board(s) not read this run kept their previous Redis "
+            "entry (flashed but lost to a flaky readback?): %s. Re-run "
+            "flash-picos to refresh them.",
+            len(preserved),
+            ", ".join(sorted(map(str, preserved))),
+        )
+    store.upload(merged)
+    return merged
 
 
 def main(argv=None):
@@ -1322,11 +1325,11 @@ def main(argv=None):
 
         if not args.no_redis:
             try:
-                _publish_to_redis(
+                published = _publish_to_redis(
                     all_devices, args.redis_host, args.redis_port
                 )
                 print(
-                    f"Published {len(all_devices)} device(s) to Redis at "
+                    f"Published {len(published)} device(s) to Redis at "
                     f"{args.redis_host}:{args.redis_port} "
                     f"(key: {PICO_CONFIG_KEY})."
                 )
