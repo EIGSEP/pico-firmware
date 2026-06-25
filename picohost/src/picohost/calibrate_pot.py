@@ -18,15 +18,17 @@ Requires PicoManager to be running and the ``potmon`` device to be
 healthy. The script never touches the serial port itself, so it can
 be invoked alongside the manager.
 
-Two modes:
-  --mode minmax   : collect only at min and max (2-point fit, default)
-  --mode turns    : collect at every full turn from min to max, plus a
-                    fractional final stop when ``--turns`` isn't an
-                    integer (least-squares fit)
+Four modes:
+  --mode minmax   : bench, collect at min and max (2-point fit, default)
+  --mode turns    : bench, collect at every full turn (least-squares)
+  --mode azimuth  : in-box, operator drives the motor; sweep over the
+                    operating turn, slope fit, zero pinned to motor-home
+  --mode rezero   : in-box, re-pin the zero using the stored slope (fast;
+                    needs only motor access)
 
 Usage:
-    calibrate-pot
-    calibrate-pot --mode turns --turns 3.75
+    calibrate-pot --mode azimuth
+    calibrate-pot --mode rezero
 """
 
 from argparse import ArgumentParser
@@ -305,53 +307,61 @@ def rezero(transport, n_samples):
     return (m, b), v0
 
 
-def main():
+def build_parser():
     parser = ArgumentParser(
         description="Calibrate potentiometer voltage-to-angle mapping.",
     )
     parser.add_argument(
-        "-t",
-        "--turns",
-        type=float,
-        default=10.0,
+        "-t", "--turns", type=float, default=10.0,
         help=(
-            "Total turns from min to max. Fractional values are "
-            "supported (e.g. 3.75 for the standard 3.75-turn pot). "
-            "Default: 10."
+            "Total turns from min to max for bench modes. Fractional "
+            "values supported (e.g. 3.75). Default: 10."
         ),
     )
     parser.add_argument(
-        "-n",
-        "--n-samples",
-        type=int,
-        default=10,
+        "-n", "--n-samples", type=int, default=10,
         help=(
-            "Number of voltage samples to average at each position "
+            "Voltage samples to average per position "
             "(default: 10, ~2 s at the 200 ms producer cadence)"
         ),
     )
     parser.add_argument(
-        "-m",
-        "--mode",
-        type=str,
-        choices=["minmax", "turns"],
+        "-m", "--mode", type=str,
+        choices=["minmax", "turns", "azimuth", "rezero"],
         default="minmax",
         help=(
-            "Calibration mode: 'minmax' for 2-point, 'turns' for "
-            "per-turn least-squares (default: minmax)"
+            "Calibration mode. Bench: 'minmax' (2-point), 'turns' "
+            "(per-turn least-squares). In-box (motor-driven): 'azimuth' "
+            "(sweep + zero pinned to motor-home), 'rezero' (re-pin zero "
+            "with the stored slope). Default: minmax."
         ),
     )
     parser.add_argument(
-        "--redis-host",
-        default="localhost",
+        "--step-angle-deg", type=float, default=1.8,
+        help="Motor step angle in degrees (mirrors PicoMotor; default 1.8).",
+    )
+    parser.add_argument(
+        "--gear-teeth", type=int, default=113,
+        help="Motor gear teeth (mirrors PicoMotor; default 113).",
+    )
+    parser.add_argument(
+        "--microstep", type=int, default=1,
+        help="Motor microstep divisor (mirrors PicoMotor; default 1). "
+             "MUST match the deployed motor or the slope scales wrong.",
+    )
+    parser.add_argument(
+        "--redis-host", default="localhost",
         help="Redis host for the running PicoManager",
     )
     parser.add_argument(
-        "--redis-port",
-        type=int,
-        default=6379,
+        "--redis-port", type=int, default=6379,
         help="Redis port for the running PicoManager",
     )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -382,31 +392,73 @@ def main():
     )
     print(f"Reading voltages from {POTMON_STREAM}.")
 
+    motor_cfg = {
+        "step_angle_deg": args.step_angle_deg,
+        "gear_teeth": args.gear_teeth,
+        "microstep": args.microstep,
+    }
+    headroom = None
     try:
         if args.mode == "minmax":
             voltages, angles = collect_minmax(
                 transport, args.n_samples, total_degrees
             )
-        else:
+            cal = compute_linear_fit(voltages, angles)
+        elif args.mode == "turns":
             voltages, angles = collect_per_turn(
                 transport, args.n_samples, args.turns
             )
+            cal = compute_linear_fit(voltages, angles)
+        elif args.mode == "azimuth":
+            voltages, angles, v0 = collect_azimuth(
+                transport, args.n_samples, motor_cfg
+            )
+            if len(voltages) < 2:
+                print(
+                    "\nNeed at least one stop beyond home to fit a slope.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            cal = fit_slope_pin_zero(voltages, angles, v0)
+            if cal is not None:
+                headroom = compute_headroom(voltages, cal[0])
+        else:  # rezero
+            cal, v0 = rezero(transport, args.n_samples)
+            voltages, angles = [v0], [0.0]
     except (RuntimeError, ConnectionError) as exc:
         print(f"Calibration sample collection failed: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    cal = compute_linear_fit(voltages, angles)
 
     if cal is None:
         print("\nCalibration failed. Exiting.", file=sys.stderr)
         sys.exit(1)
 
+    if headroom is not None:
+        print("\nHeadroom to the pot's electrical ends (via the ADC rails):")
+        print(
+            f"  swept window: {headroom['v_lo']:.4f}..{headroom['v_hi']:.4f} V "
+            f"(span {headroom['span_v']:.4f} V)"
+        )
+        print(
+            f"  below low end:  {headroom['headroom_low_v']:.4f} V "
+            f"~ {headroom['headroom_low_deg']:.0f} deg"
+        )
+        print(
+            f"  above high end: {headroom['headroom_high_v']:.4f} V "
+            f"~ {headroom['headroom_high_deg']:.0f} deg"
+        )
+        if min(
+            headroom["headroom_low_deg"], headroom["headroom_high_deg"]
+        ) < HEADROOM_WARN_DEG:
+            print(
+                f"  WARNING: less than {HEADROOM_WARN_DEG:.0f} deg of margin on "
+                "one side — risk of hitting the pot's hard stop in operation."
+            )
+
     cal_data = {
         "pot_az": list(cal),
         "metadata": {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "turns": float(args.turns),
-            "total_degrees": total_degrees,
             "mode": args.mode,
             "n_points": len(angles),
             "pot_az_voltages": [float(v) for v in voltages],
@@ -414,6 +466,13 @@ def main():
             "n_samples": args.n_samples,
         },
     }
+    if args.mode in ("minmax", "turns"):
+        cal_data["metadata"]["turns"] = float(args.turns)
+        cal_data["metadata"]["total_degrees"] = total_degrees
+    if args.mode == "azimuth":
+        cal_data["metadata"]["motor_cfg"] = motor_cfg
+    if args.mode == "rezero":
+        cal_data["metadata"]["slope_reused"] = True
 
     # Persist to Redis first — if the live push later fails, the cal is
     # still stored and will load on the next PicoManager restart.
