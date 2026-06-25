@@ -30,7 +30,9 @@ def test_fit_slope_pin_zero_uses_v0_not_freefit_intercept():
 
 
 def test_fit_slope_pin_zero_returns_none_for_flat_voltages():
-    assert calibrate_pot.fit_slope_pin_zero([1.0, 1.0], [0.0, 100.0], 1.0) is None
+    assert (
+        calibrate_pot.fit_slope_pin_zero([1.0, 1.0], [0.0, 100.0], 1.0) is None
+    )
 
 
 def test_compute_headroom_basic():
@@ -163,6 +165,7 @@ def test_build_parser_accepts_new_modes_and_motor_cfg():
 
 def _make_fake_proxy():
     """Return a fake PicoProxy class whose instances record send_command calls."""
+
     class FakePicoProxy:
         def __init__(self, *args, **kwargs):
             self.is_available = True
@@ -180,7 +183,9 @@ def test_main_azimuth_mode(monkeypatch):
     dummy_transport = DummyTransport()
     fake_proxy, proxy_factory = _make_fake_proxy()
 
-    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
     monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
     # Return canned (voltages, angles, v0) — no hardware or user input needed.
     monkeypatch.setattr(
@@ -219,7 +224,9 @@ def test_main_rezero_mode(monkeypatch):
 
     fake_proxy, proxy_factory = _make_fake_proxy()
 
-    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
     monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
     # rezero() calls collect_samples() once (for v0) and input() once.
     monkeypatch.setattr(calibrate_pot, "collect_samples", lambda *a, **k: 1.0)
@@ -259,12 +266,13 @@ def test_compute_fit_residuals_known_nonlinear():
     """A point 10 deg off the line yields a hand-computable max residual."""
     # Line: angle = 10*V + 10  => at V=2 perfect would be 30, but we give 40
     voltages = [0.0, 1.0, 2.0]
-    angles = [10.0, 20.0, 40.0]   # last point is 10 deg above the line
+    angles = [10.0, 20.0, 40.0]  # last point is 10 deg above the line
     r = calibrate_pot.compute_fit_residuals(voltages, angles, m=10.0, b=10.0)
     # residuals: 0, 0, +10  → max_abs = 10.0
     assert r["max_abs_deg"] == pytest.approx(10.0)
     # rms = sqrt((0 + 0 + 100) / 3) = sqrt(100/3)
     import math
+
     assert r["rms_deg"] == pytest.approx(math.sqrt(100.0 / 3.0))
 
 
@@ -278,7 +286,9 @@ def test_main_azimuth_prints_linearity_report(monkeypatch, capsys):
     dummy_transport = DummyTransport()
     _fake_proxy, proxy_factory = _make_fake_proxy()
 
-    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
     monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
     monkeypatch.setattr(
         calibrate_pot,
@@ -302,7 +312,9 @@ def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
     dummy_transport = DummyTransport()
     _fake_proxy, proxy_factory = _make_fake_proxy()
 
-    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
     monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
     monkeypatch.setattr(
         calibrate_pot,
@@ -320,6 +332,7 @@ def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
     assert "residual_rms_deg" in meta
     # Values must be finite floats (not None / NaN)
     import math
+
     assert math.isfinite(meta["free_fit_intercept"])
     assert math.isfinite(meta["residual_max_deg"])
     assert math.isfinite(meta["residual_rms_deg"])

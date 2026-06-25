@@ -173,7 +173,7 @@ def compute_fit_residuals(voltages, angles, m, b):
     resid = a - (m * v + b)
     return {
         "max_abs_deg": float(np.max(np.abs(resid))),
-        "rms_deg": float(np.sqrt(np.mean(resid ** 2))),
+        "rms_deg": float(np.sqrt(np.mean(resid**2))),
     }
 
 
@@ -276,15 +276,21 @@ def collect_azimuth(transport, n_samples, motor_cfg):
         )
     print("  averaging samples...")
     v0 = collect_samples(transport, n_samples)
-    print(f"  home: az=0.00 deg (motor reads {az_home:.2f}), pot_az={v0:.4f} V")
+    print(
+        f"  home: az=0.00 deg (motor reads {az_home:.2f}), pot_az={v0:.4f} V"
+    )
     voltages = [v0]
     angles = [0.0]
 
     while True:
-        resp = input(
-            "\nDrive to the next stop, stop there, then press Enter "
-            "(or type 'q' then Enter to finish): "
-        ).strip().lower()
+        resp = (
+            input(
+                "\nDrive to the next stop, stop there, then press Enter "
+                "(or type 'q' then Enter to finish): "
+            )
+            .strip()
+            .lower()
+        )
         if resp == "q":
             break
         az = read_motor_az_deg(transport, **motor_cfg)
@@ -315,7 +321,9 @@ def rezero(transport, n_samples):
     print("  averaging samples...")
     v0 = collect_samples(transport, n_samples)
     b = -m * v0
-    print(f"  reused slope m={m:.4f}; V0={v0:.4f} V -> new intercept b={b:.4f}")
+    print(
+        f"  reused slope m={m:.4f}; V0={v0:.4f} V -> new intercept b={b:.4f}"
+    )
     return (m, b), v0
 
 
@@ -324,21 +332,29 @@ def build_parser():
         description="Calibrate potentiometer voltage-to-angle mapping.",
     )
     parser.add_argument(
-        "-t", "--turns", type=float, default=10.0,
+        "-t",
+        "--turns",
+        type=float,
+        default=10.0,
         help=(
             "Total turns from min to max for bench modes. Fractional "
             "values supported (e.g. 3.75). Default: 10."
         ),
     )
     parser.add_argument(
-        "-n", "--n-samples", type=int, default=10,
+        "-n",
+        "--n-samples",
+        type=int,
+        default=10,
         help=(
             "Voltage samples to average per position "
             "(default: 10, ~2 s at the 200 ms producer cadence)"
         ),
     )
     parser.add_argument(
-        "-m", "--mode", type=str,
+        "-m",
+        "--mode",
+        type=str,
         choices=["minmax", "turns", "azimuth", "rezero"],
         default="minmax",
         help=(
@@ -349,24 +365,33 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        "--step-angle-deg", type=float, default=1.8,
+        "--step-angle-deg",
+        type=float,
+        default=1.8,
         help="Motor step angle in degrees (mirrors PicoMotor; default 1.8).",
     )
     parser.add_argument(
-        "--gear-teeth", type=int, default=113,
+        "--gear-teeth",
+        type=int,
+        default=113,
         help="Motor gear teeth (mirrors PicoMotor; default 113).",
     )
     parser.add_argument(
-        "--microstep", type=int, default=1,
+        "--microstep",
+        type=int,
+        default=1,
         help="Motor microstep divisor (mirrors PicoMotor; default 1). "
-             "MUST match the deployed motor or the slope scales wrong.",
+        "MUST match the deployed motor or the slope scales wrong.",
     )
     parser.add_argument(
-        "--redis-host", default="localhost",
+        "--redis-host",
+        default="localhost",
         help="Redis host for the running PicoManager",
     )
     parser.add_argument(
-        "--redis-port", type=int, default=6379,
+        "--redis-port",
+        type=int,
+        default=6379,
         help="Redis port for the running PicoManager",
     )
     return parser
@@ -440,7 +465,9 @@ def main():
             if cal is not None:
                 headroom = compute_headroom(voltages, cal[0])
                 free = compute_linear_fit(voltages, angles)
-                resid = compute_fit_residuals(voltages, angles, free[0], free[1])
+                resid = compute_fit_residuals(
+                    voltages, angles, free[0], free[1]
+                )
         else:  # rezero
             cal, v0 = rezero(transport, args.n_samples)
             voltages, angles = [v0], [0.0]
@@ -477,9 +504,10 @@ def main():
             f"  margin to {ADC_VREF:.1f} V rail: {headroom['headroom_high_v']:.4f} V "
             f"~ {headroom['headroom_high_deg']:.0f} deg"
         )
-        if min(
-            headroom["headroom_low_deg"], headroom["headroom_high_deg"]
-        ) < HEADROOM_WARN_DEG:
+        if (
+            min(headroom["headroom_low_deg"], headroom["headroom_high_deg"])
+            < HEADROOM_WARN_DEG
+        ):
             print(
                 f"  WARNING: less than {HEADROOM_WARN_DEG:.0f} deg of margin on "
                 "one side — risk of hitting the pot's hard stop in operation."
