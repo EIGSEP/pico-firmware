@@ -80,3 +80,40 @@ def test_read_motor_az_steps_raises_when_silent():
     with pytest.raises(RuntimeError, match="motor"):
         # Nothing ever published; "$" returns after the block timeout.
         calibrate_pot.read_motor_az_steps(t, start_id="$")
+
+
+def _seq(values):
+    it = iter(values)
+    return lambda *a, **k: next(it)
+
+
+def test_collect_azimuth_pairs_voltage_with_motor_az(monkeypatch):
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([1.0, 1.5, 2.0])
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", _seq([0.5, 180.0, 360.0])
+    )
+    # home prompt, two stop prompts, then 'q' to finish
+    monkeypatch.setattr("builtins.input", _seq(["", "", "", "q"]))
+
+    cfg = {"step_angle_deg": 1.8, "gear_teeth": 113, "microstep": 1}
+    voltages, angles, v0 = calibrate_pot.collect_azimuth(
+        DummyTransport(), n_samples=10, motor_cfg=cfg
+    )
+
+    assert v0 == pytest.approx(1.0)
+    assert voltages == [1.0, 1.5, 2.0]
+    # home is pinned to az=0 regardless of the 0.5 deg read
+    assert angles == [0.0, 180.0, 360.0]
+
+
+def test_collect_azimuth_warns_when_not_homed(monkeypatch, capsys):
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0, 2.0]))
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", _seq([45.0, 360.0])
+    )
+    monkeypatch.setattr("builtins.input", _seq(["", "", "q"]))
+    cfg = {"step_angle_deg": 1.8, "gear_teeth": 113, "microstep": 1}
+    calibrate_pot.collect_azimuth(DummyTransport(), 10, cfg)
+    assert "WARNING" in capsys.readouterr().out
