@@ -1,6 +1,7 @@
 """Unit tests for picohost.calibrate_pot."""
 
 import json
+import sys
 
 import pytest
 from eigsep_redis.testing import DummyTransport
@@ -153,3 +154,88 @@ def test_build_parser_accepts_new_modes_and_motor_cfg():
     assert d.step_angle_deg == pytest.approx(1.8)
     assert d.gear_teeth == 113
     assert d.microstep == 1
+
+
+# ---------------------------------------------------------------------------
+# main() integration tests — drive the two new modes without hardware
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_proxy():
+    """Return a fake PicoProxy class whose instances record send_command calls."""
+    class FakePicoProxy:
+        def __init__(self, *args, **kwargs):
+            self.is_available = True
+            self.calls = []
+
+        def send_command(self, action, **kwargs):
+            self.calls.append((action, kwargs))
+
+    instance = FakePicoProxy()
+    return instance, lambda *a, **k: instance
+
+
+def test_main_azimuth_mode(monkeypatch):
+    """main() --mode azimuth: collects, fits, stores, and pushes cal."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+
+    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # Return canned (voltages, angles, v0) — no hardware or user input needed.
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    stored = PotCalStore(dummy_transport).get()
+    expected_m, expected_b = calibrate_pot.fit_slope_pin_zero(
+        [1.0, 1.9], [0.0, 360.0], 1.0
+    )
+
+    # Stored calibration coefficients match the fit.
+    assert stored["pot_az"][0] == pytest.approx(expected_m)
+    assert stored["pot_az"][1] == pytest.approx(expected_b)
+    # Metadata carries mode and motor geometry.
+    assert stored["metadata"]["mode"] == "azimuth"
+    assert "motor_cfg" in stored["metadata"]
+
+    # Live proxy received exactly one set_calibration call with the right params.
+    assert len(fake_proxy.calls) == 1
+    action, kwargs = fake_proxy.calls[0]
+    assert action == "set_calibration"
+    assert kwargs["pot_az_params"] == pytest.approx([expected_m, expected_b])
+
+
+def test_main_rezero_mode(monkeypatch):
+    """main() --mode rezero: reuses stored slope, repins intercept, stores, pushes."""
+    dummy_transport = DummyTransport()
+    # Pre-seed an existing calibration so rezero() can load the slope.
+    PotCalStore(dummy_transport).upload({"pot_az": [100.0, -50.0]})
+
+    fake_proxy, proxy_factory = _make_fake_proxy()
+
+    monkeypatch.setattr(calibrate_pot, "Transport", lambda *a, **k: dummy_transport)
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # rezero() calls collect_samples() once (for v0) and input() once.
+    monkeypatch.setattr(calibrate_pot, "collect_samples", lambda *a, **k: 1.0)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "rezero"])
+
+    calibrate_pot.main()
+
+    stored = PotCalStore(dummy_transport).get()
+
+    # Slope reused (100.0), intercept re-pinned: b = -m * v0 = -100.0 * 1.0 = -100.0
+    assert stored["pot_az"] == pytest.approx([100.0, -100.0])
+    assert stored["metadata"]["slope_reused"] is True
+
+    # Live proxy updated with the new coefficients.
+    assert len(fake_proxy.calls) == 1
+    action, kwargs = fake_proxy.calls[0]
+    assert action == "set_calibration"
+    assert kwargs["pot_az_params"] == pytest.approx([100.0, -100.0])
