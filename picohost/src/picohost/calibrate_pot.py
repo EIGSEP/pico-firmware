@@ -335,10 +335,10 @@ def build_parser():
         "-t",
         "--turns",
         type=float,
-        default=10.0,
+        default=3.75,
         help=(
             "Total turns from min to max for bench modes. Fractional "
-            "values supported (e.g. 3.75). Default: 10."
+            "values supported (e.g. 3.75). Default: 3.75 (the installed pot)."
         ),
     )
     parser.add_argument(

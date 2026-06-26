@@ -142,6 +142,14 @@ def test_rezero_without_stored_cal_raises(monkeypatch):
         calibrate_pot.rezero(t, n_samples=10)
 
 
+def test_default_turns_matches_installed_pot():
+    """The installed pot is 3.75-turn, so that is the bench-mode default."""
+    p = calibrate_pot.build_parser()
+    assert p.parse_args([]).turns == pytest.approx(3.75)
+    # explicit override still works
+    assert p.parse_args(["-t", "10"]).turns == pytest.approx(10.0)
+
+
 def test_build_parser_accepts_new_modes_and_motor_cfg():
     p = calibrate_pot.build_parser()
 
