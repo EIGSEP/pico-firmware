@@ -15,7 +15,7 @@ from serial.tools import list_ports
 
 from . import manager_service
 from .buses import PicoConfigStore
-from .keys import PICO_CONFIG_KEY, pico_heartbeat_name
+from .keys import pico_heartbeat_name
 
 logger = logging.getLogger(__name__)
 
@@ -203,12 +203,15 @@ def _wait_for_stable_bootsel_set(
     return last
 
 
-_CONFIRM_TIMEOUT_S = 45.0   # > boot stagger (~7x1.5s) + udev + a couple 5s manager cadences
+_CONFIRM_TIMEOUT_S = (
+    45.0  # > boot stagger (~7x1.5s) + udev + a couple 5s manager cadences
+)
 _CONFIRM_POLL_S = 0.5
 
 
-def _await_manager_confirmation(expected, transport,
-                                timeout=_CONFIRM_TIMEOUT_S, poll=_CONFIRM_POLL_S):
+def _await_manager_confirmation(
+    expected, transport, timeout=_CONFIRM_TIMEOUT_S, poll=_CONFIRM_POLL_S
+):
     """Poll the manager-owned pico_config until *expected* serials are alive.
 
     Returns (confirmed, stragglers). A serial is confirmed only when its board's
@@ -245,7 +248,9 @@ def _await_manager_confirmation(expected, transport,
             name = APP_NAMES.get(app_id)
             if name is None:
                 continue
-            if HeartbeatReader(transport, name=pico_heartbeat_name(name)).check():
+            if HeartbeatReader(
+                transport, name=pico_heartbeat_name(name)
+            ).check():
                 confirmed.add(serial)
         if confirmed == expected or time.monotonic() >= deadline:
             return confirmed, expected - confirmed
@@ -661,8 +666,6 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     return data
 
 
-
-
 def flash_and_discover(
     uf2_path="build/pico_multi.uf2",
     port=None,
@@ -859,7 +862,6 @@ def _boot_fleet_staggered(
     return booted
 
 
-
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
 ):
@@ -937,7 +939,7 @@ def flash_and_discover_gpio(
     # transiently mute, and a mute board cannot be reached over USB to
     # recover).
     expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
-    booted = _boot_fleet_staggered(flashed)
+    _boot_fleet_staggered(flashed)
 
     # Surface any board still in BOOTSEL, distinguishing the two causes:
     # a board we flashed that will not leave BOOTSEL even after its
@@ -978,7 +980,6 @@ def flash_and_discover_gpio(
             )
 
     return sorted(s for s in expected_serials if s)
-
 
 
 def main(argv=None):

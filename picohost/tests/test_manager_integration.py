@@ -22,7 +22,6 @@ from conftest import wait_for_condition, wait_for_settle
 from eigsep_redis import HeartbeatReader, MetadataSnapshotReader
 from eigsep_redis.testing import DummyTransport
 
-from picohost.buses import PicoConfigStore
 from picohost.keys import (
     PICO_CMD_STREAM,
     PICO_RESP_STREAM,
@@ -397,8 +396,12 @@ class TestDiscoverIntegration:
     def test_discover_creates_live_device(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
 
-        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: {"/dev/dummy": "INT123"})
-        monkeypatch.setattr(mgr_mod, "read_json_from_serial", lambda *a: {"app_id": 5})
+        monkeypatch.setattr(
+            mgr_mod, "find_pico_ports", lambda: {"/dev/dummy": "INT123"}
+        )
+        monkeypatch.setattr(
+            mgr_mod, "read_json_from_serial", lambda *a: {"app_id": 5}
+        )
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES,
             "rfswitch",
