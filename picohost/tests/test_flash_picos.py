@@ -8,6 +8,7 @@ import types
 import pytest
 
 import picohost.flash_picos as fp
+from eigsep_redis import HeartbeatWriter
 from eigsep_redis.testing import DummyTransport
 from picohost.buses import PicoConfigStore
 from picohost.flash_picos import (
@@ -16,6 +17,8 @@ from picohost.flash_picos import (
     _resolve_post_flash_port,
     flash_and_discover,
 )
+from picohost.keys import pico_heartbeat_name
+from picohost.manager import APP_NAMES
 
 
 def _publish(transport, serials):
@@ -26,6 +29,8 @@ def _publish(transport, serials):
 def test_confirmation_all_present():
     t = DummyTransport()
     _publish(t, ["A", "B"])
+    # _publish uses app_id=0 for all serials → name "motor"; set its heartbeat alive.
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
     confirmed, stragglers = _await_manager_confirmation(
         {"A", "B"}, t, timeout=1.0, poll=0.01)
     assert confirmed == {"A", "B"} and stragglers == set()
@@ -34,9 +39,25 @@ def test_confirmation_all_present():
 def test_confirmation_timeout_reports_stragglers():
     t = DummyTransport()
     _publish(t, ["A"])
+    # "A" → app_id=0 → "motor"; set motor heartbeat alive so A is confirmed.
+    # "B" is not in pico_config at all → straggler regardless.
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
     confirmed, stragglers = _await_manager_confirmation(
         {"A", "B"}, t, timeout=0.2, poll=0.01)
     assert confirmed == {"A"} and stragglers == {"B"}
+
+
+def test_confirmation_present_but_not_alive_is_straggler():
+    """A serial present in pico_config but whose heartbeat is NOT alive must
+    NOT be confirmed — regression guard for the false-green bug where mere
+    presence in the (TTL-less, stale) config was accepted as confirmation."""
+    t = DummyTransport()
+    _publish(t, ["A"])
+    # Deliberately do NOT set the heartbeat alive: the board is in pico_config
+    # but never came back after flash (or its heartbeat expired).
+    confirmed, stragglers = _await_manager_confirmation(
+        {"A"}, t, timeout=0.2, poll=0.01)
+    assert confirmed == set() and stragglers == {"A"}
 
 
 @pytest.fixture
@@ -1014,22 +1035,20 @@ class TestWaitForStableBootselSet:
 
 @pytest.fixture
 def _mock_gpio_flash(monkeypatch, tmp_path):
-    """Patch GPIO entry, sysfs scans, picotool loads, the staggered fleet
-    boot, and serial reads so flash_and_discover_gpio runs without
-    hardware.
+    """Patch GPIO entry, sysfs scans, picotool loads, and the staggered fleet
+    boot so flash_and_discover_gpio runs without hardware.
 
-    ``find_pico_ports`` and ``_find_bootsel_devices`` are time-dependent:
-    they return the pre-boot view until ``_boot_fleet_staggered`` runs,
-    then the post-boot view (the flashed fleet back in CDC under their
-    real CDC serials, and whatever is still stuck in BOOTSEL). picotool
-    load goes through a fake subprocess.run so tests can assert the argv
-    (no reboot, no -x, no -f); the per-board boot itself is mocked as the
-    phase boundary (it is unit-tested separately in TestBootFleetStaggered).
+    ``_find_bootsel_devices`` returns the BOOTSEL set until
+    ``_boot_fleet_staggered`` runs, then the stuck set (default empty).
+    ``find_pico_ports`` always returns the pre-boot CDC snapshot.
+    picotool load goes through a fake subprocess.run so tests can assert
+    the argv (no reboot, no -x, no -f); the per-board boot itself is
+    mocked as the phase boundary (it is unit-tested separately in
+    TestBootFleetStaggered).
 
     Tests tweak behaviour by mutating the exposed dicts/lists in place:
-    ``bootsel`` (BOOTSEL set), ``pre_cdc`` (CDC before entry), ``post_cdc``
-    (CDC after boot), ``reads`` (port → JSON), ``stuck`` (still in BOOTSEL
-    after boot).
+    ``bootsel`` (BOOTSEL set), ``pre_cdc`` (CDC snapshot), ``stuck``
+    (still in BOOTSEL after boot).
     """
     import picohost.flash_picos as fp
     import picohost.gpio as gpio_mod
@@ -1047,13 +1066,10 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
         {"usb_serial": "SER_A", "bus": 1, "address": 50},
         {"usb_serial": "SER_B", "bus": 1, "address": 51},
     ]
-    # CDC view before the mass entry (only used for the missing-from-
-    # BOOTSEL warning).
+    # CDC snapshot before the mass BOOTSEL entry (used for the missing-
+    # from-BOOTSEL warning; flash_and_discover_gpio only calls
+    # find_pico_ports once, before the GPIO entry).
     pre_cdc = {"/dev/ttyACM0": "SER_A", "/dev/ttyACM1": "SER_B"}
-    # CDC view after the fleet boot: the flashed fleet, at new /dev nodes
-    # and under their real CDC serials.
-    post_cdc = {"/dev/ttyACM5": "SER_A", "/dev/ttyACM6": "SER_B"}
-    reads = {"/dev/ttyACM5": {"app_id": 0}, "/dev/ttyACM6": {"app_id": 5}}
     # Boards still in BOOTSEL after the boot (default: none).
     stuck = []
 
@@ -1066,13 +1082,10 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
 
     monkeypatch.setattr(fp, "_find_bootsel_devices", fake_find_bootsel)
 
-    def fake_find_pico_ports():
-        return dict(post_cdc) if state["booted"] else dict(pre_cdc)
+    monkeypatch.setattr(fp, "find_pico_ports", lambda: dict(pre_cdc))
 
-    monkeypatch.setattr(fp, "find_pico_ports", fake_find_pico_ports)
-
-    # _boot_fleet_staggered is the phase boundary: it flips the view to
-    # post-boot and returns the serials that left BOOTSEL (every flashed
+    # _boot_fleet_staggered is the phase boundary: it marks the state as
+    # booted and returns the serials that left BOOTSEL (every flashed
     # board except the hardware-stuck ones). The real per-board reboot
     # logic is unit-tested separately.
     def fake_boot_fleet(flashed, **kw):
@@ -1096,12 +1109,6 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
 
     monkeypatch.setattr(fp.subprocess, "run", fake_run)
 
-    monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-    monkeypatch.setattr(
-        fp,
-        "read_json_from_serial",
-        lambda port, baud, timeout: reads[port],
-    )
     monkeypatch.setattr(fp.time, "sleep", lambda _: None)
 
     return types.SimpleNamespace(
@@ -1110,8 +1117,6 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
         cmds=cmds,
         bootsel=bootsel,
         pre_cdc=pre_cdc,
-        post_cdc=post_cdc,
-        reads=reads,
         stuck=stuck,
         fp=fp,
         monkeypatch=monkeypatch,
@@ -1511,9 +1516,48 @@ def test_main_confirmed_via_manager(monkeypatch, tmp_path, capsys):
         {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
         {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
     ])
+    # Confirmation now requires liveness: set both boards' heartbeats alive.
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[5])).set(ex=60, alive=True)
     monkeypatch.setattr(fp, "Transport", lambda host, port: t)
 
     fp.main(["--uf2", str(uf2)])
 
     out = capsys.readouterr().out
     assert "Confirmed 2/2" in out
+
+
+def test_main_straggler_exits_nonzero(monkeypatch, tmp_path, capsys):
+    """main() exits 1 and names the straggler when a flashed board is present
+    in pico_config but its heartbeat is NOT alive (booted but not reporting)."""
+    import picohost.flash_picos as fp
+    import picohost.gpio as gpio_mod
+
+    uf2 = tmp_path / "fw.uf2"
+    uf2.write_bytes(b"\x00")
+
+    monkeypatch.setattr(
+        fp, "flash_and_discover_gpio", lambda **kw: ["SER_A", "SER_B"]
+    )
+    monkeypatch.setattr(gpio_mod, "available", lambda: True)
+    monkeypatch.setattr(
+        fp.manager_service, "manager_is_active", lambda: True
+    )
+
+    t = DummyTransport()
+    # Both serials appear in pico_config…
+    PicoConfigStore(t).upload([
+        {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
+        {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
+    ])
+    # …but only SER_A's heartbeat is alive (motor, app_id=0).
+    # SER_B (rfswitch, app_id=5) has no heartbeat set → not alive.
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
+    monkeypatch.setattr(fp, "Transport", lambda host, port: t)
+
+    with pytest.raises(SystemExit) as excinfo:
+        fp.main(["--uf2", str(uf2)])
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "SER_B" in err
+    assert "NOT confirmed" in err

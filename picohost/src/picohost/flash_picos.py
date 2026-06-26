@@ -10,12 +10,12 @@ import sys
 import time
 from pathlib import Path
 
-from eigsep_redis import Transport
+from eigsep_redis import HeartbeatReader, Transport
 from serial.tools import list_ports
 
 from . import manager_service
 from .buses import PicoConfigStore
-from .keys import PICO_CONFIG_KEY
+from .keys import PICO_CONFIG_KEY, pico_heartbeat_name
 
 logger = logging.getLogger(__name__)
 
@@ -209,17 +209,44 @@ _CONFIRM_POLL_S = 0.5
 
 def _await_manager_confirmation(expected, transport,
                                 timeout=_CONFIRM_TIMEOUT_S, poll=_CONFIRM_POLL_S):
-    """Poll the manager-owned pico_config until *expected* serials all appear.
+    """Poll the manager-owned pico_config until *expected* serials are alive.
 
-    Returns (confirmed, stragglers). Presence in pico_config is the
-    confirmation: the manager only writes an entry after reading a status line.
+    Returns (confirmed, stragglers). A serial is confirmed only when its board's
+    per-name heartbeat is alive=True — mere presence in pico_config is NOT
+    sufficient. pico_config has no TTL and the manager (never stopped during a
+    flash) leaves stale entries, so a board that was already known before the
+    flash would appear "present" before it even re-enumerates. The manager sets a
+    board's heartbeat alive=False while it is in BOOTSEL during the flash (its
+    reconnect fails) and only back to alive=True once it re-establishes the
+    board afterward, so alive=True is a genuine "came back from this flash"
+    signal.
+
+    Circular-import note: manager.py imports from flash_picos at module load,
+    so APP_NAMES is imported lazily inside this function, not at module top level.
     """
+    # Lazy import to avoid a circular dependency: manager imports from
+    # flash_picos at module load, so flash_picos must not import APP_NAMES
+    # from manager at module top level.
+    from .manager import APP_NAMES
+
     store = PicoConfigStore(transport)
     expected = set(expected)
     deadline = time.monotonic() + timeout
     while True:
-        published = {d.get("usb_serial") for d in store.get()}
-        confirmed = expected & published
+        entries = store.get() or []
+        serial_to_appid = {
+            d.get("usb_serial"): d.get("app_id") for d in entries
+        }
+        confirmed = set()
+        for serial in expected:
+            app_id = serial_to_appid.get(serial)
+            if app_id is None:
+                continue
+            name = APP_NAMES.get(app_id)
+            if name is None:
+                continue
+            if HeartbeatReader(transport, name=pico_heartbeat_name(name)).check():
+                confirmed.add(serial)
         if confirmed == expected or time.monotonic() >= deadline:
             return confirmed, expected - confirmed
         time.sleep(poll)
