@@ -127,10 +127,11 @@ class PicoManager:
     """
     Standalone service that owns all pico serial connections.
 
-    Discovers devices from the Redis :class:`PicoConfigStore`,
-    monitors their health via per-device heartbeats, and relays
-    commands from :class:`PicoCmdReader` to the right
-    :class:`PicoDevice`.
+    Discovers devices by live-scanning CDC ports (via
+    :func:`find_pico_ports` and :func:`read_json_from_serial`) and
+    adopting any unbound Pico it finds, monitors their health via
+    per-device heartbeats, and relays commands from
+    :class:`PicoCmdReader` to the right :class:`PicoDevice`.
     """
 
     def __init__(self, transport):

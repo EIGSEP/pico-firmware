@@ -67,11 +67,12 @@ class PicoConfigStore:
     :meth:`Transport.upload_dict` stays at the top level next to
     it.
 
-    ``flash-picos`` uploads the list after every flash pass. The
-    manager reads it once at boot and treats it as the source of
-    truth; if it's missing, the manager falls back to running
-    ``flash-and-discover`` itself and writes the result back with
-    :meth:`upload`.
+    The manager is the sole writer: it publishes the list via
+    :meth:`upload` after each live-discovery pass (``_discover_new``
+    adopts new boards and immediately updates the store).
+    ``flash-picos`` only reads from this store — via
+    :func:`~picohost.flash_picos._await_manager_confirmation` — to
+    confirm that reflashed boards came back alive.
     """
 
     def __init__(self, transport):
