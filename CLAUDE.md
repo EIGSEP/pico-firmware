@@ -192,13 +192,13 @@ with MotorDevice() as motor:
 
 ### flash-picos
 
-CLI tool (installed as `flash-picos` entry point from picohost package) for flashing and configuring multiple Picos. Two flash paths:
-- **GPIO mass-BOOTSEL (default)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. The lines are driven through the `pinctrl` CLI (`pinctrl set 17/18 op dh|dl`), so there is no GPIO library or pin-factory backend to install. One GPIO sequence (`17 dh → 18 dh → 17 dl → 18 dl`, i.e. reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then one mass reset boots everything. Fails fast with a pointer to `--no-gpio` if `pinctrl` is not on PATH
+CLI tool (installed as `flash-picos` entry point from picohost package) for flashing all attached Picos. It is **FLASH-ONLY**: it loads the UF2 firmware and confirms the result by polling the always-running `picomanager`'s Redis `pico_config` (which the manager owns by self-discovering boards from their CDC status). Two flash paths:
+- **GPIO mass-BOOTSEL (default)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. The lines are driven through the `pinctrl` CLI (`pinctrl set 17/18 op dh|dl`), so there is no GPIO library or pin-factory backend to install. One GPIO sequence (`17 dh → 18 dh → 17 dl → 18 dl`, i.e. reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then each board is booted individually and staggered via `picotool reboot -a`. Fails fast with a pointer to `--no-gpio` if `pinctrl` is not on PATH
 - **USB per-device (`--no-gpio`, or automatic with `--port`/`--usb-serial`)**: reboots each CDC Pico into BOOTSEL via `picotool reboot --bus/--address`, then loads — for hosts without the GPIO wiring
 - `picotool` targets devices by USB bus/address resolved from sysfs (never `--ser`, whose descriptor read corrupts under hub contention)
-- Stops an active `picomanager.service` before flashing and restarts it afterwards — the manager owns every Pico's CDC port (no exclusive open on either side), so a live manager races the post-flash readback. Restart happens **only if flash-picos itself stopped the unit**, so `eigsep-field patch pico-firmware` (which stops/starts the unit around its own flash-picos call and inserts an ExecStart drop-in in between) is unaffected. `--keep-manager` opts out; unprivileged runs fall back to `sudo -n systemctl`, and an active manager that cannot be stopped aborts the flash with a pointer to `--keep-manager`
-- Reads JSON device info from each Pico after flashing and publishes the device list to Redis (optionally `--output-file`)
-- Automatically discovers connected Picos (CDC via pyserial, BOOTSEL via sysfs)
+- **No longer** stops/restarts `picomanager.service` — the manager runs continuously and owns the CDC ports; flash-picos confirms against its `pico_config` instead of reading directly
+- When `picomanager` is not active, prints "loaded N; start picomanager to confirm" and exits successfully (0) — the manager owns device discovery and publication to Redis
+- Optionally writes confirmed device info to a JSON file via `--output-file`
 
 ### pico-gpio
 

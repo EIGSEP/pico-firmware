@@ -960,6 +960,13 @@ def main(argv=None):
             "Flash all attached Picos and confirm via the manager-owned "
             "pico_config that each board is reporting."
         ),
+        epilog=(
+            "flash-picos is FLASH-ONLY: it loads the UF2 firmware and confirms "
+            "the result by polling picomanager's Redis pico_config (which the "
+            "manager owns by self-discovering boards from their CDC status). "
+            "If picomanager is not running, reports loaded count and exits "
+            "successfully — the manager owns device discovery and publication."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
