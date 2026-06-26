@@ -60,6 +60,7 @@ from .buses import (
     PicoRespWriter,
     PotCalStore,
 )
+from .flash_picos import find_pico_ports, read_json_from_serial
 from .keys import PICO_CMD_STREAM, pico_heartbeat_name
 from .motor import PicoMotor
 
@@ -95,6 +96,8 @@ PICO_CLASSES = {
 # Timing
 HEALTH_CHECK_INTERVAL = 5.0  # seconds between health checks
 HEALTH_TIMEOUT = 10.0  # seconds without status before unhealthy
+DISCOVERY_READ_TIMEOUT_S = 3.0  # bounded one-shot probe of an unbound CDC port
+DISCOVERY_BAUD = 115200
 # Heartbeat TTL is 4× the check interval so a single missed tick
 # (or a reconnection storm that blocks one pass) doesn't expire the
 # key before the next tick has a chance to re-assert liveness.
@@ -296,6 +299,50 @@ class PicoManager:
 
         self._register_devices(devices)
 
+    def _probe_status(self, port):
+        """Read one self-identifying status line from *port*, or None.
+
+        Bounded + abandonable (runs in a child process): a wedged/mute port
+        cannot hang the manager's discovery pass.
+        """
+        try:
+            return read_json_from_serial(port, DISCOVERY_BAUD, DISCOVERY_READ_TIMEOUT_S)
+        except (RuntimeError, OSError) as e:
+            self.logger.debug("discovery probe of %s failed: %s", port, e)
+            return None
+
+    def _discover_new(self):
+        """Adopt any CDC port not already bound to a registered device.
+
+        Keys off usb_serial (a renumbered known board is already bound; the
+        health loop's reconnect re-resolves its port). Probes happen lock-free;
+        registration re-checks the name under the lock.
+        """
+        ports = find_pico_ports()
+        with self._lock:
+            bound = {p.usb_serial for p in self.picos.values() if p.usb_serial}
+        candidates = {port: sn for port, sn in ports.items()
+                      if sn and sn not in bound}
+        for port, sn in candidates.items():
+            info = self._probe_status(port)
+            if info is None:
+                continue
+            app_id = info.get("app_id")
+            name = APP_NAMES.get(app_id)
+            if name is None:
+                self.logger.warning(
+                    "discovery: unknown app_id %r on %s (serial=%s)", app_id, port, sn)
+                continue
+            with self._lock:
+                if name in self.picos:
+                    self.logger.warning(
+                        "discovery: %s already bound; %s (serial=%s) ignored",
+                        name, port, sn)
+                    continue
+                self._register_devices(
+                    [{"app_id": app_id, "port": port, "usb_serial": sn}])
+            self._config_store.upload(self._current_device_list())
+
     # --- Health Monitoring ---
 
     def health_loop(self):
@@ -348,6 +395,7 @@ class PicoManager:
                 hb = self._heartbeats.get(name)
                 if hb is not None:
                     hb.set(ex=HEARTBEAT_TTL, alive=connected)
+        self._discover_new()   # NEW: adopt any newly-appeared board
 
     # --- Command Relay ---
 
