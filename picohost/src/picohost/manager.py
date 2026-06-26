@@ -1,12 +1,12 @@
 """
 PicoManager - standalone service that owns all pico serial connections.
 
-Redis is the source of truth. ``flash-picos`` writes the discovered
-device list into ``PicoConfigStore`` on the host side; the manager
-boots, reads that list, instantiates the matching :class:`PicoDevice`
-subclass per entry, and then exposes each device to the rest of the
-system through four bus surfaces (all from ``eigsep_redis`` /
-``picohost.buses``):
+Redis is the source of truth. On startup the manager performs a live
+scan of attached CDC Picos (via :func:`find_pico_ports` /
+:func:`read_json_from_serial`), instantiates the matching
+:class:`PicoDevice` subclass per entry, and then exposes each device
+to the rest of the system through four bus surfaces (all from
+``eigsep_redis`` / ``picohost.buses``):
 
 - :class:`eigsep_redis.MetadataWriter` — per-sensor firmware status
   (the 200 ms JSON packets) is republished onto ``stream:{sensor}``
@@ -26,7 +26,7 @@ system through four bus surfaces (all from ``eigsep_redis`` /
   and has no eigsep_observing analogue.
 
 Usage:
-    python -m picohost.manager [--uf2 build/pico_multi.uf2] [--log-level INFO]
+    python -m picohost.manager [--log-level INFO]
 """
 
 import argparse
@@ -35,7 +35,6 @@ import logging
 import signal
 import threading
 import time
-from pathlib import Path
 
 from eigsep_redis import (
     HeartbeatWriter,
@@ -134,11 +133,7 @@ class PicoManager:
     :class:`PicoDevice`.
     """
 
-    def __init__(
-        self,
-        transport,
-        uf2_path="build/pico_multi.uf2",
-    ):
+    def __init__(self, transport):
         """
         Parameters
         ----------
@@ -151,12 +146,8 @@ class PicoManager:
             :class:`PotCalStore` (passed to ``PicoPotentiometer``),
             :class:`PicoCmdReader`, :class:`PicoRespWriter`, and
             :class:`PicoClaimStore`.
-        uf2_path : str or Path
-            Path to the UF2 firmware file for auto-flashing when
-            Redis is empty at boot.
         """
         self.transport = transport
-        self.uf2_path = Path(uf2_path)
         self.picos = {}
         self._heartbeats = {}
         self._metadata_writer = MetadataWriter(transport)
@@ -200,23 +191,14 @@ class PicoManager:
     # --- Discovery & Config ---
 
     def discover(self):
-        """
-        Resolve the device list and instantiate devices.
+        """Discover all currently-attached Picos from live status and publish.
 
-        1. Read :class:`PicoConfigStore` from Redis. If non-empty,
-           register those devices.
-        2. If empty, run :func:`flash_picos.flash_and_discover` and
-           publish the result back into the config store.
+        No cached-config input and no flashing: a live scan adopts whatever
+        CDC Picos are present (flashing is flash-picos's job).
         """
-        devices = self._config_store.get()
-        if devices:
-            self._status(f"Loaded {len(devices)} device(s) from Redis")
-            self._register_devices(devices)
-            return
-
-        self._try_flash_discover()
+        self._discover_new()
         if self.picos:
-            self._config_store.upload(self._current_device_list())
+            self._status(f"Discovered {len(self.picos)} device(s)")
 
     def _current_device_list(self):
         """Build a list of device dicts from currently registered picos."""
@@ -277,27 +259,6 @@ class PicoManager:
                     f"Failed to init {name} on {port}: {e}",
                     level=logging.ERROR,
                 )
-
-    def _try_flash_discover(self):
-        """Attempt to flash attached Picos and discover devices."""
-        from .flash_picos import flash_and_discover
-
-        try:
-            devices = flash_and_discover(uf2_path=self.uf2_path)
-        except FileNotFoundError:
-            self.logger.warning(
-                f"UF2 file {self.uf2_path} not found, skipping flash"
-            )
-            return
-        except Exception as e:
-            self.logger.error(f"Flash-and-discover failed: {e}")
-            return
-
-        if not devices:
-            self.logger.warning("Flash produced no devices")
-            return
-
-        self._register_devices(devices)
 
     def _probe_status(self, port):
         """Read one self-identifying status line from *port*, or None.
@@ -550,7 +511,9 @@ class PicoManager:
                         if hb is not None:
                             hb.set(ex=HEARTBEAT_TTL, alive=False)
                     self.picos.clear()
-                    self.discover()
+                # discover() acquires self._lock internally; must run unlocked
+                self.discover()
+                with self._lock:
                     device_names = list(self.picos.keys())
                 self._resp_writer.send(
                     target="manager",
@@ -650,12 +613,6 @@ def main():
     """Console-script and ``python -m picohost.manager`` entry point."""
     parser = argparse.ArgumentParser(description="EIGSEP Pico Manager")
     parser.add_argument(
-        "--uf2",
-        default="build/pico_multi.uf2",
-        help="Path to pico_multi.uf2 for auto-flashing when Redis is empty "
-        "(default: build/pico_multi.uf2)",
-    )
-    parser.add_argument(
         "--redis-host",
         default="localhost",
         help="Redis host (default: localhost)",
@@ -685,7 +642,7 @@ def main():
     )
 
     transport = Transport(host=args.redis_host, port=args.redis_port)
-    mgr = PicoManager(transport, uf2_path=args.uf2)
+    mgr = PicoManager(transport)
     if args.clear_config:
         mgr._config_store.clear()
     mgr.run()
