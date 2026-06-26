@@ -201,6 +201,7 @@ def test_main_azimuth_mode(monkeypatch):
         "collect_azimuth",
         lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
     )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
     monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
 
     calibrate_pot.main()
@@ -238,7 +239,7 @@ def test_main_rezero_mode(monkeypatch):
     monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
     # rezero() calls collect_samples() once (for v0) and input() once.
     monkeypatch.setattr(calibrate_pot, "collect_samples", lambda *a, **k: 1.0)
-    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+    monkeypatch.setattr("builtins.input", _seq(["", "yes"]))
     monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "rezero"])
 
     calibrate_pot.main()
@@ -303,6 +304,7 @@ def test_main_azimuth_prints_linearity_report(monkeypatch, capsys):
         "collect_azimuth",
         lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
     )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
     monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
 
     calibrate_pot.main()
@@ -329,6 +331,7 @@ def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
         "collect_azimuth",
         lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
     )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
     monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
 
     calibrate_pot.main()
@@ -356,7 +359,9 @@ def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
 
 def test_predicted_angle_divergence_none_when_no_stored():
     assert (
-        calibrate_pot.predicted_angle_divergence((100.0, -100.0), None, [1.0, 2.0])
+        calibrate_pot.predicted_angle_divergence(
+            (100.0, -100.0), None, [1.0, 2.0]
+        )
         is None
     )
 
@@ -396,3 +401,133 @@ def test_predicted_angle_divergence_constant_offset_rezero():
         (100.0, -160.0), {"pot_az": [100.0, -100.0]}, [1.5]
     )
     assert d == pytest.approx(60.0)
+
+
+def test_main_discard_writes_nothing(monkeypatch):
+    """A 'no' at the prompt persists nothing and never pushes to the pot."""
+    dummy_transport = DummyTransport()  # fresh -> no stored cal
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    assert PotCalStore(dummy_transport).get() is None  # nothing stored
+    assert fake_proxy.calls == []  # nothing pushed live
+
+
+def test_main_no_stored_cal_no_divergence_warning(monkeypatch, capsys):
+    """First-ever calibration (no stored cal) is never flagged as divergent."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "differs from the stored one" not in out
+    assert PotCalStore(dummy_transport).get() is not None  # saved normally
+
+
+def test_main_diverged_warns_and_full_yes_saves(monkeypatch, capsys):
+    """A far-off stored cal triggers the warning; 'yes' persists the new fit."""
+    dummy_transport = DummyTransport()
+    # Stored cal far from the new fit (new fit is angle = 400V - 400).
+    PotCalStore(dummy_transport).upload({"pot_az": [50.0, -50.0]})
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "yes")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "differs from the stored one" in out
+    expected_m, expected_b = calibrate_pot.fit_slope_pin_zero(
+        [1.0, 1.9], [0.0, 360.0], 1.0
+    )
+    stored = PotCalStore(dummy_transport).get()
+    assert stored["pot_az"][0] == pytest.approx(expected_m)
+    assert stored["pot_az"][1] == pytest.approx(expected_b)
+    assert len(fake_proxy.calls) == 1
+
+
+def test_main_diverged_y_alone_discards(monkeypatch):
+    """Under the divergence warning, a bare 'y' is not enough — it discards."""
+    dummy_transport = DummyTransport()
+    PotCalStore(dummy_transport).upload({"pot_az": [50.0, -50.0]})
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_azimuth",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "azimuth"])
+
+    calibrate_pot.main()
+
+    # Stored cal is unchanged (still the seeded values) and nothing pushed.
+    stored = PotCalStore(dummy_transport).get()
+    assert stored["pot_az"] == pytest.approx([50.0, -50.0])
+    assert fake_proxy.calls == []
+
+
+def test_prompt_save_default_path(monkeypatch):
+    cases = [
+        ("y", True),
+        ("yes", True),
+        ("Y", True),
+        ("n", False),
+        ("", False),
+        ("nope", False),
+    ]
+    for ans, expected in cases:
+        monkeypatch.setattr("builtins.input", lambda *a, **k: ans)
+        assert calibrate_pot.prompt_save(False) is expected
+
+
+def test_prompt_save_diverged_requires_full_yes(monkeypatch):
+    cases = [
+        ("yes", True),
+        ("YES", True),
+        (" yes ", True),
+        ("y", False),
+        ("", False),
+        ("no", False),
+    ]
+    for ans, expected in cases:
+        monkeypatch.setattr("builtins.input", lambda *a, **k: ans)
+        assert calibrate_pot.prompt_save(True) is expected

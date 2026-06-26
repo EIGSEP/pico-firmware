@@ -64,6 +64,10 @@ HEADROOM_WARN_DEG = 72.0
 # Motor az should read ~0 at home; warn beyond this if the operator
 # forgot to home before pressing Enter.
 HOME_AZ_TOL_DEG = 5.0
+# Warn before saving if the new calibration would move the predicted
+# azimuth by more than this (deg) anywhere in the swept window, relative
+# to the calibration already stored in Redis.
+WILDLY_DIFFERENT_WARN_DEG = 30.0
 
 
 def collect_samples(transport, n):
@@ -365,6 +369,22 @@ def rezero(transport, n_samples):
     return (m, b), v0
 
 
+def prompt_save(diverged):
+    """Ask whether to persist the calibration. Returns True to save.
+
+    Safe default: bare Enter (or anything other than y/yes) discards. When
+    ``diverged`` is True the operator must type the full word ``yes`` to
+    confirm overwriting a sharply different stored calibration.
+    """
+    if diverged:
+        resp = (
+            input("Type 'yes' to confirm the large change: ").strip().lower()
+        )
+        return resp == "yes"
+    resp = input("Save this calibration? [y/N]: ").strip().lower()
+    return resp in ("y", "yes")
+
+
 def build_parser():
     parser = ArgumentParser(
         description="Calibrate potentiometer voltage-to-angle mapping.",
@@ -573,12 +593,37 @@ def main():
     if args.mode == "rezero":
         cal_data["metadata"]["slope_reused"] = True
 
+    # Show the operator what was computed, then compare against the stored
+    # calibration before writing anything.
+    print(f"\nComputed calibration: angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
+    if args.mode == "turns":
+        print(f"  ({len(angles)} points used for least-squares fit)")
+
+    stored = PotCalStore(transport).get()
+    divergence = predicted_angle_divergence(cal, stored, voltages)
+    diverged = (
+        divergence is not None and divergence > WILDLY_DIFFERENT_WARN_DEG
+    )
+    if diverged:
+        m_old, b_old = float(stored["pot_az"][0]), float(stored["pot_az"][1])
+        print(
+            f"\nWARNING: this calibration differs from the stored one by up "
+            f"to {divergence:.0f} deg over the swept window "
+            f"(threshold {WILDLY_DIFFERENT_WARN_DEG:.0f} deg)."
+        )
+        print(f"  stored: angle = {m_old:.4f} * V + {b_old:.4f}")
+        print(f"  new:    angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
+
+    if not prompt_save(diverged):
+        print("Discarded. Nothing written to Redis or the live pot.")
+        return
+
     # Persist to Redis first — if the live push later fails, the cal is
     # still stored and will load on the next PicoManager restart.
     PotCalStore(transport).upload(cal_data)
     # Force an RDB snapshot now so the cal survives a power loss before
-    # the next scheduled save (default policy is `save 3600 1`, which
-    # would leave this single-key write unsnapshotted for up to an hour).
+    # the next scheduled save (default policy is `save 3600 1`, which would
+    # leave this single-key write unsnapshotted for up to an hour).
     transport.r.bgsave()
     print(
         f"\nPublished calibration to Redis at "
@@ -586,8 +631,8 @@ def main():
         "BGSAVE triggered."
     )
 
-    # Push to the running PicoPotentiometer so the new cal takes effect
-    # on the next status tick.
+    # Push to the running PicoPotentiometer so the new cal takes effect on
+    # the next status tick.
     try:
         pot_proxy.send_command(
             "set_calibration",
@@ -600,10 +645,6 @@ def main():
             "Calibration is stored in Redis; restart PicoManager to apply.",
             file=sys.stderr,
         )
-
-    print(f"  pot_az: angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
-    if args.mode == "turns":
-        print(f"  ({len(angles)} points used for least-squares fit)")
 
 
 if __name__ == "__main__":
