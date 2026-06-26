@@ -473,35 +473,6 @@ _REENUMERATE_TIMEOUT_S = 10.0
 _REENUMERATE_POLL_S = 0.2
 _UDEV_SETTLE_TIMEOUT_S = 3.0
 _INTER_DEVICE_SETTLE_S = 1.0
-# After the staggered fleet boot, the booted boards re-enumerate as CDC.
-# On the contended hub that enumeration *flickers*: a board can be absent
-# from find_pico_ports() at one instant and back a second later (the LED
-# keeps blinking throughout — the firmware is up, only USB is intermittent).
-# The readback therefore keeps polling for this long, reading each board as
-# it appears, rather than reading a single snapshot. Bounded so a board that
-# never (re)enumerates cannot stall the run.
-_CDC_DISCOVER_TIMEOUT_S = 15.0
-_CDC_DISCOVER_POLL_S = 0.3
-# Per-board read timeout for the reconcile sweep, on a quiet bus. A board
-# that re-enumerated as CDC emits a status line every 200 ms, so this is
-# plenty; one that stays mute this long is genuinely not reporting.
-_CDC_READ_TIMEOUT_S = 5
-# Discovery-pass read timeout: deliberately short. The first pass runs while
-# the bus is still busy from the staggered boot and must keep cycling to
-# catch boards as they (re)enumerate — it must NOT spend the whole readback
-# budget blocking on a board that is momentarily mute. A board mute under
-# that contention is deferred to the quiet-bus sweep below, not waited on
-# here.
-_FIRST_PASS_READ_TIMEOUT_S = 2
-# Quiet-bus reconcile sweep: settle briefly so nothing is mid-re-enumeration,
-# then give each board that enumerated but stayed silent a couple of patient
-# reads on the now-idle bus (the first pass gave up on it fast). A board that
-# is alive answers on the first sweep read (status every 200 ms vs a 5 s
-# read); the second is a hedge for one still coming alive. Kept at 2 so the
-# sweep cannot stall long on genuinely-silent boards (each costs its full
-# read timeout per attempt).
-_PRE_SWEEP_SETTLE_S = 2.0
-_SWEEP_REREAD_ATTEMPTS = 2
 
 
 def _udev_settle(timeout=_UDEV_SETTLE_TIMEOUT_S):
@@ -617,12 +588,9 @@ def _classify_read_failure(exc):
 def _read_cdc_outcome(port, usb_serial, baud, timeout):
     """Attempt one device-info read; return ``(data_or_None, reason)``.
 
-    ``reason`` is ``None`` on success, otherwise a short verdict (from
-    :func:`_classify_read_failure`, or a no-port message) that
-    :func:`_read_fleet_cdc` reconciles into a per-serial report. Keeping
-    the classification here — rather than only logging the raw exception
-    in :func:`_read_cdc_port` — lets the fleet path attribute *why* each
-    board dropped without re-parsing a log line.
+    ``reason`` is ``None`` on success, otherwise a short verdict from
+    :func:`_classify_read_failure` (or a no-port message). Used by the
+    manager's discovery probe via :func:`_read_cdc_port`.
     """
     if port is None:
         return None, (
@@ -666,143 +634,15 @@ def _read_cdc_port(port, usb_serial, baud, timeout):
     return data
 
 
-def _read_device_info(usb_serial, baud, timeout=_CDC_READ_TIMEOUT_S):
-    """Resolve the post-flash CDC port for *usb_serial* and read its JSON.
-
-    Used by the USB per-device path, which already knows each Pico by
-    its (stable) CDC serial.
-    """
-    port = _resolve_post_flash_port(usb_serial)
-    return _read_cdc_port(port, usb_serial, baud, timeout)
-
-
-def _read_fleet_cdc(expected, baud, read_timeout=_CDC_READ_TIMEOUT_S):
-    """Read device-info JSON from every Pico that boots into CDC, riding
-    out enumeration flicker.
-
-    On the contended observatory hub a freshly-booted board's CDC
-    enumeration flickers: it may be absent from :func:`find_pico_ports` at
-    one instant and back a second later, and the set rarely shows all
-    *expected* boards simultaneously even though each appears at *some*
-    instant. A single snapshot read therefore silently drops whichever
-    boards happened to be absent at the read instant — even though they
-    flashed fine and their LED is blinking. This instead keeps polling
-    until *expected* boards have reported or ``_CDC_DISCOVER_TIMEOUT_S``
-    elapses: each pass it reads every currently-enumerated board not yet
-    read, remembering successes (so a board that flickers out after it is
-    read is kept), retrying boards that opened but stayed mute, and picking
-    up boards still mid-(re)enumeration as they appear.
-
-    Boards are keyed by their **CDC** serial, not the BOOTSEL-mode serial
-    used to load: a wiped or odd board can present a different (or absent)
-    serial in BOOTSEL, which would leave it flashed but unreported. Keying
-    off the CDC serial — the same identity ``find_pico_ports`` and
-    PicoManager use — reports every Pico that actually booted into
-    firmware. A board that never (re)enumerates only costs the bounded
-    deadline.
-
-    Returns ``(devices, outcomes)`` where *outcomes* maps each
-    read-attempted serial to ``None`` (read succeeded) or its last failure
-    reason. The caller reconciles that against the flashed set and emits
-    the per-serial report.
-    """
-    deadline = time.monotonic() + _CDC_DISCOVER_TIMEOUT_S
-    devices = {}  # cdc_serial -> device-info (first successful read wins)
-    outcomes = {}
-    while True:
-        for port, serial in sorted(find_pico_ports().items()):
-            if serial in devices:
-                continue  # already read this board; don't re-disturb it
-            data, reason = _read_cdc_outcome(port, serial, baud, read_timeout)
-            outcomes[serial] = reason
-            if data is not None:
-                devices[serial] = data
-                logger.info(
-                    "Read device info from %s (serial=%s)", port, serial
-                )
-        if len(devices) >= expected or time.monotonic() >= deadline:
-            break
-        time.sleep(_CDC_DISCOVER_POLL_S)
-    if len(devices) < expected:
-        logger.warning(
-            "only %d of %d booted Pico(s) reported device info within "
-            "%.0fs (the rest never (re)enumerated as CDC, or stayed mute)",
-            len(devices),
-            expected,
-            _CDC_DISCOVER_TIMEOUT_S,
-        )
-    return list(devices.values()), outcomes
-
-
-def _log_readback_reconciliation(expected_serials, present_serials, outcomes):
-    """Log a per-serial verdict reconciling flashed vs. reported boards.
-
-    *expected_serials* is the set of board serials that were flashed and
-    should report device info; *present_serials* is the set that
-    re-enumerated as CDC; *outcomes* maps each read-attempted serial to
-    ``None`` (read succeeded) or a failure reason from
-    :func:`_classify_read_failure`.
-
-    For every expected board that did not report, emits one line saying
-    whether it never re-enumerated or opened-but-failed (and why) — the
-    "which board, and at which stage" detail that turns an inconsistent
-    device count into an actionable diagnosis. Boards that reported but
-    were not in the flashed set (e.g. a board whose BOOTSEL serial
-    differed from its CDC serial) are named too. With no baseline
-    (*expected_serials* is ``None``), falls back to logging any
-    present-but-failed read.
-    """
-    if expected_serials is None:
-        for serial, reason in sorted(outcomes.items()):
-            if reason is not None:
-                logger.error(
-                    "could not read device info for serial=%s: %s",
-                    serial,
-                    reason,
-                )
-        return
-
-    expected = set(expected_serials)
-    reported = {s for s, reason in outcomes.items() if reason is None}
-    ok = expected & reported
-    unexpected = reported - expected
-    if ok == expected and not unexpected:
-        logger.info(
-            "device-info readback: all %d flashed Pico(s) reported",
-            len(expected),
-        )
-        return
-
-    logger.warning(
-        "device-info readback: %d of %d flashed Pico(s) reported device info",
-        len(ok),
-        len(expected),
-    )
-    for serial in sorted(expected - reported):
-        if serial in present_serials:
-            reason = outcomes.get(serial) or "read failed"
-        else:
-            reason = (
-                f"did not re-enumerate as CDC within "
-                f"{_CDC_DISCOVER_TIMEOUT_S:.0f}s"
-            )
-        logger.error("  serial=%s NOT reported: %s", serial, reason)
-    for serial in sorted(unexpected):
-        logger.warning(
-            "  serial=%s reported but was not in the flashed set "
-            "(BOOTSEL/CDC serial mismatch, or an unexpected board)",
-            serial,
-        )
 
 
 def flash_and_discover(
     uf2_path="build/pico_multi.uf2",
     port=None,
     usb_serial=None,
-    baud=115200,
 ):
-    """
-    Flash all attached Picos and read device config from each.
+    """Flash all attached Picos and return the USB serials of those
+    successfully flashed.
 
     Parameters
     ----------
@@ -816,14 +656,12 @@ def flash_and_discover(
         ID). Stable across reboots and port renumbering — preferred
         over ``port`` for targeted flashing. If both are given, the
         device must match both.
-    baud : int
-        Serial baud rate for reading JSON after flash.
 
     Returns
     -------
-    list[dict]
-        List of device info dicts, each with keys like ``app_id``,
-        ``port``, ``usb_serial``.
+    list[str]
+        Sorted list of USB serials that were successfully flashed.
+        Caller confirms via the manager-owned ``pico_config``.
 
     Raises
     ------
@@ -845,7 +683,7 @@ def flash_and_discover(
         return []
 
     logger.info(f"Found Picos on: {ports}")
-    all_devices = []
+    flashed_serials = []
 
     for idx, (port_dev, port_serial) in enumerate(ports.items()):
         if idx > 0:
@@ -861,16 +699,9 @@ def flash_and_discover(
             logger.error(f"Flash failed on {port_dev}: {e}")
             continue
 
-        # picotool load reboots the Pico, which re-enumerates as a
-        # CDC device. _read_device_info resolves the current path from
-        # the stable usb_serial (the kernel may assign a different
-        # /dev/ttyACMn than it had pre-flash) and reads its JSON.
-        data = _read_device_info(port_serial, baud)
-        if data is not None:
-            all_devices.append(data)
-            logger.info(f"Read device info from {data['port']}")
+        flashed_serials.append(port_serial)
 
-    return all_devices
+    return sorted(flashed_serials)
 
 
 def _load_bootsel_device(
@@ -1001,69 +832,9 @@ def _boot_fleet_staggered(
     return booted
 
 
-def _reconcile_silent_boards(
-    missing,
-    baud,
-    attempts=_SWEEP_REREAD_ATTEMPTS,
-    settle=_PRE_SWEEP_SETTLE_S,
-    read_timeout=_CDC_READ_TIMEOUT_S,
-):
-    """Re-read boards that enumerated as CDC but stayed silent, on a quiet bus.
-
-    The discovery pass (:func:`_read_fleet_cdc`) runs while the bus is still
-    busy from the staggered boot and gives up *fast* on any board that does
-    not answer immediately, so it does not burn the whole readback budget
-    blocking on one mute board. That leaves a gap: a board that is alive and
-    emitting status every 200 ms, but whose reads lost out to contention in
-    that busy window, would be reported missing even though it is fine. This
-    sweep closes it — after a *settle* it gives each still-missing board that
-    is *present* as CDC a few patient reads on the now-idle bus.
-
-    Only boards in *missing* that currently appear in
-    :func:`find_pico_ports` are touched: a board that never (re)enumerated
-    cannot be read over USB, and there is no re-flash fallback (re-flashing a
-    healthy board only re-introduces a BOOTSEL round-trip). Each board's CDC
-    port is resolved once up front, then its fixed path is re-read up to
-    *attempts* times — without re-scanning USB descriptors between tries,
-    which would re-disturb the marginal deep-hub node we are coaxing a line
-    out of.
-
-    Returns ``(devices, outcomes)`` — *outcomes* maps each swept serial to
-    ``None`` once read, else its last failure reason, for the caller's
-    reconciliation report.
-    """
-    if not missing:
-        return [], {}
-    time.sleep(settle)
-    by_serial = {sn: dev for dev, sn in find_pico_ports().items()}
-    pending = {s for s in missing if s in by_serial}
-    recovered = []
-    outcomes = {}
-    for attempt in range(1, attempts + 1):
-        if not pending:
-            break
-        if attempt > 1:
-            time.sleep(settle)
-        for serial in sorted(pending):
-            data, reason = _read_cdc_outcome(
-                by_serial[serial], serial, baud, read_timeout
-            )
-            outcomes[serial] = reason
-            if data is not None:
-                recovered.append(data)
-                pending.discard(serial)
-                logger.info(
-                    "reconcile sweep recovered serial=%s on %s (was silent "
-                    "during the busy discovery pass)",
-                    serial,
-                    data["port"],
-                )
-    return recovered, outcomes
-
 
 def flash_and_discover_gpio(
     uf2_path="build/pico_multi.uf2",
-    baud=115200,
 ):
     """Mass-flash all Picos via the bussed GPIO BOOTSEL/RUN lines.
 
@@ -1078,11 +849,12 @@ def flash_and_discover_gpio(
     2. ``picotool load`` each device by bus/address — without ``-x``,
        so nothing re-enumerates and the bus stays quiet while every
        device is idle mass-storage.
-    3. One mass GPIO reset boots all Picos into the new firmware
-       simultaneously; then read each device's JSON over serial.
+    3. Boot each loaded board individually and staggered via
+       ``picotool reboot -a``.
 
-    Returns the device info dicts (``app_id``, ``port``,
-    ``usb_serial``) for every Pico that flashed and re-enumerated.
+    Returns the sorted list of USB serials that were successfully
+    loaded and booted.  Caller confirms via the manager-owned
+    ``pico_config``.
 
     Raises ``FileNotFoundError`` for a missing UF2 and ``RuntimeError``
     when no Pico enters BOOTSEL (bad wiring, or no GPIO access).
@@ -1116,7 +888,7 @@ def flash_and_discover_gpio(
     )
 
     # Phase 2: load each device over a quiet bus (no -x: everything
-    # stays in BOOTSEL until the mass reset below).
+    # stays in BOOTSEL until the staggered per-board boot below).
     flashed = []
     for dev in bootsel_devices:
         if _load_bootsel_device(dev, uf2_path):
@@ -1131,52 +903,14 @@ def flash_and_discover_gpio(
                 dev["address"],
             )
 
-    # Phase 3: boot each loaded board individually and staggered, then
-    # read the fleet on a settled bus.
+    # Phase 3: boot each loaded board individually and staggered.
     #
-    # This replaces the single shared gpio.reset() pulse, which is
-    # unreliable across the full fleet (boards miss it and stay in
-    # BOOTSEL) and re-enumerates everything at once — a simultaneous storm
-    # that leaves some boards transiently mute (and a mute board cannot be
-    # reached over USB to read or recover). Per-board picotool reboot -a,
-    # staggered, boots reliably without storming the bus.
+    # Per-board picotool reboot -a, staggered, boots reliably without
+    # storming the bus (simultaneous re-enumeration leaves some boards
+    # transiently mute, and a mute board cannot be reached over USB to
+    # recover).
     expected_serials = {d["usb_serial"] for d in flashed if d["usb_serial"]}
     booted = _boot_fleet_staggered(flashed)
-
-    # Readback in two phases, keyed off the CDC serial (not the BOOTSEL
-    # serial used for loading, so a board whose BOOTSEL serial differed or
-    # was absent is still reported). There is no re-flash fallback — a
-    # genuinely mute board cannot be reached over USB to re-flash, and
-    # re-flashing a healthy board only re-introduces a BOOTSEL round-trip —
-    # so a still-missing board is reported, not re-flashed.
-    #
-    # Phase 3a — patient discovery with a FAST give-up: while the bus is
-    # still busy from the staggered boot, keep polling and reading boards as
-    # they (re)appear (so a board whose CDC enumeration flickers is not
-    # dropped for being absent at one instant), but give up quickly on any
-    # board that does not answer at once rather than draining the budget
-    # blocking on it.
-    all_devices, outcomes = _read_fleet_cdc(
-        len(booted), baud, _FIRST_PASS_READ_TIMEOUT_S
-    )
-    reported = {d["usb_serial"] for d in all_devices}
-
-    # Phase 3b — quiet-bus reconcile sweep: give any board that enumerated
-    # but stayed silent in that busy window a few patient reads on the now-
-    # idle bus. A board that is alive and emitting (its heartbeat LED and
-    # status share one code path in the firmware) but lost its reads to
-    # contention is recovered here; one that is genuinely silent (stuck in
-    # init, wrong DIP/app) is reported missing for the operator.
-    sweep_devices, sweep_outcomes = _reconcile_silent_boards(
-        expected_serials - reported,
-        baud,
-    )
-    all_devices.extend(sweep_devices)
-    outcomes.update(sweep_outcomes)
-
-    _log_readback_reconciliation(
-        expected_serials, set(find_pico_ports().values()), outcomes
-    )
 
     # Surface any board still in BOOTSEL, distinguishing the two causes:
     # a board we flashed that will not leave BOOTSEL even after its
@@ -1216,75 +950,15 @@ def flash_and_discover_gpio(
                 ),
             )
 
-    return all_devices
+    return sorted(s for s in expected_serials if s)
 
-
-def _merge_device_lists(existing, fresh):
-    """Merge *fresh* device dicts over *existing* by ``usb_serial``.
-
-    Returns ``(merged_list, preserved_serials)``. A board read this run
-    overrides its prior entry; a board present in *existing* but absent
-    from *fresh* — flashed and running, but lost to a flaky readback this
-    run — keeps its last-known entry rather than vanishing. This matters
-    because :meth:`PicoConfigStore.upload` overwrites the device list
-    wholesale and PicoManager treats it as the source of truth, so a
-    partial readback would otherwise silently de-register working boards.
-    *preserved_serials* names the carried-over boards so the caller can
-    warn that they rode on stale data.
-
-    *existing* may be ``None`` (nothing published yet) — then the result
-    is *fresh* unchanged with no preserved boards. Devices without a
-    ``usb_serial`` cannot be keyed; fresh ones are kept as-is and existing
-    ones are dropped (they cannot be matched or trusted).
-    """
-    merged = {}  # usb_serial -> device-info
-    for dev in existing or []:
-        serial = dev.get("usb_serial")
-        if serial is not None:
-            merged[serial] = dev
-    preserved = set(merged)
-    extras = []  # fresh devices with no serial: keep, but cannot dedup
-    for dev in fresh:
-        serial = dev.get("usb_serial")
-        if serial is None:
-            extras.append(dev)
-            continue
-        merged[serial] = dev
-        preserved.discard(serial)
-    return list(merged.values()) + extras, preserved
-
-
-def _publish_to_redis(devices, host, port):
-    """Publish *devices* to Redis via :class:`PicoConfigStore`.
-
-    Merges *devices* over the list already in Redis by ``usb_serial``
-    (see :func:`_merge_device_lists`) rather than overwriting it, so a
-    board that flashed and is running but was missed by this run's
-    readback is not dropped from PicoManager's source of truth. Returns
-    the merged device list that was published. Raises on connection
-    failure so ``main`` can fall back to file output if the user asked
-    for that.
-    """
-    transport = Transport(host=host, port=port)
-    store = PicoConfigStore(transport)
-    merged, preserved = _merge_device_lists(store.get(), devices)
-    if preserved:
-        logger.warning(
-            "%d board(s) not read this run kept their previous Redis "
-            "entry (flashed but lost to a flaky readback?): %s. Re-run "
-            "flash-picos to refresh them.",
-            len(preserved),
-            ", ".join(sorted(map(str, preserved))),
-        )
-    store.upload(merged)
-    return merged
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(
         description=(
-            "Flash all attached Picos, read JSON from each, and publish "
-            "the device list to Redis (source of truth for PicoManager)."
+            "Flash all attached Picos and confirm via the manager-owned "
+            "pico_config that each board is reporting."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -1297,8 +971,7 @@ def main(argv=None):
         help=(
             "USB serial number (Pico board unique ID). Stable across "
             "reboots and port renumbering — preferred over --port for "
-            "targeted flashing. Look up in `devices_info.json` or with "
-            "`picotool info -a`."
+            "targeted flashing. Look up with `picotool info -a`."
         ),
     )
     p.add_argument(
@@ -1307,36 +980,22 @@ def main(argv=None):
         help="Path to your pico_multi.uf2",
     )
     p.add_argument(
-        "--baud",
-        type=int,
-        default=115200,
-        help="Serial baud rate.",
-    )
-    p.add_argument(
         "--redis-host",
         default="localhost",
-        help="Redis host for PicoConfigStore publication",
+        help="Redis host for manager confirmation polling",
     )
     p.add_argument(
         "--redis-port",
         type=int,
         default=6379,
-        help="Redis port for PicoConfigStore publication",
-    )
-    p.add_argument(
-        "--no-redis",
-        action="store_true",
-        help=(
-            "Skip Redis publication. Use with --output-file for offline "
-            "provisioning on a host without Redis."
-        ),
+        help="Redis port for manager confirmation polling",
     )
     p.add_argument(
         "--output-file",
         default=None,
         help=(
-            "Optional: also write the device list to this JSON file. "
-            "Not required — PicoManager reads from Redis directly."
+            "Optional: write the confirmed device list (from "
+            "pico_config) to this JSON file after confirmation."
         ),
     )
     p.add_argument(
@@ -1346,19 +1005,6 @@ def main(argv=None):
             "Skip the GPIO mass-BOOTSEL flash flow and reboot each "
             "Pico into BOOTSEL over USB instead. Required on hosts "
             "without the bussed BOOTSEL/RUN wiring."
-        ),
-    )
-    p.add_argument(
-        "--keep-manager",
-        action="store_true",
-        help=(
-            "Do not stop an active picomanager.service before "
-            "flashing. By default flash-picos stops the manager (it "
-            "owns every Pico's serial port and its reconnect loop "
-            "corrupts the post-flash readback) and restarts it after "
-            "the flash. Only the active unit is touched, so under "
-            "`eigsep-field patch` — which stops the unit itself — "
-            "the default is already a no-op."
         ),
     )
     args = p.parse_args(argv)
@@ -1389,73 +1035,50 @@ def main(argv=None):
             )
             sys.exit(1)
 
-    stopped_manager = False
-    if not args.keep_manager and manager_service.manager_is_active():
-        logger.info(
-            "%s is active and owns the Pico serial ports; stopping "
-            "it for the flash (it will be restarted afterwards)",
-            manager_service.MANAGER_UNIT,
-        )
-        try:
-            manager_service.stop_manager()
-        except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        stopped_manager = True
-
     try:
-        try:
-            if use_gpio:
-                all_devices = flash_and_discover_gpio(
-                    uf2_path=args.uf2,
-                    baud=args.baud,
-                )
-            else:
-                all_devices = flash_and_discover(
-                    uf2_path=args.uf2,
-                    port=args.port,
-                    usb_serial=args.usb_serial,
-                    baud=args.baud,
-                )
-        except (FileNotFoundError, RuntimeError) as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
+        if use_gpio:
+            all_serials = flash_and_discover_gpio(uf2_path=args.uf2)
+        else:
+            all_serials = flash_and_discover(
+                uf2_path=args.uf2,
+                port=args.port,
+                usb_serial=args.usb_serial,
+            )
+    except (FileNotFoundError, RuntimeError) as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
-        if not all_devices:
-            print("No devices discovered.", file=sys.stderr)
-            sys.exit(1)
+    if not all_serials:
+        print("No devices loaded.", file=sys.stderr)
+        sys.exit(1)
 
-        if not args.no_redis:
-            try:
-                published = _publish_to_redis(
-                    all_devices, args.redis_host, args.redis_port
-                )
-                print(
-                    f"Published {len(published)} device(s) to Redis at "
-                    f"{args.redis_host}:{args.redis_port} "
-                    f"(key: {PICO_CONFIG_KEY})."
-                )
-            except Exception as e:
-                print(
-                    f"Redis publication failed: {e}\n"
-                    "Re-run with --no-redis (and optionally "
-                    "--output-file) if Redis is not available.",
-                    file=sys.stderr,
-                )
+    if not manager_service.manager_is_active():
+        print(
+            f"Loaded {len(all_serials)} board(s). picomanager is not active; "
+            "start it to confirm device info (or this is a manager-less host)."
+        )
+        return
 
-        if args.output_file:
-            with open(args.output_file, "w") as f:
-                json.dump(all_devices, f, indent=2)
-            print(f"Wrote {len(all_devices)} device(s) to {args.output_file}.")
-    finally:
-        # Restart ONLY if we stopped it: under `eigsep-field patch`
-        # the unit is already stopped by the coordinator, which must
-        # write its ExecStart drop-in and daemon-reload BEFORE the
-        # unit starts again. The finally also runs on sys.exit() so
-        # the manager comes back even when the flash fails — same
-        # best-effort restore eigsep-field's patch flow does.
-        if stopped_manager:
-            manager_service.start_manager()
+    transport = Transport(host=args.redis_host, port=args.redis_port)
+    confirmed, stragglers = _await_manager_confirmation(all_serials, transport)
+    print(
+        f"Confirmed {len(confirmed)}/{len(all_serials)} board(s) via "
+        "picomanager."
+    )
+
+    if args.output_file:
+        store = PicoConfigStore(transport)
+        with open(args.output_file, "w") as f:
+            json.dump(store.get(), f, indent=2)
+        print(f"Wrote confirmed device info to {args.output_file}.")
+
+    if stragglers:
+        print(
+            f"  NOT confirmed (booted but not reporting): "
+            f"{', '.join(sorted(stragglers))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
