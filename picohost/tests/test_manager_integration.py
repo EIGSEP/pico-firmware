@@ -397,15 +397,8 @@ class TestDiscoverIntegration:
     def test_discover_creates_live_device(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
 
-        PicoConfigStore(mgr.transport).upload(
-            [
-                {
-                    "app_id": 5,
-                    "port": "/dev/dummy",
-                    "usb_serial": "INT123",
-                },
-            ]
-        )
+        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: {"/dev/dummy": "INT123"})
+        monkeypatch.setattr(mgr_mod, "read_json_from_serial", lambda *a: {"app_id": 5})
         monkeypatch.setitem(
             mgr_mod.PICO_CLASSES,
             "rfswitch",
