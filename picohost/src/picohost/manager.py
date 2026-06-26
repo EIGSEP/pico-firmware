@@ -303,7 +303,8 @@ class PicoManager:
                     continue
                 self._register_devices(
                     [{"app_id": app_id, "port": port, "usb_serial": sn}])
-            self._config_store.upload(self._current_device_list())
+                device_list = self._current_device_list()   # snapshot under lock
+            self._config_store.upload(device_list)           # upload outside lock
 
     # --- Health Monitoring ---
 
