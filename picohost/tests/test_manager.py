@@ -489,6 +489,69 @@ class TestReconnectHook:
         assert switch.port == original_port
 
 
+# --- continuous self-discovery --------------------------------------------
+
+
+class TestDiscoverNew:
+    def _patch_scan(self, monkeypatch, ports, status_by_port):
+        import picohost.manager as mgr_mod
+        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: ports)
+        monkeypatch.setattr(
+            mgr_mod, "read_json_from_serial",
+            lambda port, baud, timeout: status_by_port[port],
+        )
+        monkeypatch.setitem(mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch)
+        monkeypatch.setitem(mgr_mod.PICO_CLASSES, "motor", DummyPicoMotor)
+
+    def test_adopts_unbound_port(self, mgr, monkeypatch):
+        self._patch_scan(monkeypatch, {"/dev/dummy": "ABC"},
+                         {"/dev/dummy": {"app_id": 5, "sensor_name": "rfswitch"}})
+        mgr._discover_new()
+        assert "rfswitch" in mgr.picos
+        assert PicoConfigStore(mgr.transport).get() == [
+            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"}]
+
+    def test_skips_already_bound_serial(self, mgr, monkeypatch):
+        _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        mgr.picos["rfswitch"].usb_serial = "ABC"
+        self._patch_scan(monkeypatch, {"/dev/dummy2": "ABC"},
+                         {"/dev/dummy2": {"app_id": 5}})
+        probed = []
+        import picohost.manager as mgr_mod
+        monkeypatch.setattr(mgr_mod, "read_json_from_serial",
+                            lambda *a: probed.append(a))
+        mgr._discover_new()
+        assert probed == []                       # bound serial never probed
+
+    def test_skips_duplicate_app_id(self, mgr, monkeypatch):
+        _attach(mgr, "rfswitch", DummyPicoRFSwitch)
+        mgr.picos["rfswitch"].usb_serial = "FIRST"
+        self._patch_scan(monkeypatch, {"/dev/dummy3": "SECOND"},
+                         {"/dev/dummy3": {"app_id": 5}})  # also rfswitch
+        mgr._discover_new()
+        assert mgr.picos["rfswitch"].usb_serial == "FIRST"   # not overwritten
+
+    def test_skips_unknown_app_id(self, mgr, monkeypatch):
+        self._patch_scan(monkeypatch, {"/dev/dummy": "ABC"},
+                         {"/dev/dummy": {"app_id": 99}})
+        mgr._discover_new()
+        assert mgr.picos == {}
+
+    def test_skips_serial_less_port(self, mgr, monkeypatch):
+        self._patch_scan(monkeypatch, {"/dev/dummy": None},
+                         {"/dev/dummy": {"app_id": 5}})
+        mgr._discover_new()
+        assert mgr.picos == {}
+
+    def test_mute_probe_does_not_adopt(self, mgr, monkeypatch):
+        import picohost.manager as mgr_mod
+        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: {"/dev/d": "ABC"})
+        def boom(*a): raise RuntimeError("timed out")
+        monkeypatch.setattr(mgr_mod, "read_json_from_serial", boom)
+        mgr._discover_new()                       # must not raise
+        assert mgr.picos == {}
+
+
 # --- module-level constants -----------------------------------------------
 
 
