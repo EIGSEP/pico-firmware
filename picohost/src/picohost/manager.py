@@ -268,7 +268,9 @@ class PicoManager:
         cannot hang the manager's discovery pass.
         """
         try:
-            return read_json_from_serial(port, DISCOVERY_BAUD, DISCOVERY_READ_TIMEOUT_S)
+            return read_json_from_serial(
+                port, DISCOVERY_BAUD, DISCOVERY_READ_TIMEOUT_S
+            )
         except (RuntimeError, OSError) as e:
             self.logger.debug("discovery probe of %s failed: %s", port, e)
             return None
@@ -283,8 +285,9 @@ class PicoManager:
         ports = find_pico_ports()
         with self._lock:
             bound = {p.usb_serial for p in self.picos.values() if p.usb_serial}
-        candidates = {port: sn for port, sn in ports.items()
-                      if sn and sn not in bound}
+        candidates = {
+            port: sn for port, sn in ports.items() if sn and sn not in bound
+        }
         for port, sn in candidates.items():
             info = self._probe_status(port)
             if info is None:
@@ -293,18 +296,28 @@ class PicoManager:
             name = APP_NAMES.get(app_id)
             if name is None:
                 self.logger.warning(
-                    "discovery: unknown app_id %r on %s (serial=%s)", app_id, port, sn)
+                    "discovery: unknown app_id %r on %s (serial=%s)",
+                    app_id,
+                    port,
+                    sn,
+                )
                 continue
             with self._lock:
                 if name in self.picos:
                     self.logger.warning(
                         "discovery: %s already bound; %s (serial=%s) ignored",
-                        name, port, sn)
+                        name,
+                        port,
+                        sn,
+                    )
                     continue
                 self._register_devices(
-                    [{"app_id": app_id, "port": port, "usb_serial": sn}])
-                device_list = self._current_device_list()   # snapshot under lock
-            self._config_store.upload(device_list)           # upload outside lock
+                    [{"app_id": app_id, "port": port, "usb_serial": sn}]
+                )
+                device_list = (
+                    self._current_device_list()
+                )  # snapshot under lock
+            self._config_store.upload(device_list)  # upload outside lock
 
     # --- Health Monitoring ---
 
@@ -358,7 +371,7 @@ class PicoManager:
                 hb = self._heartbeats.get(name)
                 if hb is not None:
                     hb.set(ex=HEARTBEAT_TTL, alive=connected)
-        self._discover_new()   # NEW: adopt any newly-appeared board
+        self._discover_new()  # NEW: adopt any newly-appeared board
 
     # --- Command Relay ---
 

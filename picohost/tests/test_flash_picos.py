@@ -2,7 +2,6 @@
 
 import errno
 import json
-import logging
 import types
 
 import pytest
@@ -23,16 +22,20 @@ from picohost.manager import APP_NAMES
 
 def _publish(transport, serials):
     PicoConfigStore(transport).upload(
-        [{"app_id": 0, "port": f"/dev/{s}", "usb_serial": s} for s in serials])
+        [{"app_id": 0, "port": f"/dev/{s}", "usb_serial": s} for s in serials]
+    )
 
 
 def test_confirmation_all_present():
     t = DummyTransport()
     _publish(t, ["A", "B"])
     # _publish uses app_id=0 for all serials → name "motor"; set its heartbeat alive.
-    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(
+        ex=60, alive=True
+    )
     confirmed, stragglers = _await_manager_confirmation(
-        {"A", "B"}, t, timeout=1.0, poll=0.01)
+        {"A", "B"}, t, timeout=1.0, poll=0.01
+    )
     assert confirmed == {"A", "B"} and stragglers == set()
 
 
@@ -41,9 +44,12 @@ def test_confirmation_timeout_reports_stragglers():
     _publish(t, ["A"])
     # "A" → app_id=0 → "motor"; set motor heartbeat alive so A is confirmed.
     # "B" is not in pico_config at all → straggler regardless.
-    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(
+        ex=60, alive=True
+    )
     confirmed, stragglers = _await_manager_confirmation(
-        {"A", "B"}, t, timeout=0.2, poll=0.01)
+        {"A", "B"}, t, timeout=0.2, poll=0.01
+    )
     assert confirmed == {"A"} and stragglers == {"B"}
 
 
@@ -56,7 +62,8 @@ def test_confirmation_present_but_not_alive_is_straggler():
     # Deliberately do NOT set the heartbeat alive: the board is in pico_config
     # but never came back after flash (or its heartbeat expired).
     confirmed, stragglers = _await_manager_confirmation(
-        {"A"}, t, timeout=0.2, poll=0.01)
+        {"A"}, t, timeout=0.2, poll=0.01
+    )
     assert confirmed == set() and stragglers == {"A"}
 
 
@@ -539,8 +546,6 @@ class TestResolvePostFlashPort:
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
         assert _resolve_post_flash_port("SER_Z", timeout=1.0) == "/dev/ttyACM7"
         assert calls["n"] >= 3
-
-
 
 
 class TestSerialReaderChild:
@@ -1235,9 +1240,7 @@ class TestFlashAndDiscoverGpio:
         ]
         assert load_addrs[:2] == ["50", "60"]
 
-    def test_serialless_bootsel_device_is_loaded(
-        self, _mock_gpio_flash
-    ):
+    def test_serialless_bootsel_device_is_loaded(self, _mock_gpio_flash):
         # A board with no serial in BOOTSEL still flashes (by bus/
         # address). It cannot be tracked in the returned serials
         # (no usb_serial), but its load must be attempted.
@@ -1507,18 +1510,22 @@ def test_main_confirmed_via_manager(monkeypatch, tmp_path, capsys):
         fp, "flash_and_discover_gpio", lambda **kw: ["SER_A", "SER_B"]
     )
     monkeypatch.setattr(gpio_mod, "available", lambda: True)
-    monkeypatch.setattr(
-        fp.manager_service, "manager_is_active", lambda: True
-    )
+    monkeypatch.setattr(fp.manager_service, "manager_is_active", lambda: True)
 
     t = DummyTransport()
-    PicoConfigStore(t).upload([
-        {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
-        {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
-    ])
+    PicoConfigStore(t).upload(
+        [
+            {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
+            {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
+        ]
+    )
     # Confirmation now requires liveness: set both boards' heartbeats alive.
-    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
-    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[5])).set(ex=60, alive=True)
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(
+        ex=60, alive=True
+    )
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[5])).set(
+        ex=60, alive=True
+    )
     monkeypatch.setattr(fp, "Transport", lambda host, port: t)
 
     fp.main(["--uf2", str(uf2)])
@@ -1540,19 +1547,21 @@ def test_main_straggler_exits_nonzero(monkeypatch, tmp_path, capsys):
         fp, "flash_and_discover_gpio", lambda **kw: ["SER_A", "SER_B"]
     )
     monkeypatch.setattr(gpio_mod, "available", lambda: True)
-    monkeypatch.setattr(
-        fp.manager_service, "manager_is_active", lambda: True
-    )
+    monkeypatch.setattr(fp.manager_service, "manager_is_active", lambda: True)
 
     t = DummyTransport()
     # Both serials appear in pico_config…
-    PicoConfigStore(t).upload([
-        {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
-        {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
-    ])
+    PicoConfigStore(t).upload(
+        [
+            {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
+            {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
+        ]
+    )
     # …but only SER_A's heartbeat is alive (motor, app_id=0).
     # SER_B (rfswitch, app_id=5) has no heartbeat set → not alive.
-    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(ex=60, alive=True)
+    HeartbeatWriter(t, name=pico_heartbeat_name(APP_NAMES[0])).set(
+        ex=60, alive=True
+    )
     monkeypatch.setattr(fp, "Transport", lambda host, port: t)
 
     with pytest.raises(SystemExit) as excinfo:
