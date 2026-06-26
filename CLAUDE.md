@@ -47,8 +47,8 @@ flash-picos --uf2 build/pico_multi.uf2 --no-gpio
 # Target a single Pico (automatically uses the USB path)
 flash-picos --uf2 build/pico_multi.uf2 --usb-serial <ID>
 
-# Flash with custom parameters
-flash-picos --uf2 build/pico_multi.uf2 --baud 115200 --timeout 10
+# Flash and write the confirmed device list to a JSON file
+flash-picos --uf2 build/pico_multi.uf2 --output-file devices.json
 
 # Drive the shared GPIO lines directly (all bussed Picos at once)
 pico-gpio bootsel   # everyone into BOOTSEL (2e8a:000f)
@@ -192,12 +192,12 @@ with MotorDevice() as motor:
 
 ### flash-picos
 
-CLI tool (installed as `flash-picos` entry point from picohost package) for flashing all attached Picos. It is **FLASH-ONLY**: it loads the UF2 firmware and confirms the result by polling the always-running `picomanager`'s Redis `pico_config` (which the manager owns by self-discovering boards from their CDC status). Two flash paths:
+CLI tool (installed as `flash-picos` entry point from picohost package) for flashing all attached Picos. It is **FLASH-ONLY**: it loads the UF2 firmware and confirms each board by polling its per-name heartbeat in Redis for `alive=True` — mere presence in `pico_config` is not enough (it has no TTL, so a stale pre-flash entry would false-green). The always-running `picomanager` owns `pico_config` by self-discovering boards from their CDC status. Two flash paths:
 - **GPIO mass-BOOTSEL (default)**: all Picos' BOOTSEL pads are bussed to Pi GPIO 18 and RUN/RESET pads to GPIO 17 (BCM) via inverting drivers — Pi pin HIGH grounds the line, LOW releases it; BOOTSEL (the shared QSPI flash CS) is only asserted while the Picos are held in reset. The lines are driven through the `pinctrl` CLI (`pinctrl set 17/18 op dh|dl`), so there is no GPIO library or pin-factory backend to install. One GPIO sequence (`17 dh → 18 dh → 17 dl → 18 dl`, i.e. reset on → bootsel on → reset off → bootsel off) puts the whole fleet into BOOTSEL (works even for wedged firmware), each device is loaded by `picotool load --bus/--address` (no `-x`/`-f`) over a quiet bus, then each board is booted individually and staggered via `picotool reboot -a`. Fails fast with a pointer to `--no-gpio` if `pinctrl` is not on PATH
 - **USB per-device (`--no-gpio`, or automatic with `--port`/`--usb-serial`)**: reboots each CDC Pico into BOOTSEL via `picotool reboot --bus/--address`, then loads — for hosts without the GPIO wiring
 - `picotool` targets devices by USB bus/address resolved from sysfs (never `--ser`, whose descriptor read corrupts under hub contention)
-- **No longer** stops/restarts `picomanager.service` — the manager runs continuously and owns the CDC ports; flash-picos confirms against its `pico_config` instead of reading directly
-- When `picomanager` is not active, prints "loaded N; start picomanager to confirm" and exits successfully (0) — the manager owns device discovery and publication to Redis
+- **No longer** stops/restarts `picomanager.service` — the manager runs continuously and owns the CDC ports; flash-picos confirms each board via the manager's per-name heartbeat (`alive=True`), reading `pico_config` only to resolve serial → name
+- When `picomanager` is not active, prints `"Loaded N board(s). picomanager is not active; start it to confirm device info (or this is a manager-less host)."` and exits successfully (0) — the manager owns device discovery and publication to Redis
 - Optionally writes confirmed device info to a JSON file via `--output-file`
 
 ### pico-gpio
