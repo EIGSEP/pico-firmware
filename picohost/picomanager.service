@@ -5,7 +5,7 @@ Requires=redis-server.service
 
 [Service]
 Environment=PYTHONUNBUFFERED=1
-ExecStart=%h/venv/bin/pico-manager --uf2 %h/eigsep/pico-firmware/build/pico_multi.uf2
+ExecStart=%h/venv/bin/pico-manager
 Restart=always
 RestartSec=5
 TimeoutStartSec=120
