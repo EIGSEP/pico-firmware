@@ -60,6 +60,11 @@ target_link_libraries(pico_multi
 # enable USB CDC for stdio
 pico_enable_stdio_usb(pico_multi 1)
 pico_enable_stdio_uart(pico_multi 0)
+# Emit USB-CDC stdout whenever the device is USB-ready, not only while the host
+# asserts DTR. flash-picos / the manager's discovery probe churn open/close (each
+# close drops DTR); on a marginal hub a re-asserted DTR control transfer can be
+# lost, which otherwise silently suppresses all status (the readback-flicker bug).
+target_compile_definitions(pico_multi PRIVATE PICO_STDIO_USB_CONNECTION_WITHOUT_DTR=1)
 
 # generate UF2, map file, etc.
 pico_add_extra_outputs(pico_multi)
@@ -80,6 +85,8 @@ target_link_libraries(pico_test_blink
 )
 pico_enable_stdio_usb(pico_test_blink 1)
 pico_enable_stdio_uart(pico_test_blink 0)
+# Match pico_multi: report status without requiring host DTR (see above).
+target_compile_definitions(pico_test_blink PRIVATE PICO_STDIO_USB_CONNECTION_WITHOUT_DTR=1)
 pico_add_extra_outputs(pico_test_blink)
 set_target_properties(pico_test_blink PROPERTIES OUTPUT_NAME "pico_test_blink")
 
