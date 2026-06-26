@@ -347,3 +347,52 @@ def test_main_azimuth_metadata_has_residual_fields(monkeypatch):
     # For perfectly linear 2-point data the residuals must be exactly zero.
     assert meta["residual_max_deg"] == pytest.approx(0.0)
     assert meta["residual_rms_deg"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# predicted_angle_divergence
+# ---------------------------------------------------------------------------
+
+
+def test_predicted_angle_divergence_none_when_no_stored():
+    assert (
+        calibrate_pot.predicted_angle_divergence((100.0, -100.0), None, [1.0, 2.0])
+        is None
+    )
+
+
+def test_predicted_angle_divergence_none_when_missing_pot_az():
+    assert (
+        calibrate_pot.predicted_angle_divergence(
+            (100.0, -100.0), {"foo": 1}, [1.0, 2.0]
+        )
+        is None
+    )
+
+
+def test_predicted_angle_divergence_none_when_malformed_pot_az():
+    # pot_az present but not a numeric (m, b) pair -> treated as unusable
+    assert (
+        calibrate_pot.predicted_angle_divergence(
+            (100.0, -100.0), {"pot_az": ["x"]}, [1.0, 2.0]
+        )
+        is None
+    )
+
+
+def test_predicted_angle_divergence_slope_and_zero_change():
+    # old(V) = 100V - 100 ; new(V) = 120V - 150 ; window [1.0, 2.0]
+    #   V=1: |(-30) - 0|   = 30
+    #   V=2: |90 - 100|    = 10   -> max = 30
+    d = calibrate_pot.predicted_angle_divergence(
+        (120.0, -150.0), {"pot_az": [100.0, -100.0]}, [1.0, 2.0]
+    )
+    assert d == pytest.approx(30.0)
+
+
+def test_predicted_angle_divergence_constant_offset_rezero():
+    # equal slopes (rezero) -> divergence is the pure zero shift |b_new - b_old|
+    d = calibrate_pot.predicted_angle_divergence(
+        (100.0, -160.0), {"pot_az": [100.0, -100.0]}, [1.5]
+    )
+    assert d == pytest.approx(60.0)
