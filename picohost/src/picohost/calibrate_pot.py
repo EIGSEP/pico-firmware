@@ -200,6 +200,44 @@ def compute_headroom(voltages, m, vref=ADC_VREF):
     }
 
 
+def predicted_angle_divergence(new_cal, old_cal, voltages):
+    """Max |new(V) - old(V)| in degrees over the swept voltage window.
+
+    Both calibrations are linear (angle = m*V + b), so the two lines
+    diverge most at an endpoint of ``[min(voltages), max(voltages)]``.
+
+    Parameters
+    ----------
+    new_cal : tuple
+        The freshly computed ``(slope, intercept)``.
+    old_cal : dict or None
+        The stored calibration from :meth:`PotCalStore.get`, shaped
+        ``{"pot_az": [m, b], ...}``, or ``None``.
+    voltages : sequence of float
+        The pot voltages swept on this run.
+
+    Returns
+    -------
+    float or None
+        Divergence in degrees, or ``None`` when there is no usable stored
+        calibration to compare against (``old_cal`` is ``None``, lacks a
+        ``pot_az`` entry, or its ``pot_az`` is not a numeric ``(m, b)``
+        pair). The caller then skips the "wildly different" warning.
+    """
+    if not old_cal or "pot_az" not in old_cal:
+        return None
+    pair = old_cal["pot_az"]
+    try:
+        m_old, b_old = float(pair[0]), float(pair[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    m_new, b_new = float(new_cal[0]), float(new_cal[1])
+    v_lo, v_hi = min(voltages), max(voltages)
+    return max(
+        abs((m_new * v + b_new) - (m_old * v + b_old)) for v in (v_lo, v_hi)
+    )
+
+
 def collect_minmax(transport, n_samples, total_degrees):
     """Collect at min and max only (2-point calibration)."""
     input("\nSet the az potentiometer to MINIMUM position, then press Enter.")
