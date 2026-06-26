@@ -203,6 +203,28 @@ def _wait_for_stable_bootsel_set(
     return last
 
 
+_CONFIRM_TIMEOUT_S = 45.0   # > boot stagger (~7x1.5s) + udev + a couple 5s manager cadences
+_CONFIRM_POLL_S = 0.5
+
+
+def _await_manager_confirmation(expected, transport,
+                                timeout=_CONFIRM_TIMEOUT_S, poll=_CONFIRM_POLL_S):
+    """Poll the manager-owned pico_config until *expected* serials all appear.
+
+    Returns (confirmed, stragglers). Presence in pico_config is the
+    confirmation: the manager only writes an entry after reading a status line.
+    """
+    store = PicoConfigStore(transport)
+    expected = set(expected)
+    deadline = time.monotonic() + timeout
+    while True:
+        published = {d.get("usb_serial") for d in store.get()}
+        confirmed = expected & published
+        if confirmed == expected or time.monotonic() >= deadline:
+            return confirmed, expected - confirmed
+        time.sleep(poll)
+
+
 _FLASH_MAX_ATTEMPTS = 3
 _FLASH_RETRY_BACKOFF_S = 2.0
 

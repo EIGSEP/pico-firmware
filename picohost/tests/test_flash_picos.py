@@ -8,12 +8,36 @@ import types
 import pytest
 
 import picohost.flash_picos as fp
+from eigsep_redis.testing import DummyTransport
+from picohost.buses import PicoConfigStore
 from picohost.flash_picos import (
+    _await_manager_confirmation,
     _classify_read_failure,
     _log_readback_reconciliation,
     _resolve_post_flash_port,
     flash_and_discover,
 )
+
+
+def _publish(transport, serials):
+    PicoConfigStore(transport).upload(
+        [{"app_id": 0, "port": f"/dev/{s}", "usb_serial": s} for s in serials])
+
+
+def test_confirmation_all_present():
+    t = DummyTransport()
+    _publish(t, ["A", "B"])
+    confirmed, stragglers = _await_manager_confirmation(
+        {"A", "B"}, t, timeout=1.0, poll=0.01)
+    assert confirmed == {"A", "B"} and stragglers == set()
+
+
+def test_confirmation_timeout_reports_stragglers():
+    t = DummyTransport()
+    _publish(t, ["A"])
+    confirmed, stragglers = _await_manager_confirmation(
+        {"A", "B"}, t, timeout=0.2, poll=0.01)
+    assert confirmed == {"A"} and stragglers == {"B"}
 
 
 @pytest.fixture
