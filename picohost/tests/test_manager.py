@@ -313,72 +313,22 @@ class TestLifecycle:
 
 
 class TestDiscover:
-    def test_empty_redis_is_a_noop_without_uf2(self, mgr, tmp_path):
-        """discover() with empty Redis and no UF2 just produces zero picos."""
-        mgr.uf2_path = tmp_path / "nonexistent.uf2"
+    def test_empty_bus_is_a_noop(self, mgr, monkeypatch):
+        import picohost.manager as mgr_mod
+        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: {})
         mgr.discover()
         assert mgr.picos == {}
 
-    def test_redis_config_instantiates_devices(self, mgr, monkeypatch):
-        """discover() reads the PicoConfigStore and builds devices."""
+    def test_discover_scans_live_ports(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        PicoConfigStore(mgr.transport).upload(
-            [
-                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"},
-            ]
-        )
+        monkeypatch.setattr(mgr_mod, "find_pico_ports", lambda: {"/dev/dummy": "ABC"})
+        monkeypatch.setattr(mgr_mod, "read_json_from_serial",
+                            lambda *a: {"app_id": 5})
+        monkeypatch.setitem(mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch)
         mgr.discover()
         assert "rfswitch" in mgr.picos
-
-    def test_discover_emits_initial_heartbeat(self, mgr, monkeypatch):
-        """Each registered device gets an alive heartbeat as soon as it lands."""
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        PicoConfigStore(mgr.transport).upload(
-            [
-                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"},
-            ]
-        )
-        mgr.discover()
-        hb_reader = HeartbeatReader(
-            mgr.transport, name=pico_heartbeat_name("rfswitch")
-        )
-        assert hb_reader.check() is True
-
-    def test_flash_fallback_on_empty_redis(self, mgr, monkeypatch):
-        """discover() falls through to flash when Redis is empty."""
-        import picohost.flash_picos as fp_mod
-        import picohost.manager as mgr_mod
-
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
-        monkeypatch.setattr(
-            fp_mod,
-            "flash_and_discover",
-            lambda **kw: [
-                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
-            ],
-        )
-        mgr.discover()
-        assert "rfswitch" in mgr.picos
-        # Result is persisted back into Redis
-        stored = PicoConfigStore(mgr.transport).get()
-        assert stored == [
-            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
-        ]
-
-    def test_flash_fallback_uf2_missing_is_noop(self, mgr, tmp_path):
-        mgr.uf2_path = tmp_path / "nonexistent.uf2"
-        mgr._try_flash_discover()
-        assert mgr.picos == {}
+        assert PicoConfigStore(mgr.transport).get() == [
+            {"app_id": 5, "port": "/dev/dummy", "usb_serial": "ABC"}]
 
 
 # --- manager commands -----------------------------------------------------
@@ -388,18 +338,13 @@ class TestManagerCommand:
     def test_rediscover_clears_and_reloads(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod
 
-        monkeypatch.setitem(
-            mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch
-        )
+        monkeypatch.setitem(mgr_mod.PICO_CLASSES, "rfswitch", DummyPicoRFSwitch)
+        monkeypatch.setattr(mgr_mod, "find_pico_ports",
+                            lambda: {"/dev/dummy": "X"})
+        monkeypatch.setattr(mgr_mod, "read_json_from_serial",
+                            lambda *a: {"app_id": 5})
         _attach(mgr, "rfswitch", DummyPicoRFSwitch)
         assert "rfswitch" in mgr.picos
-
-        # Stage Redis config for the rediscover path to pick up
-        PicoConfigStore(mgr.transport).upload(
-            [
-                {"app_id": 5, "port": "/dev/dummy", "usb_serial": "X"},
-            ]
-        )
 
         mgr._process_command(
             "1-0",
