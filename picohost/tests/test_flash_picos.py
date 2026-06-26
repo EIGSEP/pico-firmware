@@ -13,7 +13,6 @@ from picohost.buses import PicoConfigStore
 from picohost.flash_picos import (
     _await_manager_confirmation,
     _classify_read_failure,
-    _log_readback_reconciliation,
     _resolve_post_flash_port,
     flash_and_discover,
 )
@@ -85,27 +84,21 @@ def _mock_flash(monkeypatch, tmp_path):
 
 
 class TestFlashAndDiscover:
-    def test_returns_device_list(self, _mock_flash):
+    def test_returns_serial_list(self, _mock_flash):
         uf2, flashed = _mock_flash
-        devices = flash_and_discover(uf2_path=uf2)
-        assert len(devices) == 2
-        assert {d["app_id"] for d in devices} == {0, 5}
-        assert all("port" in d for d in devices)
-        assert all("usb_serial" in d for d in devices)
+        serials = flash_and_discover(uf2_path=uf2)
+        assert set(serials) == {"SER_A", "SER_B"}
         assert set(flashed) == {"SER_A", "SER_B"}
 
     def test_single_port_filter(self, _mock_flash):
         uf2, _ = _mock_flash
-        devices = flash_and_discover(uf2_path=uf2, port="/dev/ttyACM0")
-        assert len(devices) == 1
-        assert devices[0]["port"] == "/dev/ttyACM0"
+        serials = flash_and_discover(uf2_path=uf2, port="/dev/ttyACM0")
+        assert serials == ["SER_A"]
 
     def test_usb_serial_filter(self, _mock_flash):
         uf2, flashed = _mock_flash
-        devices = flash_and_discover(uf2_path=uf2, usb_serial="SER_B")
-        assert len(devices) == 1
-        assert devices[0]["usb_serial"] == "SER_B"
-        assert devices[0]["port"] == "/dev/ttyACM1"
+        serials = flash_and_discover(uf2_path=uf2, usb_serial="SER_B")
+        assert serials == ["SER_B"]
         assert flashed == ["SER_B"]
 
     def test_usb_serial_no_match_returns_empty(self, _mock_flash):
@@ -115,10 +108,10 @@ class TestFlashAndDiscover:
     def test_port_and_usb_serial_must_both_match(self, _mock_flash):
         uf2, _ = _mock_flash
         # SER_A is on /dev/ttyACM0, so this combination is empty
-        devices = flash_and_discover(
+        serials = flash_and_discover(
             uf2_path=uf2, port="/dev/ttyACM0", usb_serial="SER_B"
         )
-        assert devices == []
+        assert serials == []
 
     def test_missing_uf2_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="UF2 file not found"):
@@ -152,161 +145,7 @@ class TestFlashAndDiscover:
             ),
         )
         monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
         assert flash_and_discover(uf2_path=uf2) == []
-
-    def test_serial_read_failure_skips_device(self, monkeypatch, tmp_path):
-        import picohost.flash_picos as fp
-
-        uf2 = tmp_path / "test.uf2"
-        uf2.write_bytes(b"\x00")
-        monkeypatch.setattr(
-            fp,
-            "find_pico_ports",
-            lambda: {
-                "/dev/ttyACM0": "SER_A",
-            },
-        )
-        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: (_ for _ in ()).throw(
-                RuntimeError("timeout")
-            ),
-        )
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        assert flash_and_discover(uf2_path=uf2) == []
-
-    def test_settles_udev_before_opening_post_flash_port(
-        self, monkeypatch, tmp_path
-    ):
-        """``udevadm settle`` must run between re-enumeration and the
-        serial open. The new ttyACM node exists with driver-default
-        permissions before udev applies the rule that chgrps it to
-        ``dialout``; opening immediately races against that and fails
-        intermittently with ``EACCES``. Settling closes the window.
-        """
-        import picohost.flash_picos as fp
-
-        uf2 = tmp_path / "test.uf2"
-        uf2.write_bytes(b"\x00")
-
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
-        )
-        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-        events = []
-        monkeypatch.setattr(
-            fp, "_udev_settle", lambda: events.append("settle")
-        )
-
-        def fake_read(port, baud, timeout):
-            events.append(("read", port))
-            return {"app_id": 0}
-
-        monkeypatch.setattr(fp, "read_json_from_serial", fake_read)
-
-        devices = flash_and_discover(uf2_path=uf2)
-        assert len(devices) == 1
-        assert events == ["settle", ("read", "/dev/ttyACM0")]
-
-    def test_resolves_current_port_after_reenumeration(
-        self, monkeypatch, tmp_path
-    ):
-        """Picos may land on a different /dev/ttyACMn after the
-        post-flash reboot. The recorded ``port`` must reflect the
-        current path (looked up via the stable ``usb_serial``), not
-        the pre-flash path — otherwise two flashed Picos can collide
-        on the same recorded port and a Pico that drifted to an
-        unsnapshotted slot is silently dropped.
-        """
-        import picohost.flash_picos as fp
-
-        uf2 = tmp_path / "test.uf2"
-        uf2.write_bytes(b"\x00")
-
-        monkeypatch.setattr(
-            fp,
-            "find_pico_ports",
-            lambda: {
-                "/dev/ttyACM0": "SER_A",
-                "/dev/ttyACM1": "SER_B",
-            },
-        )
-
-        # Post-flash, both Picos have re-enumerated to different slots.
-        post_flash = {"SER_A": "/dev/ttyACM5", "SER_B": "/dev/ttyACM6"}
-        monkeypatch.setattr(
-            fp,
-            "_resolve_post_flash_port",
-            lambda serial: post_flash[serial],
-        )
-
-        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
-        serial_data = {
-            "/dev/ttyACM5": {"app_id": 0},
-            "/dev/ttyACM6": {"app_id": 5},
-        }
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: serial_data[port],
-        )
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-
-        devices = flash_and_discover(uf2_path=uf2)
-        by_serial = {d["usb_serial"]: d for d in devices}
-        assert by_serial["SER_A"]["port"] == "/dev/ttyACM5"
-        assert by_serial["SER_A"]["app_id"] == 0
-        assert by_serial["SER_B"]["port"] == "/dev/ttyACM6"
-        assert by_serial["SER_B"]["app_id"] == 5
-
-    def test_skips_device_that_does_not_reenumerate(
-        self, monkeypatch, tmp_path
-    ):
-        """A Pico that never re-appears after its post-flash reboot
-        must be dropped from the result rather than capturing some
-        other Pico's JSON via a stale port.
-        """
-        import picohost.flash_picos as fp
-
-        uf2 = tmp_path / "test.uf2"
-        uf2.write_bytes(b"\x00")
-
-        monkeypatch.setattr(
-            fp,
-            "find_pico_ports",
-            lambda: {
-                "/dev/ttyACM0": "SER_A",
-                "/dev/ttyACM1": "SER_B",
-            },
-        )
-
-        # SER_A never re-appears; SER_B comes back fine.
-        monkeypatch.setattr(
-            fp,
-            "_resolve_post_flash_port",
-            lambda serial: {"SER_B": "/dev/ttyACM1"}.get(serial),
-        )
-
-        monkeypatch.setattr(fp, "flash_uf2", lambda path, serial: None)
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: {"app_id": 5},
-        )
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-
-        devices = flash_and_discover(uf2_path=uf2)
-        assert len(devices) == 1
-        assert devices[0]["usb_serial"] == "SER_B"
-        assert devices[0]["port"] == "/dev/ttyACM1"
 
     def test_inter_device_settle_delay_before_second_and_later_flash(
         self, monkeypatch, tmp_path
@@ -333,23 +172,6 @@ class TestFlashAndDiscover:
             lambda path, serial: events.append(("flash", serial)),
         )
         monkeypatch.setattr(
-            fp,
-            "_resolve_post_flash_port",
-            lambda serial: {
-                "SER_A": "/dev/ttyACM0",
-                "SER_B": "/dev/ttyACM1",
-                "SER_C": "/dev/ttyACM2",
-            }[serial],
-        )
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: (
-                events.append(("read", port)) or {"app_id": 0}
-            ),
-        )
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        monkeypatch.setattr(
             fp.time, "sleep", lambda s: events.append(("sleep", s))
         )
 
@@ -357,13 +179,10 @@ class TestFlashAndDiscover:
 
         assert events == [
             ("flash", "SER_A"),
-            ("read", "/dev/ttyACM0"),
             ("sleep", fp._INTER_DEVICE_SETTLE_S),
             ("flash", "SER_B"),
-            ("read", "/dev/ttyACM1"),
             ("sleep", fp._INTER_DEVICE_SETTLE_S),
             ("flash", "SER_C"),
-            ("read", "/dev/ttyACM2"),
         ]
 
 
@@ -701,89 +520,6 @@ class TestResolvePostFlashPort:
         assert calls["n"] >= 3
 
 
-class TestReadDeviceInfo:
-    """The post-flash device-info readback is a single attempt.
-
-    Failing boards fail persistently (wrong DIP, failed boot), so a
-    board whose read fails is dropped immediately rather than retried.
-    """
-
-    def _patch_common(self, monkeypatch, fp):
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-    def test_reads_device_info(self, monkeypatch):
-        import picohost.flash_picos as fp
-
-        self._patch_common(monkeypatch, fp)
-        monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda s: "/dev/ttyACM0"
-        )
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: {"app_id": 3},
-        )
-
-        data = fp._read_device_info("SER_A", 115200, 1)
-        assert data == {
-            "app_id": 3,
-            "port": "/dev/ttyACM0",
-            "usb_serial": "SER_A",
-        }
-
-    def test_returns_none_on_read_failure(self, monkeypatch):
-        import picohost.flash_picos as fp
-
-        self._patch_common(monkeypatch, fp)
-        monkeypatch.setattr(
-            fp, "_resolve_post_flash_port", lambda s: "/dev/ttyACM0"
-        )
-
-        calls = {"n": 0}
-
-        def always_timeout(port, baud, timeout):
-            calls["n"] += 1
-            raise RuntimeError("Timed out waiting for JSON")
-
-        monkeypatch.setattr(fp, "read_json_from_serial", always_timeout)
-
-        data = fp._read_device_info("SER_A", 115200, 1)
-        assert data is None
-        assert calls["n"] == 1  # no retry
-
-    def test_returns_none_when_port_missing(self, monkeypatch):
-        """A Pico that never re-enumerated has no port to read from."""
-        import picohost.flash_picos as fp
-
-        self._patch_common(monkeypatch, fp)
-        monkeypatch.setattr(fp, "_resolve_post_flash_port", lambda s: None)
-
-        def fail_read(port, baud, timeout):
-            raise AssertionError("must not read without a port")
-
-        monkeypatch.setattr(fp, "read_json_from_serial", fail_read)
-
-        assert fp._read_device_info("SER_A", 115200, 1) is None
-
-    def test_gpio_flow_drops_unreadable_board(self, _mock_gpio_flash):
-        """End-to-end: a board whose read times out is dropped; the
-        rest of the fleet is still published."""
-        m = _mock_gpio_flash
-        # Cap the patient readback deadline so the unreadable board does
-        # not spin out the full window.
-        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.05)
-
-        def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B never yields JSON
-                raise RuntimeError("Timed out waiting for JSON")
-            return {"/dev/ttyACM5": {"app_id": 0}}[port]
-
-        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
-
-        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-
-        assert [d["usb_serial"] for d in devices] == ["SER_A"]
 
 
 class TestSerialReaderChild:
@@ -1383,14 +1119,10 @@ def _mock_gpio_flash(monkeypatch, tmp_path):
 
 
 class TestFlashAndDiscoverGpio:
-    def test_happy_path_returns_device_list(self, _mock_gpio_flash):
+    def test_happy_path_returns_serials(self, _mock_gpio_flash):
         m = _mock_gpio_flash
-        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        by_serial = {d["usb_serial"]: d for d in devices}
-        assert by_serial["SER_A"]["port"] == "/dev/ttyACM5"
-        assert by_serial["SER_A"]["app_id"] == 0
-        assert by_serial["SER_B"]["port"] == "/dev/ttyACM6"
-        assert by_serial["SER_B"]["app_id"] == 5
+        serials = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert set(serials) == {"SER_A", "SER_B"}
 
     def test_phase2_loads_use_only_picotool_load(self, _mock_gpio_flash):
         # Phase 2 (loading) never reboots: it loads each BOOTSEL device by
@@ -1438,12 +1170,10 @@ class TestFlashAndDiscoverGpio:
             m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
 
     def test_failed_load_excluded_but_boot_still_fires(self, _mock_gpio_flash):
-        # SER_A's load never succeeds, so it is not booted and never
-        # reaches CDC — absent from the results — but the fleet boot must
+        # SER_A's load never succeeds, so it is not in expected_serials
+        # and absent from the returned serials — but the fleet boot must
         # still run for the boards that did load.
         m = _mock_gpio_flash
-        del m.post_cdc["/dev/ttyACM5"]  # SER_A doesn't come back to CDC
-        m.reads.pop("/dev/ttyACM5", None)
         m.stuck.append({"usb_serial": "SER_A", "bus": 1, "address": 50})
 
         def fake_run(cmd, **kw):
@@ -1454,8 +1184,8 @@ class TestFlashAndDiscoverGpio:
             return types.SimpleNamespace(returncode=rc, stdout="boom")
 
         m.monkeypatch.setattr(m.fp.subprocess, "run", fake_run)
-        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert [d["usb_serial"] for d in devices] == ["SER_B"]
+        serials = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        assert serials == ["SER_B"]
         assert m.events.count("boot_fleet") == 1
 
     def test_stuck_in_bootsel_is_logged_as_hardware(
@@ -1465,8 +1195,6 @@ class TestFlashAndDiscoverGpio:
         # per-board reboot is the hardware case — surface it by
         # serial/bus/address for the operator.
         m = _mock_gpio_flash
-        del m.post_cdc["/dev/ttyACM6"]  # SER_B never reaches CDC
-        m.reads.pop("/dev/ttyACM6", None)
         m.stuck.append({"usb_serial": "SER_B", "bus": 1, "address": 51})
         m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         assert "still in BOOTSEL" in caplog.text
@@ -1502,128 +1230,19 @@ class TestFlashAndDiscoverGpio:
         ]
         assert load_addrs[:2] == ["50", "60"]
 
-    def test_serialless_bootsel_device_reported_via_cdc(
+    def test_serialless_bootsel_device_is_loaded(
         self, _mock_gpio_flash
     ):
         # A board with no serial in BOOTSEL still flashes (by bus/
-        # address) and, once it reboots into CDC under its real serial,
-        # is reported — the readback keys off the CDC serial, not the
-        # BOOTSEL one.
+        # address). It cannot be tracked in the returned serials
+        # (no usb_serial), but its load must be attempted.
         m = _mock_gpio_flash
         m.bootsel.append({"usb_serial": None, "bus": 1, "address": 52})
-        m.post_cdc["/dev/ttyACM7"] = "SER_C"
-        m.reads["/dev/ttyACM7"] = {"app_id": 6}
-        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
+        serials = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
         flashed_addrs = {c[c.index("--address") + 1] for c in m.cmds}
         assert "52" in flashed_addrs
-        assert {d["usb_serial"] for d in devices} == {
-            "SER_A",
-            "SER_B",
-            "SER_C",
-        }
-
-    def test_reports_board_with_mismatched_bootsel_serial(
-        self, _mock_gpio_flash
-    ):
-        # The serial a board presents in BOOTSEL can differ from its CDC
-        # serial; keying the readback off the CDC serial still reports it.
-        m = _mock_gpio_flash
-        m.pre_cdc.clear()  # boards were already in BOOTSEL, not prior CDC
-        m.bootsel[0]["usb_serial"] = "BOOTSEL_ONLY"  # SER_A in BOOTSEL
-        devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-
-    def test_reconciliation_confirms_all_reported(
-        self, _mock_gpio_flash, caplog
-    ):
-        # Happy path: the readback report confirms every flashed board
-        # reported, so an operator can trust the count at a glance.
-        m = _mock_gpio_flash
-        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
-            m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert "all 2 flashed Pico(s) reported" in caplog.text
-
-    def test_reconciliation_names_silent_board(self, _mock_gpio_flash, caplog):
-        # SER_B re-enumerates but never emits JSON, even on the re-read:
-        # the report must name it (with the read-failure reason), not
-        # silently drop the count. Cap the patient deadline so the test
-        # does not spin out the full readback window on the mute board.
-        m = _mock_gpio_flash
-        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.05)
-
-        def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B
-                raise RuntimeError("Timed out waiting for JSON")
-            return m.reads[port]
-
-        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
-        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert "1 of 2 flashed Pico(s) reported" in caplog.text
-        assert "serial=SER_B NOT reported" in caplog.text
-        assert "no JSON before timeout" in caplog.text
-
-    def test_mute_board_recovered_on_a_later_poll(
-        self, _mock_gpio_flash, caplog
-    ):
-        # SER_B is mute on the first read (a momentary enumeration race)
-        # but answers on a later poll once the bus quiets. The patient
-        # readback must recover it by re-READING it — there is no re-flash
-        # fallback.
-        m = _mock_gpio_flash
-        calls = {"/dev/ttyACM6": 0}
-
-        def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B: mute on pass 1, OK on re-read
-                calls[port] += 1
-                if calls[port] == 1:
-                    raise RuntimeError("Timed out waiting for JSON")
-                return {"app_id": 5}
-            return m.reads[port]
-
-        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
-        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
-            devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-        assert (
-            "Read device info from /dev/ttyACM6 (serial=SER_B)" in caplog.text
-        )
-
-    def test_board_silent_in_discovery_recovered_by_sweep(
-        self, _mock_gpio_flash, caplog
-    ):
-        # SER_B is alive and emitting but loses its reads during the busy
-        # fast-give-up discovery pass (short timeout); on the quiet-bus sweep
-        # (patient timeout) it answers. Distinguish the phases by the read
-        # timeout: the sweep reads with the full timeout, discovery with the
-        # short one.
-        m = _mock_gpio_flash
-        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.05)
-
-        def read(port, baud, timeout):
-            if port == "/dev/ttyACM6":  # SER_B
-                if timeout < m.fp._CDC_READ_TIMEOUT_S:  # discovery (fast)
-                    raise RuntimeError("Timed out waiting for JSON")
-                return {"app_id": 5}  # sweep (patient)
-            return m.reads[port]
-
-        m.monkeypatch.setattr(m.fp, "read_json_from_serial", read)
-        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
-            devices = m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-        assert "reconcile sweep recovered serial=SER_B" in caplog.text
-
-    def test_absent_board_reported_not_recovered(
-        self, _mock_gpio_flash, caplog
-    ):
-        # A board that never re-enumerated as CDC cannot be read or
-        # recovered over USB — it is reported as not re-enumerated, not
-        # silently dropped (and there is no re-flash to attempt).
-        m = _mock_gpio_flash
-        m.bootsel.append({"usb_serial": "SER_D", "bus": 1, "address": 52})
-        m.monkeypatch.setattr(m.fp, "_CDC_DISCOVER_TIMEOUT_S", 0.01)
-        m.fp.flash_and_discover_gpio(uf2_path=m.uf2)
-        assert "serial=SER_D NOT reported" in caplog.text
-        assert "did not re-enumerate as CDC" in caplog.text
+        # serialless board not in returned serials (no usb_serial to track)
+        assert set(serials) == {"SER_A", "SER_B"}
 
     def test_missing_uf2_raises_before_any_gpio_action(
         self, _mock_gpio_flash, tmp_path
@@ -1731,177 +1350,6 @@ class TestBootFleetStaggered:
         ]
 
 
-class TestReadFleetCdcPatient:
-    """_read_fleet_cdc keeps polling for boards to (re)enumerate as CDC and
-    reads each as it appears, so a board whose CDC enumeration flickers on
-    the contended hub is not dropped by a single-snapshot read."""
-
-    def _patch(self, monkeypatch):
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-    def test_flickering_boards_never_simultaneous_all_read(self, monkeypatch):
-        # SER_A and SER_B never appear in the SAME scan — A on odd scans,
-        # B on even. A single-snapshot read sees only one; the patient
-        # readback must catch both as they each appear.
-        self._patch(monkeypatch)
-        scans = {"n": 0}
-
-        def fake_find():
-            scans["n"] += 1
-            if scans["n"] % 2 == 1:
-                return {"/dev/ttyACM0": "SER_A"}
-            return {"/dev/ttyACM1": "SER_B"}
-
-        monkeypatch.setattr(fp, "find_pico_ports", fake_find)
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: {"app_id": 0},
-        )
-        devices, outcomes = fp._read_fleet_cdc(2, 115200)
-        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-        assert outcomes["SER_A"] is None
-        assert outcomes["SER_B"] is None
-
-    def test_already_read_board_is_not_re_read(self, monkeypatch):
-        # Once a board has been read, later polls must not open it again —
-        # re-reading a marginal node can re-disturb it. SER_A reads on the
-        # first pass; SER_B only appears on the third scan, so the loop
-        # keeps polling, but SER_A must be read exactly once.
-        self._patch(monkeypatch)
-        scans = {"n": 0}
-
-        def fake_find():
-            scans["n"] += 1
-            ports = {"/dev/ttyACM0": "SER_A"}
-            if scans["n"] >= 3:
-                ports["/dev/ttyACM1"] = "SER_B"
-            return ports
-
-        monkeypatch.setattr(fp, "find_pico_ports", fake_find)
-        reads = []
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: reads.append(port) or {"app_id": 0},
-        )
-        devices, _ = fp._read_fleet_cdc(2, 115200)
-        assert {d["usb_serial"] for d in devices} == {"SER_A", "SER_B"}
-        assert reads.count("/dev/ttyACM0") == 1  # SER_A read exactly once
-
-    def test_mute_board_recovers_on_later_poll(self, monkeypatch):
-        # A board present but mute on the first read is retried on the next
-        # poll and recovered; its outcome ends up None (success).
-        self._patch(monkeypatch)
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
-        )
-        calls = {"n": 0}
-
-        def read(port, baud, timeout):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("Timed out waiting for JSON")
-            return {"app_id": 5}
-
-        monkeypatch.setattr(fp, "read_json_from_serial", read)
-        devices, outcomes = fp._read_fleet_cdc(1, 115200)
-        assert [d["usb_serial"] for d in devices] == ["SER_B"]
-        assert outcomes["SER_B"] is None
-
-    def test_absent_board_is_bounded_by_deadline(self, monkeypatch):
-        # A board that never (re)enumerates must not hang the readback: the
-        # loop returns after the bounded deadline with only what appeared.
-        self._patch(monkeypatch)
-        monkeypatch.setattr(fp, "_CDC_DISCOVER_TIMEOUT_S", 0.05)
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM0": "SER_A"}
-        )
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda port, baud, timeout: {"app_id": 0},
-        )
-        # Expect 2 boards but only 1 ever appears — must still return.
-        devices, outcomes = fp._read_fleet_cdc(2, 115200)
-        assert [d["usb_serial"] for d in devices] == ["SER_A"]
-        assert "SER_B" not in outcomes
-
-
-class TestReconcileSilentBoards:
-    """_reconcile_silent_boards gives boards that enumerated but stayed
-    silent during the busy discovery pass a patient re-read on a now-quiet
-    bus — the recovery the fast-give-up first pass deliberately defers."""
-
-    def _patch(self, monkeypatch):
-        monkeypatch.setattr(fp, "_udev_settle", lambda: None)
-        monkeypatch.setattr(fp.time, "sleep", lambda _: None)
-
-    def test_recovers_board_that_answers_on_a_later_attempt(self, monkeypatch):
-        self._patch(monkeypatch)
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
-        )
-        calls = {"n": 0}
-
-        def read(port, baud, timeout):
-            calls["n"] += 1
-            if calls["n"] < 2:
-                raise RuntimeError("Timed out waiting for JSON")
-            return {"app_id": 5}
-
-        monkeypatch.setattr(fp, "read_json_from_serial", read)
-        devices, outcomes = fp._reconcile_silent_boards({"SER_B"}, 115200)
-        assert [d["usb_serial"] for d in devices] == ["SER_B"]
-        assert outcomes["SER_B"] is None
-
-    def test_skips_board_not_present_as_cdc(self, monkeypatch):
-        # A board that never enumerated cannot be re-read over USB; the
-        # sweep only touches boards that are present.
-        self._patch(monkeypatch)
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
-        )
-
-        def read(port, baud, timeout):
-            raise AssertionError("must not read an absent board")
-
-        monkeypatch.setattr(fp, "read_json_from_serial", read)
-        devices, outcomes = fp._reconcile_silent_boards({"SER_GONE"}, 115200)
-        assert devices == []
-        assert "SER_GONE" not in outcomes
-
-    def test_persistently_silent_board_returns_reason(self, monkeypatch):
-        self._patch(monkeypatch)
-        monkeypatch.setattr(
-            fp, "find_pico_ports", lambda: {"/dev/ttyACM1": "SER_B"}
-        )
-        monkeypatch.setattr(
-            fp,
-            "read_json_from_serial",
-            lambda *a, **k: (_ for _ in ()).throw(
-                RuntimeError("Timed out waiting for JSON")
-            ),
-        )
-        devices, outcomes = fp._reconcile_silent_boards(
-            {"SER_B"}, 115200, attempts=2
-        )
-        assert devices == []
-        assert outcomes["SER_B"] is not None
-
-    def test_no_missing_boards_is_a_noop(self, monkeypatch):
-        self._patch(monkeypatch)
-
-        def boom():
-            raise AssertionError("must not scan when nothing is missing")
-
-        monkeypatch.setattr(fp, "find_pico_ports", boom)
-        devices, outcomes = fp._reconcile_silent_boards(set(), 115200)
-        assert devices == []
-        assert outcomes == {}
-
-
 class TestClassifyReadFailure:
     def test_runtime_timeout_is_silent_firmware(self):
         reason = _classify_read_failure(
@@ -1946,125 +1394,6 @@ class TestClassifyReadFailure:
         assert "some other failure" in reason
 
 
-class TestLogReadbackReconciliation:
-    def _reasons(self, caplog):
-        return caplog.text
-
-    def test_all_reported_logs_confirmation(self, caplog):
-        with caplog.at_level(logging.INFO, logger="picohost.flash_picos"):
-            _log_readback_reconciliation(
-                {"A", "B"}, {"A", "B"}, {"A": None, "B": None}
-            )
-        assert "all 2 flashed Pico(s) reported" in caplog.text
-
-    def test_board_absent_from_cdc_attributed_to_reenumeration(self, caplog):
-        _log_readback_reconciliation({"A", "B"}, {"A"}, {"A": None})
-        assert "serial=B NOT reported" in caplog.text
-        assert "did not re-enumerate as CDC" in caplog.text
-
-    def test_present_but_failed_carries_its_reason(self, caplog):
-        _log_readback_reconciliation(
-            {"A", "B"}, {"A", "B"}, {"A": None, "B": "port busy (EBUSY ...)"}
-        )
-        assert "serial=B NOT reported: port busy (EBUSY" in caplog.text
-
-    def test_unexpected_serial_is_named(self, caplog):
-        _log_readback_reconciliation({"A"}, {"A", "X"}, {"A": None, "X": None})
-        assert (
-            "serial=X reported but was not in the flashed set" in caplog.text
-        )
-
-    def test_none_baseline_falls_back_to_failure_logs(self, caplog):
-        # Without a flashed-serial baseline, still surface read failures.
-        _log_readback_reconciliation(
-            None, {"A"}, {"A": "permission denied opening port (EACCES ...)"}
-        )
-        assert "could not read device info for serial=A" in caplog.text
-        assert "EACCES" in caplog.text
-
-
-class TestMergeDeviceLists:
-    """_merge_device_lists merges freshly-read devices over the existing
-    Redis list by usb_serial, so a board lost to a flaky readback keeps its
-    last-known entry instead of being clobbered by a partial publish."""
-
-    def test_fresh_overrides_existing_same_serial(self):
-        existing = [{"usb_serial": "A", "app_id": 0, "port": "/dev/ttyACM0"}]
-        fresh = [{"usb_serial": "A", "app_id": 0, "port": "/dev/ttyACM5"}]
-        merged, preserved = fp._merge_device_lists(existing, fresh)
-        assert merged == [
-            {"usb_serial": "A", "app_id": 0, "port": "/dev/ttyACM5"}
-        ]
-        assert preserved == set()
-
-    def test_existing_board_absent_from_fresh_is_preserved(self):
-        # B flashed-and-ran but was lost to a flaky readback this run; it
-        # must survive in the published list rather than vanish.
-        existing = [
-            {"usb_serial": "A", "app_id": 0},
-            {"usb_serial": "B", "app_id": 5},
-        ]
-        fresh = [{"usb_serial": "A", "app_id": 0}]
-        merged, preserved = fp._merge_device_lists(existing, fresh)
-        by_serial = {d["usb_serial"]: d for d in merged}
-        assert by_serial.keys() == {"A", "B"}
-        assert by_serial["B"] == {"usb_serial": "B", "app_id": 5}
-        assert preserved == {"B"}
-
-    def test_no_existing_returns_fresh_only(self):
-        # First flash: nothing in Redis yet.
-        fresh = [{"usb_serial": "A", "app_id": 0}]
-        merged, preserved = fp._merge_device_lists(None, fresh)
-        assert merged == fresh
-        assert preserved == set()
-
-
-class TestPublishToRedisMerge:
-    """_publish_to_redis merges fresh devices over the existing Redis list
-    rather than overwriting it, so a partial readback never drops a board."""
-
-    def _patch_store(self, monkeypatch, existing):
-        published = {}
-
-        class FakeStore:
-            def __init__(self, transport):
-                pass
-
-            def get(self):
-                return existing
-
-            def upload(self, devices):
-                published["devices"] = devices
-
-        monkeypatch.setattr(fp, "Transport", lambda host, port: object())
-        monkeypatch.setattr(fp, "PicoConfigStore", FakeStore)
-        return published
-
-    def test_partial_readback_does_not_drop_existing_board(self, monkeypatch):
-        existing = [
-            {"usb_serial": "A", "app_id": 0},
-            {"usb_serial": "B", "app_id": 5},
-        ]
-        published = self._patch_store(monkeypatch, existing)
-        # This run only read A back; B was lost to a flaky readback.
-        result = fp._publish_to_redis(
-            [{"usb_serial": "A", "app_id": 0}], "h", 1
-        )
-        serials = {d["usb_serial"] for d in published["devices"]}
-        assert serials == {"A", "B"}  # B preserved, not clobbered
-        assert {d["usb_serial"] for d in result} == {"A", "B"}
-
-    def test_warns_when_a_board_rides_on_stale_data(self, monkeypatch, caplog):
-        existing = [
-            {"usb_serial": "A", "app_id": 0},
-            {"usb_serial": "B", "app_id": 5},
-        ]
-        self._patch_store(monkeypatch, existing)
-        fp._publish_to_redis([{"usb_serial": "A", "app_id": 0}], "h", 1)
-        assert "kept their previous Redis entry" in caplog.text
-        assert "B" in caplog.text
-
-
 class TestMainRouting:
     def _run_main(self, monkeypatch, argv, gpio_available=True):
         import picohost.flash_picos as fp
@@ -2077,15 +1406,15 @@ class TestMainRouting:
         monkeypatch.setattr(
             fp,
             "flash_and_discover",
-            lambda **kw: calls.append(("usb", kw)) or [{"app_id": 0}],
+            lambda **kw: calls.append(("usb", kw)) or ["SER_A"],
         )
         monkeypatch.setattr(
             fp,
             "flash_and_discover_gpio",
-            lambda **kw: calls.append(("gpio", kw)) or [{"app_id": 0}],
+            lambda **kw: calls.append(("gpio", kw)) or ["SER_A"],
         )
         monkeypatch.setattr(gpio_mod, "available", lambda: gpio_available)
-        fp.main(argv + ["--no-redis"])
+        fp.main(argv)
         return calls
 
     def test_default_routes_to_gpio(self, monkeypatch):
@@ -2137,115 +1466,54 @@ class TestMainRouting:
 
         monkeypatch.setattr(fp, "flash_and_discover_gpio", boom)
         with pytest.raises(SystemExit) as excinfo:
-            fp.main(["--uf2", "x.uf2", "--no-redis"])
+            fp.main(["--uf2", "x.uf2"])
         assert excinfo.value.code == 1
         assert "BOOTSEL" in capsys.readouterr().err
 
+    def test_manager_inactive_prints_not_active(self, monkeypatch, capsys):
+        import picohost.flash_picos as fp
+        import picohost.gpio as gpio_mod
 
-class TestManagerAutoStop:
-    """main() stops an active picomanager around the flash window."""
-
-    def _setup(
-        self, monkeypatch, tmp_path, active, devices=None, flash_exc=None
-    ):
-        uf2 = tmp_path / "fw.uf2"
-        uf2.write_bytes(b"\x00")
-        events = []
         monkeypatch.setattr(
-            fp.manager_service, "manager_is_active", lambda: active
+            fp.manager_service, "manager_is_active", lambda: False
         )
         monkeypatch.setattr(
-            fp.manager_service,
-            "stop_manager",
-            lambda: events.append("stop"),
+            fp, "flash_and_discover_gpio", lambda **kw: ["SER_A", "SER_B"]
         )
-        monkeypatch.setattr(
-            fp.manager_service,
-            "start_manager",
-            lambda: events.append("start"),
-        )
+        monkeypatch.setattr(gpio_mod, "available", lambda: True)
+        fp.main(["--uf2", "x.uf2"])
+        out = capsys.readouterr().out
+        assert "2 board(s)" in out
+        assert "picomanager is not active" in out
 
-        def fake_flash(**kwargs):
-            events.append("flash")
-            if flash_exc is not None:
-                raise flash_exc
-            return list(devices or [])
 
-        monkeypatch.setattr(fp, "flash_and_discover", fake_flash)
-        return uf2, events
+def test_main_confirmed_via_manager(monkeypatch, tmp_path, capsys):
+    """main() polls pico_config via the manager and prints 'Confirmed N/N'
+    when the manager is active and all flashed serials appear in time."""
+    import picohost.flash_picos as fp
+    import picohost.gpio as gpio_mod
+    from eigsep_redis.testing import DummyTransport
+    from picohost.buses import PicoConfigStore
 
-    def _argv(self, uf2):
-        return ["--uf2", str(uf2), "--no-gpio", "--no-redis"]
+    uf2 = tmp_path / "fw.uf2"
+    uf2.write_bytes(b"\x00")
 
-    def test_stops_then_flashes_then_restarts(self, monkeypatch, tmp_path):
-        uf2, events = self._setup(
-            monkeypatch,
-            tmp_path,
-            active=True,
-            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
-        )
-        fp.main(self._argv(uf2))
-        assert events == ["stop", "flash", "start"]
+    monkeypatch.setattr(
+        fp, "flash_and_discover_gpio", lambda **kw: ["SER_A", "SER_B"]
+    )
+    monkeypatch.setattr(gpio_mod, "available", lambda: True)
+    monkeypatch.setattr(
+        fp.manager_service, "manager_is_active", lambda: True
+    )
 
-    def test_restarts_after_flash_failure(self, monkeypatch, tmp_path):
-        uf2, events = self._setup(
-            monkeypatch,
-            tmp_path,
-            active=True,
-            flash_exc=RuntimeError("boom"),
-        )
-        with pytest.raises(SystemExit) as excinfo:
-            fp.main(self._argv(uf2))
-        assert excinfo.value.code == 1
-        assert events == ["stop", "flash", "start"]
+    t = DummyTransport()
+    PicoConfigStore(t).upload([
+        {"usb_serial": "SER_A", "app_id": 0, "port": "/dev/ttyACM0"},
+        {"usb_serial": "SER_B", "app_id": 5, "port": "/dev/ttyACM1"},
+    ])
+    monkeypatch.setattr(fp, "Transport", lambda host, port: t)
 
-    def test_restarts_when_no_devices_found(self, monkeypatch, tmp_path):
-        uf2, events = self._setup(
-            monkeypatch, tmp_path, active=True, devices=[]
-        )
-        with pytest.raises(SystemExit) as excinfo:
-            fp.main(self._argv(uf2))
-        assert excinfo.value.code == 1
-        assert events == ["stop", "flash", "start"]
+    fp.main(["--uf2", str(uf2)])
 
-    def test_inactive_manager_left_alone(self, monkeypatch, tmp_path):
-        # The eigsep-field patch flow: the coordinator already stopped
-        # the unit; flash-picos must not restart it behind its back.
-        uf2, events = self._setup(
-            monkeypatch,
-            tmp_path,
-            active=False,
-            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
-        )
-        fp.main(self._argv(uf2))
-        assert events == ["flash"]
-
-    def test_keep_manager_skips_stop(self, monkeypatch, tmp_path):
-        uf2, events = self._setup(
-            monkeypatch,
-            tmp_path,
-            active=True,
-            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
-        )
-        fp.main(self._argv(uf2) + ["--keep-manager"])
-        assert events == ["flash"]
-
-    def test_stop_failure_aborts_before_flash(
-        self, monkeypatch, tmp_path, capsys
-    ):
-        uf2, events = self._setup(
-            monkeypatch,
-            tmp_path,
-            active=True,
-            devices=[{"app_id": 0, "port": "p", "usb_serial": "s"}],
-        )
-
-        def failing_stop():
-            raise RuntimeError("cannot stop")
-
-        monkeypatch.setattr(fp.manager_service, "stop_manager", failing_stop)
-        with pytest.raises(SystemExit) as excinfo:
-            fp.main(self._argv(uf2))
-        assert excinfo.value.code == 1
-        assert "cannot stop" in capsys.readouterr().err
-        assert events == []
+    out = capsys.readouterr().out
+    assert "Confirmed 2/2" in out
