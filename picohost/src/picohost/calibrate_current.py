@@ -55,10 +55,10 @@ CURRENT_STREAM = "stream:system_current"
 # entry is ~25x — long enough to ride out a single reconnect blip but
 # short enough to fail fast when the manager isn't actually publishing.
 SAMPLE_TIMEOUT_S = 5.0
-# Nominal slope at the ADC pin (S * k = 0.2 * 0.5875). A measured slope
+# Nominal slope at the ADC pin (S * k = 0.2 * 0.5829). A measured slope
 # wildly off this hints at reversed sensor wiring or a wrong reference
 # current — warn, but don't refuse (the operator may know better).
-_NOMINAL_SLOPE = 0.2 * (4.7 / (3.3 + 4.7))
+_NOMINAL_SLOPE = 0.2 * (4.64 / (3.32 + 4.64))
 
 
 def collect_samples(transport, n):
