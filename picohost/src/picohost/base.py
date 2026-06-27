@@ -844,7 +844,7 @@ class PicoIMU(PicoDevice):
 class PicoLidar(PicoDevice):
     """Lidar distance sensor; also hosts the whole-system current monitor.
 
-    The lidar Pico carries an ACS724 current sensor on GP28/ADC2 (it uses no
+    The lidar Pico carries an ACS724 current sensor on GP26/ADC0 (it uses no
     other ADC). The firmware merges the raw ``current_voltage`` into the lidar
     status line; this class fans that out into a separate
     ``metadata['system_current']`` entry so the user-facing key never names
@@ -853,7 +853,7 @@ class PicoLidar(PicoDevice):
     """
 
     # ACS724-10AB (bidirectional, Vcc/2 zero point, 200 mV/A) read through a
-    # 3.3k (top) / 4.7k (bottom) divider into GP28. Nominal conversion only;
+    # 3.3k (top) / 4.7k (bottom) divider into GP26. Nominal conversion only;
     # a measured zero-offset calibration is deferred (see design doc).
     _DIVIDER_RATIO = 4.7 / (3.3 + 4.7)   # = 0.5875
     _SENSOR_VQ = 2.5                     # volts at 0 A (Vcc/2)
