@@ -1093,7 +1093,7 @@ class TestLidarRedisHandler:
                     "status": "update",
                     "app_id": 4,
                     "distance_m": 1.23,
-                    "current_voltage": 1.46875,  # = Vq * k → 0 A
+                    "current_voltage": 2.5 * (4.64 / 7.96),  # = Vq * k → 0 A
                 },
             )
             assert [p["sensor_name"] for p in pub] == ["lidar", "system_current"]
@@ -1101,7 +1101,7 @@ class TestLidarRedisHandler:
             assert pub[0]["distance_m"] == 1.23
             assert "current_voltage" not in pub[0]
             # system_current entry carries raw + derived
-            assert pub[1]["current_voltage"] == 1.46875
+            assert pub[1]["current_voltage"] == 2.5 * (4.64 / 7.96)
             assert pub[1]["current_a"] == pytest.approx(0.0, abs=1e-6)
         finally:
             lidar.disconnect()
@@ -1109,7 +1109,7 @@ class TestLidarRedisHandler:
     def test_current_conversion_at_five_amps(self):
         lidar = DummyPicoLidar("/dev/dummy")
         try:
-            # 5 A → Vsensor = 2.5 + 0.2*5 = 3.5 V → Vadc = 3.5 * 0.5875
+            # 5 A → Vsensor = 2.5 + 0.2*5 = 3.5 V → Vadc = 3.5 * (4.64/7.96)
             pub = self._capture(
                 lidar,
                 {
@@ -1117,7 +1117,7 @@ class TestLidarRedisHandler:
                     "status": "update",
                     "app_id": 4,
                     "distance_m": 0.0,
-                    "current_voltage": 3.5 * (4.7 / 8.0),
+                    "current_voltage": 3.5 * (4.64 / 7.96),
                 },
             )
             assert pub[1]["current_a"] == pytest.approx(5.0, abs=1e-6)
@@ -1134,7 +1134,7 @@ class TestLidarRedisHandler:
                     "status": "error",        # lidar I2C failed this cycle
                     "app_id": 4,
                     "distance_m": 9.9,
-                    "current_voltage": 2.9 * (4.7 / 8.0),  # 2 A
+                    "current_voltage": 2.9 * (4.64 / 7.96),  # 2 A
                 },
             )
             assert pub[0]["status"] == "error"     # lidar half still errors

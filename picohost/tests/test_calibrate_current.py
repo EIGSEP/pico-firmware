@@ -124,8 +124,10 @@ class TestPicoLidarCurrentCal:
         lidar = DummyPicoLidar("/dev/dummy")
         try:
             assert not lidar.is_current_calibrated
-            # V_adc at 0 A is Vq*k = 2.5 * 0.5875 = 1.46875
-            assert lidar._v_to_current(1.46875) == pytest.approx(0.0, abs=1e-6)
+            # V_adc at 0 A is Vq*k = 2.5 * (4.64/7.96) = 1.45729
+            assert lidar._v_to_current(2.5 * (4.64 / 7.96)) == pytest.approx(
+                0.0, abs=1e-6
+            )
         finally:
             lidar.disconnect()
 

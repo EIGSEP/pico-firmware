@@ -853,9 +853,10 @@ class PicoLidar(PicoDevice):
     """
 
     # ACS724-10AB (bidirectional, Vcc/2 zero point, 200 mV/A) read through a
-    # 3.3k (top) / 4.7k (bottom) divider into GP26. These constants give the
-    # nominal transfer function used until a measured calibration is uploaded.
-    _DIVIDER_RATIO = 4.7 / (3.3 + 4.7)   # = 0.5875
+    # 3.32k (top) / 4.64k (bottom) divider into GP26 (DMM-measured values).
+    # These constants give the nominal transfer function used until a measured
+    # calibration is uploaded.
+    _DIVIDER_RATIO = 4.64 / (3.32 + 4.64)  # = 0.5829 (measured)
     _SENSOR_VQ = 2.5                     # volts at 0 A (Vcc/2)
     _SENSOR_SENSITIVITY = 0.2            # volts per amp
 
