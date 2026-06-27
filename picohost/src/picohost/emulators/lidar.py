@@ -4,7 +4,7 @@ from .base import PicoEmulator
 
 NOISE_STDDEV = 0.01  # meters
 
-# ACS724-10AB current monitor co-located on the lidar Pico (GP28/ADC2),
+# ACS724-10AB current monitor co-located on the lidar Pico (GP26/ADC0),
 # read through a 3.3k/4.7k divider. The firmware reports the raw ADC-pin
 # voltage; emulate that for a representative whole-system current draw.
 CURRENT_VQ = 2.5                              # sensor volts at 0 A (Vcc/2)

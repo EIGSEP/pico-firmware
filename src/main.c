@@ -150,6 +150,11 @@ int main(void) {
             case APP_IMU_AZ: imu_op(app_id); break;
             case APP_LIDAR:
                 lidar_op(app_id);
+                // Keep currentmon_op() a SEPARATE dispatch call, not nested in
+                // lidar_op(): lidar_op() early-returns on an I2C failure, so
+                // folding the ADC read inside it would freeze the current
+                // reading during every lidar outage. The current monitor must
+                // keep sampling independent of lidar's I2C health.
                 currentmon_op();
                 break;
             default:

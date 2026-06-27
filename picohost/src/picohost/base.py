@@ -874,6 +874,10 @@ class PicoLidar(PicoDevice):
         # nominal conversion. Set before super().__init__ so the handler
         # never sees an undefined attribute.
         self._current_cal = None
+        # Warn-once latch: trips if a lidar status line ever arrives without
+        # current_voltage (firmware field renamed/dropped → system_current
+        # silently goes stale). Set before super().__init__ for the same reason.
+        self._warned_no_current = False
         super().__init__(*args, **kwargs)
         if current_cal_store is not None:
             cal = current_cal_store.get()
@@ -933,6 +937,15 @@ class PicoLidar(PicoDevice):
                     "current_voltage": v,
                     "current_a": self._v_to_current(v),
                 }
+            )
+        elif data.get("sensor_name") == "lidar" and not self._warned_no_current:
+            # The firmware↔host contract for current rides on this field name.
+            # If it vanishes, system_current stops updating with no other
+            # symptom — surface it once rather than failing silently.
+            self._warned_no_current = True
+            self.logger.warning(
+                "lidar status line missing 'current_voltage'; system_current "
+                "will go stale. Firmware field renamed or dropped?"
             )
 
 

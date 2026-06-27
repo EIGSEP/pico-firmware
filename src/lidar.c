@@ -75,6 +75,9 @@ void lidar_status(uint8_t app_id) {
 
 
 void lidar_reset(uint8_t app_id) {
+    // Reset only the I2C peripheral. The co-located current monitor owns the
+    // ADC (GP26/ADC0); deliberately leave it untouched so a lidar recovery
+    // does not disturb the independent current reading.
     i2c_deinit(I2C_PORT);
     sleep_ms(50);
     lidar_init(app_id);
