@@ -12,8 +12,16 @@ Covers three layers, mirroring the potentiometer calibration suite:
 import pytest
 from eigsep_redis.testing import DummyTransport
 
+import picohost.calibrate_current as cc
 from picohost.buses import CurrentCalStore
-from picohost.calibrate_current import compute_two_point
+from picohost.calibrate_current import (
+    _build_multi_cal_data,
+    _parse_currents,
+    _residual_threshold_a,
+    collect_multi_point,
+    compute_multi_point,
+    compute_two_point,
+)
 from picohost.keys import CURRENT_CAL_KEY
 from picohost.testing import DummyPicoLidar
 
@@ -33,6 +41,44 @@ class TestComputeTwoPoint:
     def test_identical_voltages_rejected(self):
         """No voltage swing between the two points → can't fit gain → None."""
         assert compute_two_point(1.5, 1.5, 5.0) is None
+
+
+class TestComputeMultiPoint:
+    """Least-squares (V0, slope) fit over N known currents."""
+
+    def _clean_line(self):
+        # V = 0.1175 * I + 1.469  (nominal ACS724 + divider line)
+        currents = [0.0, 1.0, 2.0, 5.0, 8.0]
+        voltages = [1.469 + 0.1175 * i for i in currents]
+        return currents, voltages
+
+    def test_recovers_slope_and_intercept(self):
+        currents, voltages = self._clean_line()
+        (v0, slope), quality = compute_multi_point(currents, voltages)
+        assert v0 == pytest.approx(1.469, abs=1e-6)
+        assert slope == pytest.approx(0.1175, abs=1e-6)
+        assert quality["r_squared"] == pytest.approx(1.0, abs=1e-9)
+        assert quality["residual_rms_v"] == pytest.approx(0.0, abs=1e-9)
+        assert quality["residual_rms_a"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_residual_flags_a_bent_dataset(self):
+        # Bend the middle point well off the line.
+        currents = [0.0, 1.0, 2.0, 5.0, 8.0]
+        voltages = [1.469 + 0.1175 * i for i in currents]
+        voltages[2] += 0.05  # 50 mV kink
+        (_v0, slope), quality = compute_multi_point(currents, voltages)
+        assert quality["residual_rms_v"] > 0.0
+        # residual in amps is residual_v / slope, kept positive.
+        assert quality["residual_rms_a"] == pytest.approx(
+            quality["residual_rms_v"] / slope, rel=1e-9
+        )
+        assert quality["r_squared"] < 1.0
+
+    def test_single_distinct_current_rejected(self):
+        assert compute_multi_point([2.0, 2.0, 2.0], [1.7, 1.7, 1.7]) is None
+
+    def test_zero_voltage_spread_rejected(self):
+        assert compute_multi_point([0.0, 1.0, 2.0], [1.5, 1.5, 1.5]) is None
 
 
 class TestCurrentCalStore:
@@ -128,3 +174,189 @@ class TestPicoLidarCurrentCal:
             assert current["current_a"] == pytest.approx(1.0, abs=1e-9)
         finally:
             lidar.disconnect()
+
+
+class TestMultiPointHelpers:
+    """Pure CLI/threshold helpers for the multi-point flow."""
+
+    def test_parse_currents_basic(self):
+        assert _parse_currents("0,1,2,5,8") == [0.0, 1.0, 2.0, 5.0, 8.0]
+
+    def test_parse_currents_tolerates_spaces_and_trailing_comma(self):
+        assert _parse_currents(" 0 , 1.5 , 3 ,") == [0.0, 1.5, 3.0]
+
+    def test_threshold_uses_2_percent_above_floor(self):
+        # 2% of 8 A = 0.16 A > 20 mA floor.
+        assert _residual_threshold_a([0.0, 1.0, 8.0]) == pytest.approx(0.16)
+
+    def test_threshold_applies_20mA_floor_for_small_currents(self):
+        # 2% of 0.5 A = 10 mA < 20 mA floor.
+        assert _residual_threshold_a([0.0, 0.5]) == pytest.approx(0.020)
+
+
+class TestMultiPointCollection:
+    """Interactive collection and payload assembly (no hardware/Redis)."""
+
+    def test_preset_walks_the_list(self, monkeypatch):
+        # collect_samples returns a voltage per point; feed deterministic values.
+        volts = iter([1.47, 1.59, 1.70, 2.06])
+        monkeypatch.setattr(cc, "collect_samples", lambda t, n: next(volts))
+        # Preset currents; blank Enter accepts each target as the reading.
+        inputs = iter(["", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda *a, **k: next(inputs))
+        currents, voltages = collect_multi_point(
+            transport=None, n_samples=5, currents=[0.0, 1.0, 2.0, 5.0]
+        )
+        assert currents == [0.0, 1.0, 2.0, 5.0]
+        assert voltages == [1.47, 1.59, 1.70, 2.06]
+
+    def test_preset_override_uses_typed_reading(self, monkeypatch):
+        monkeypatch.setattr(cc, "collect_samples", lambda t, n: 1.6)
+        # Operator overrides the second target with a measured 1.05 A.
+        inputs = iter(["", "1.05", ""])
+        monkeypatch.setattr("builtins.input", lambda *a, **k: next(inputs))
+        currents, _v = collect_multi_point(
+            transport=None, n_samples=5, currents=[0.0, 1.0, 2.0]
+        )
+        assert currents == [0.0, 1.05, 2.0]
+
+    def test_loop_until_blank_requires_three_points(self, monkeypatch):
+        monkeypatch.setattr(cc, "collect_samples", lambda t, n: 1.5)
+        # Blank too early is rejected; then three points, then blank to finish.
+        inputs = iter(["", "0", "1", "2", ""])
+        monkeypatch.setattr("builtins.input", lambda *a, **k: next(inputs))
+        currents, voltages = collect_multi_point(
+            transport=None, n_samples=5, currents=None
+        )
+        assert currents == [0.0, 1.0, 2.0]
+        assert len(voltages) == 3
+
+    def test_build_multi_cal_data_shape(self):
+        cal = (1.469, 0.1175)
+        quality = {
+            "residual_rms_v": 0.001,
+            "residual_rms_a": 0.0085,
+            "r_squared": 0.999,
+        }
+        payload = _build_multi_cal_data(
+            cal,
+            n_samples=10,
+            currents=[0.0, 1.0, 2.0],
+            voltages=[1.469, 1.587, 1.704],
+            quality=quality,
+        )
+        assert payload["system_current"] == [1.469, 0.1175]
+        meta = payload["metadata"]
+        assert meta["mode"] == "multi"
+        assert meta["n_points"] == 3
+        assert meta["currents"] == [0.0, 1.0, 2.0]
+        assert meta["voltages"] == [1.469, 1.587, 1.704]
+        assert meta["residual_rms_a"] == pytest.approx(0.0085)
+        assert meta["r_squared"] == pytest.approx(0.999)
+        assert "timestamp" in meta
+
+
+class _FakeProxy:
+    """Stand-in for PicoProxy: always available, send_command is a no-op."""
+
+    is_available = True
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def send_command(self, *args, **kwargs):
+        return None
+
+
+class _FakeTransport:
+    """Stand-in for Transport with a no-op ``.r.bgsave()``."""
+
+    def __init__(self, *args, **kwargs):
+        self.r = self
+
+    def bgsave(self):
+        return None
+
+
+def _spy_store_factory(recorder):
+    """Build a CurrentCalStore stand-in that records uploaded payloads."""
+
+    class _SpyStore:
+        def __init__(self, transport):
+            pass
+
+        def upload(self, payload):
+            recorder.append(payload)
+
+    return _SpyStore
+
+
+class TestMainDispatch:
+    """Drive ``main()`` to lock the storage-gating control flow."""
+
+    def test_bad_fit_prompt_blocks_storage_on_no(self, monkeypatch):
+        """Residual over threshold + operator 'n' aborts before upload."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc,
+            "collect_multi_point",
+            lambda t, n, c: ([0.0, 1.0, 2.0], [1.0, 1.1, 1.2]),
+        )
+        # Force a residual well above the threshold so the gate fires.
+        monkeypatch.setattr(
+            cc,
+            "compute_multi_point",
+            lambda c, v: (
+                (1.0, 0.1175),
+                {
+                    "residual_rms_v": 1.0,
+                    "residual_rms_a": 1.0,
+                    "r_squared": 0.5,
+                },
+            ),
+        )
+        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+        monkeypatch.setattr("sys.argv", ["calibrate-current", "--mode", "multi"])
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert uploaded == []
+
+    def test_currents_under_three_errors_before_collection(self, monkeypatch):
+        """``--currents 0,1`` (2 points) exits before any sample collection."""
+        called = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc,
+            "collect_multi_point",
+            lambda *a, **k: called.append("collect_multi_point"),
+        )
+        monkeypatch.setattr(
+            cc,
+            "collect_samples",
+            lambda *a, **k: called.append("collect_samples"),
+        )
+        monkeypatch.setattr(
+            "sys.argv", ["calibrate-current", "--currents", "0,1"]
+        )
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert called == []
+
+    def test_two_point_metadata_tags_mode(self, monkeypatch):
+        """Default-mode payload carries ``metadata['mode'] == 'two-point'``."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "collect_two_point", lambda t, n: (1.0, 2.0, 5.0)
+        )
+        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+        monkeypatch.setattr("sys.argv", ["calibrate-current"])
+        cc.main()
+        assert len(uploaded) == 1
+        assert uploaded[0]["metadata"]["mode"] == "two-point"
