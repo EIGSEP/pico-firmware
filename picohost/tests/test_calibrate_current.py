@@ -360,3 +360,30 @@ class TestMainDispatch:
         cc.main()
         assert len(uploaded) == 1
         assert uploaded[0]["metadata"]["mode"] == "two-point"
+
+    def test_multi_happy_path_uploads_calibration(self, monkeypatch):
+        """A clean multi fit reaches upload with the right payload shape.
+
+        Uses the real ``compute_multi_point`` so the residual/threshold
+        path is genuinely exercised; the points sit on a clean line, so the
+        residual stays below threshold and no bad-fit prompt fires.
+        """
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc,
+            "collect_multi_point",
+            lambda t, n, c: (
+                [0.0, 1.0, 2.0, 5.0],
+                [1.469, 1.587, 1.704, 2.056],
+            ),
+        )
+        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
+        monkeypatch.setattr("sys.argv", ["calibrate-current", "--mode", "multi"])
+        cc.main()
+        assert len(uploaded) == 1
+        assert len(uploaded[0]["system_current"]) == 2
+        meta = uploaded[0]["metadata"]
+        assert meta["mode"] == "multi"
+        assert meta["n_points"] == 4

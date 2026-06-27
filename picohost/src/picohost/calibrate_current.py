@@ -178,7 +178,7 @@ def compute_multi_point(currents, voltages):
     ss_tot = float(np.sum((voltages - voltages.mean()) ** 2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     residual_rms_a = (
-        abs(residual_rms_v / slope) if slope != 0 else float("inf")
+        abs(residual_rms_v / float(slope)) if slope != 0 else float("inf")
     )
     _warn_on_slope(slope)
     quality = {
@@ -227,11 +227,19 @@ def collect_multi_point(transport, n_samples, currents=None):
 
     if currents is not None:
         for target in currents:
-            raw = input(
-                f"\nDial load to ~{target:g} A; enter measured current "
-                f"[{target:g}]: "
-            ).strip()
-            i_ref = target if raw == "" else float(raw)
+            while True:
+                raw = input(
+                    f"\nDial load to ~{target:g} A; enter measured current "
+                    f"[{target:g}]: "
+                ).strip()
+                if raw == "":
+                    i_ref = target
+                    break
+                try:
+                    i_ref = float(raw)
+                    break
+                except ValueError:
+                    print(f"  '{raw}' is not a number; try again.")
             print("  averaging samples...")
             v = collect_samples(transport, n_samples)
             print(f"  {i_ref:.4f} A: {v:.4f} V")
