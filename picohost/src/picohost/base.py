@@ -853,20 +853,63 @@ class PicoLidar(PicoDevice):
     """
 
     # ACS724-10AB (bidirectional, Vcc/2 zero point, 200 mV/A) read through a
-    # 3.3k (top) / 4.7k (bottom) divider into GP26. Nominal conversion only;
-    # a measured zero-offset calibration is deferred (see design doc).
+    # 3.3k (top) / 4.7k (bottom) divider into GP26. These constants give the
+    # nominal transfer function used until a measured calibration is uploaded.
     _DIVIDER_RATIO = 4.7 / (3.3 + 4.7)   # = 0.5875
     _SENSOR_VQ = 2.5                     # volts at 0 A (Vcc/2)
     _SENSOR_SENSITIVITY = 0.2            # volts per amp
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, current_cal_store=None, **kwargs):
+        """
+        Parameters
+        ----------
+        current_cal_store : picohost.buses.CurrentCalStore, optional
+            Redis-backed two-point current calibration. When provided and
+            the store holds a cal, ``(V0, slope)`` is applied before the
+            first status tick, so a rebooted lidar Pico comes up calibrated
+            from Redis. Falls back to the nominal transfer function when
+            absent. Other args/kwargs pass through to :class:`PicoDevice`.
+        """
+        # (V0, slope) at the ADC pin: I = (V_adc - V0) / slope. None ⇒
+        # nominal conversion. Set before super().__init__ so the handler
+        # never sees an undefined attribute.
+        self._current_cal = None
         super().__init__(*args, **kwargs)
+        if current_cal_store is not None:
+            cal = current_cal_store.get()
+            if cal is not None and "system_current" in cal:
+                self._current_cal = tuple(cal["system_current"])
         if self.redis_handler is not None:
             self._base_redis_handler = self.redis_handler
             self.redis_handler = self._lidar_redis_handler
 
+    @property
+    def is_current_calibrated(self):
+        """True when a measured two-point current cal is loaded."""
+        return self._current_cal is not None
+
+    def set_calibration(self, system_current_params=None):
+        """Set the two-point current calibration.
+
+        Parameters
+        ----------
+        system_current_params : sequence of (float, float), optional
+            ``(V0, slope)`` such that ``I = (V_adc - V0) / slope``.
+            ``calibrate-current`` pushes this to the running device so a new
+            cal takes effect on the next status tick without a restart.
+        """
+        if system_current_params is not None:
+            self._current_cal = tuple(system_current_params)
+
     def _v_to_current(self, v_adc):
-        """Convert the raw ADC-pin voltage to amps (nominal, no zero cal)."""
+        """Convert the raw ADC-pin voltage to amps.
+
+        Uses the measured two-point cal ``(V0, slope)`` when one is loaded,
+        otherwise the nominal ACS724 + divider transfer function.
+        """
+        if self._current_cal is not None:
+            v0, slope = self._current_cal
+            return (v_adc - v0) / slope
         v_sensor = v_adc / self._DIVIDER_RATIO
         return (v_sensor - self._SENSOR_VQ) / self._SENSOR_SENSITIVITY
 

@@ -29,6 +29,7 @@ flash-picos = "picohost.flash_picos:main"
 flash-test = "picohost.flash_test:main"
 pico-manager = "picohost.manager:main"
 calibrate-pot = "picohost.calibrate_pot:main"
+calibrate-current = "picohost.calibrate_current:main"
 picohost-resolve = "picohost.resolve:main"
 pico-gpio = "picohost.gpio:main"
 

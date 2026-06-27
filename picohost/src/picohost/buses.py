@@ -45,6 +45,7 @@ import logging
 from eigsep_redis import SingleStreamReader, SingleStreamWriter
 
 from .keys import (
+    CURRENT_CAL_KEY,
     MOTOR_POS_KEY,
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
@@ -176,6 +177,67 @@ class PotCalStore:
     def clear(self):
         """Delete the stored calibration."""
         self.transport.r.delete(POT_CAL_KEY)
+
+
+class CurrentCalStore:
+    """
+    Persistent single-key store for the whole-system current monitor.
+
+    The value under :data:`CURRENT_CAL_KEY` is a JSON object shaped like
+    ``{"system_current": [V0, slope], "metadata": {...},
+    "upload_time": ...}`` — the canonical ``upload_time`` field is injected
+    by :meth:`Transport.upload_dict` at the top level. ``system_current`` is
+    the two-point calibration: ``V0`` is the raw ADC voltage at 0 A and
+    ``slope`` is V/A *at the ADC pin* (it absorbs both the divider ratio and
+    the ACS724 sensitivity), so ``I = (V_adc - V0) / slope``.
+
+    ``calibrate-current`` uploads after each calibration run. A fresh
+    :class:`picohost.PicoLidar` reads this store at ``__init__`` time when
+    given a :class:`CurrentCalStore` and applies the cal before the first
+    status tick — so the lidar Pico hosting the current sensor comes up
+    calibrated from Redis after a reboot, with no on-disk file.
+    """
+
+    def __init__(self, transport):
+        self.transport = transport
+
+    def upload(self, cal):
+        """Upload calibration parameters.
+
+        Parameters
+        ----------
+        cal : dict
+            Must carry a ``system_current`` entry, a ``(V0, slope)`` pair
+            (list or tuple). Extra fields (e.g. ``metadata``) are preserved
+            verbatim.
+        """
+        self.transport.upload_dict(cal, CURRENT_CAL_KEY)
+
+    def get(self):
+        """Return the stored calibration dict.
+
+        Returns
+        -------
+        dict or None
+            ``None`` if no calibration has been uploaded, or if the stored
+            JSON fails to decode. The caller falls back to the nominal
+            transfer function.
+        """
+        raw = self.transport.get_raw(CURRENT_CAL_KEY)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Corrupted {CURRENT_CAL_KEY} in Redis ({e}); "
+                "falling back to nominal current conversion."
+            )
+            return None
+
+    def clear(self):
+        """Delete the stored calibration."""
+        self.transport.r.delete(CURRENT_CAL_KEY)
 
 
 class MotorPositionStore:

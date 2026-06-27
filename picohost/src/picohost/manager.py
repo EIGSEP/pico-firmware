@@ -52,6 +52,7 @@ from .base import (
     PicoRFSwitch,
 )
 from .buses import (
+    CurrentCalStore,
     MotorPositionStore,
     PicoClaimStore,
     PicoCmdReader,
@@ -145,6 +146,7 @@ class PicoManager:
             per-device :class:`HeartbeatWriter`,
             :class:`StatusWriter`, :class:`PicoConfigStore`,
             :class:`PotCalStore` (passed to ``PicoPotentiometer``),
+            :class:`CurrentCalStore` (passed to ``PicoLidar``),
             :class:`PicoCmdReader`, :class:`PicoRespWriter`, and
             :class:`PicoClaimStore`.
         """
@@ -154,6 +156,7 @@ class PicoManager:
         self._metadata_writer = MetadataWriter(transport)
         self._config_store = PicoConfigStore(transport)
         self._pot_cal_store = PotCalStore(transport)
+        self._current_cal_store = CurrentCalStore(transport)
         self._motor_pos_store = MotorPositionStore(transport)
         self._cmd_reader = PicoCmdReader(transport)
         self._resp_writer = PicoRespWriter(transport)
@@ -245,6 +248,8 @@ class PicoManager:
             }
             if cls is PicoPotentiometer:
                 kwargs["pot_cal_store"] = self._pot_cal_store
+            elif cls is PicoLidar:
+                kwargs["current_cal_store"] = self._current_cal_store
             elif cls is PicoMotor:
                 kwargs["motor_pos_store"] = self._motor_pos_store
             try:
