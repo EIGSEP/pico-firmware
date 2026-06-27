@@ -2,8 +2,8 @@
 #include "hardware/adc.h"
 #include "pico/stdlib.h"
 
-#define CURRENTMON_GPIO         28
-#define CURRENTMON_ADC_CH       2
+#define CURRENTMON_GPIO         26
+#define CURRENTMON_ADC_CH       0   // GP26 is ADC0 (GP27=ADC1, GP28=ADC2)
 #define CURRENTMON_ADC_SAMPLES  16
 #define CURRENTMON_ADC_MAX      4095.0f
 #define CURRENTMON_VREF         3.3f

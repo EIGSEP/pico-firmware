@@ -190,6 +190,29 @@ Two BNO08x IMUs in UART RVC mode, one per axis. Each runs on a separate Pico wit
 | 3 | `imu_el` | Elevation |
 | 6 | `imu_az` | Azimuth |
 
+### System Current Monitor Wiring (co-located on the APP_LIDAR Pico)
+
+A whole-system current monitor (ACS724-10AB, bidirectional, 200 mV/A) sampled on the lidar Pico — lidar is I2C-only, so the sensor is the sole occupant of that Pico's ADC mux (no `adc_select_input` swapping, no potmon-style crosstalk). It publishes to Redis under `metadata['system_current']` (never names "lidar").
+
+| Signal | GPIO | ADC Channel | JSON Key |
+|--------|------|-------------|----------|
+| Current sense | **26** | **0** | `current_voltage` (raw ADC volts) → host derives `current_a` |
+
+The ACS724 OUT pin feeds GP26 through a resistive divider that keeps the 5 V sensor under the 3.3 V ADC ceiling:
+
+```
+ACS724 OUT ──[ R1 = 3.3 kΩ ]──┬── GP26 (ADC0)
+                              │
+                          [ R2 = 4.7 kΩ ]   to GND
+                              │
+                             GND
+```
+
+- Divider ratio `k = R2/(R1+R2) = 4.7/(3.3+4.7) = 0.5875`. Maps `0 A → 1.47 V`, `10 A → 2.64 V` at the ADC pin.
+- Zero point `Vq = 2.5 V` (Vcc/2, bidirectional); sensitivity `S = 0.2 V/A`. Host conversion: `I = (V_adc/k − Vq)/S` (`PicoLidar` in `picohost/src/picohost/base.py`).
+- Wire `IP+ → IP−` so output rises **above** 2.5 V (forward half); if reversed, flip the sign in the conversion.
+- No decoupling capacitor is currently fitted. An optional 100 nF from GP26 to GND would anti-alias ACS724 noise if a reading proves jittery, but it is not required.
+
 ## 5. Install Python Host Library (Optional)
 
 For controlling devices from a host computer:
