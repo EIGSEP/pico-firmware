@@ -129,3 +129,18 @@ def test_imu_az_field_set_stable_across_cal_state():
     after = set(_capture(dev, _az_status(30, 70, 100)))
     assert before == after
     dev.disconnect()
+
+
+def test_emulator_to_handler_roundtrip_identity_mount():
+    """Emulator renders a known pose; handler recovers az/el with a cal
+    whose mount matches the emulator's (identity)."""
+    dev = DummyPicoIMU(
+        "/dev/dummy"
+    )  # app_id 3 default -> name imu_el? see note
+    dev.set_calibration(imu_az=_AZ_CAL)
+    # craft an imu_az status straight from the forward model at (el=35, az=80)
+    pub = _capture(dev, _az_status(35.0, 80.0 - 30.0, 80.0 - 30.0))
+    # az_accel_offset is +30 so phi=50 -> az 80; yaw 50 -> az 80
+    assert pub["el_deg"] == pytest.approx(35.0, abs=1e-3)
+    assert pub["az_deg"] == pytest.approx(80.0, abs=1e-3)
+    dev.disconnect()
