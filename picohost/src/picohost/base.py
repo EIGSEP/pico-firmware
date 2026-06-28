@@ -12,6 +12,7 @@ from serial import Serial
 from serial.tools import list_ports
 
 from .flash_picos import find_pico_ports
+from . import imu_geometry as ig
 
 logger = logging.getLogger(__name__)
 
@@ -836,9 +837,94 @@ class PicoPeltier(PicoDevice):
 
 
 class PicoIMU(PicoDevice):
-    """Specialized class for IMU devices (BNO08x UART RVC mode)."""
+    """IMU device (BNO08x UART RVC mode) with live az/el conversion.
 
-    pass
+    Loads its mount calibration from an :class:`ImuCalStore` section keyed
+    by sensor name (``imu_el`` / ``imu_az``) and augments each status tick
+    with derived angles. ``imu_az`` reports az + el; ``imu_el`` reports el
+    only (it cannot observe azimuth). All derived fields are ``None`` when
+    that IMU is uncalibrated, so the published shape is stable.
+    """
+
+    def __init__(self, *args, imu_cal_store=None, **kwargs):
+        # {"imu_el": {...}, "imu_az": {...}} — only loaded sections present.
+        self._imu_cal = {}
+        super().__init__(*args, **kwargs)
+        if imu_cal_store is not None:
+            cal = imu_cal_store.get()
+            if cal:
+                for key in ("imu_el", "imu_az"):
+                    if key in cal:
+                        self._imu_cal[key] = cal[key]
+        if self.redis_handler is not None:
+            self._base_redis_handler = self.redis_handler
+            self.redis_handler = self._imu_redis_handler
+
+    def set_calibration(self, imu_el=None, imu_az=None):
+        """Merge per-IMU calibration sections (live push from calibrate_imu)."""
+        if imu_el is not None:
+            self._imu_cal["imu_el"] = imu_el
+        if imu_az is not None:
+            self._imu_cal["imu_az"] = imu_az
+
+    @staticmethod
+    def _accel_unit(data, cal):
+        a = [data.get("accel_x"), data.get("accel_y"), data.get("accel_z")]
+        if any(v is None for v in a):
+            return None
+        return ig.precondition(a, cal["accel_bias"])
+
+    def _imu_redis_handler(self, data):
+        data = data.copy()
+        name = data.get("sensor_name")
+        cal = self._imu_cal.get(name)
+        if name == "imu_el":
+            data["el_deg"] = self._el_only(data, cal)
+        elif name == "imu_az":
+            data.update(self._az_and_el(data, cal))
+        self._base_redis_handler(data)
+
+    def _el_only(self, data, cal):
+        if cal is None:
+            return None
+        a = self._accel_unit(data, cal)
+        if a is None:
+            return None
+        return ig.el_from_imu(a, cal["M"])
+
+    def _az_and_el(self, data, cal):
+        out = {
+            "el_deg": None,
+            "az_deg": None,
+            "az_from_accel_deg": None,
+            "az_from_yaw_deg": None,
+            "az_blend_weight": None,
+        }
+        if cal is None:
+            return out
+        a = self._accel_unit(data, cal)
+        if a is None:
+            return out
+        M = cal["M"]
+        el = ig.el_abs_from_imu_az(a, M)
+        az_a = ig.az_from_accel(
+            a, M, cal["az_sign"], cal["az_accel_offset_deg"]
+        )
+        out["el_deg"] = el
+        out["az_from_accel_deg"] = az_a
+        yaw = data.get("yaw")
+        if yaw is not None:
+            az_y = ig.az_from_yaw(
+                yaw, cal["az_yaw_sign"], cal["az_yaw_offset_deg"]
+            )
+            az, w = ig.blend_az(az_a, az_y, el, cal["theta_cross_deg"])
+            out["az_from_yaw_deg"] = az_y
+            out["az_deg"] = az
+            out["az_blend_weight"] = w
+        else:
+            out["az_deg"] = az_a
+            out["az_blend_weight"] = 1.0
+        return out
 
 
 class PicoLidar(PicoDevice):
