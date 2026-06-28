@@ -952,18 +952,42 @@ class TestImuEmulator:
         mag = np.sqrt(emu.accel_x**2 + emu.accel_y**2 + emu.accel_z**2)
         assert abs(mag - 9.81) < 0.1
 
-    def test_euler_from_angles(self):
-        """Setting az/el angles produces matching yaw/pitch.
+    def test_set_orientation_drives_accel_via_forward_model(self):
+        import numpy as np
+        from picohost import imu_geometry as ig
 
-        NOTE: assumes yaw=az, pitch=el — needs hardware verification.
-        See TODO in emulators/imu.py.
-        """
-        emu = ImuEmulator()
-        emu.az_angle = np.pi / 4  # 45 degrees azimuth
-        emu.el_angle = np.pi / 6  # 30 degrees elevation
+        emu = ImuEmulator(app_id=6)  # imu_az, identity mount
+        emu.set_orientation(az_deg=70.0, el_deg=40.0)
         emu.op()
-        assert abs(emu.yaw - 45.0) < 1.0
-        assert abs(emu.pitch - 30.0) < 1.0
+        s = emu.get_status()
+        a = np.array([s["accel_x"], s["accel_y"], s["accel_z"]])
+        a_unit = a / np.linalg.norm(a)
+        el = ig.el_abs_from_imu_az(a_unit, np.eye(3))
+        az = ig.az_from_accel(a_unit, np.eye(3))
+        assert el == pytest.approx(40.0, abs=1e-3)
+        assert az == pytest.approx(70.0, abs=1e-3)
+
+    def test_accel_error_scales_norm(self):
+        import numpy as np
+
+        emu = ImuEmulator(app_id=6)
+        emu.set_orientation(az_deg=0.0, el_deg=20.0)
+        emu.set_accel_error(bias=(0.2, -0.1, 0.0), scale=12.2 / 9.80665)
+        emu.op()
+        s = emu.get_status()
+        a = np.array([s["accel_x"], s["accel_y"], s["accel_z"]])
+        assert np.linalg.norm(a) > 11.0  # inflated like the 0627 data
+
+    def test_mount_changes_body_frame_reading(self):
+        import numpy as np
+
+        emu = ImuEmulator(app_id=3)  # imu_el
+        emu.set_mount(np.array([[0, 1.0, 0], [-1.0, 0, 0], [0, 0, 1.0]]))
+        emu.set_orientation(az_deg=0.0, el_deg=30.0)
+        emu.op()
+        s = emu.get_status()
+        # with this mount the elevation tilt shows up on accel_x not accel_y
+        assert abs(s["accel_x"]) > abs(s["accel_y"])
 
     def test_sensor_failure_triggers_reinit(self):
         """IMU reports error after event timeout, then recovers."""
