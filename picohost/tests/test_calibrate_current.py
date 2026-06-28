@@ -319,9 +319,13 @@ class TestMainDispatch:
                 },
             ),
         )
-        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
         monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
-        monkeypatch.setattr("sys.argv", ["calibrate-current", "--mode", "multi"])
+        monkeypatch.setattr(
+            "sys.argv", ["calibrate-current", "--mode", "multi"]
+        )
         with pytest.raises(SystemExit):
             cc.main()
         assert uploaded == []
@@ -356,7 +360,9 @@ class TestMainDispatch:
         monkeypatch.setattr(
             cc, "collect_two_point", lambda t, n: (1.0, 2.0, 5.0)
         )
-        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
         monkeypatch.setattr("builtins.input", lambda *a, **k: "")
         monkeypatch.setattr("sys.argv", ["calibrate-current"])
         cc.main()
@@ -381,8 +387,12 @@ class TestMainDispatch:
                 [1.469, 1.587, 1.704, 2.056],
             ),
         )
-        monkeypatch.setattr(cc, "CurrentCalStore", _spy_store_factory(uploaded))
-        monkeypatch.setattr("sys.argv", ["calibrate-current", "--mode", "multi"])
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv", ["calibrate-current", "--mode", "multi"]
+        )
         cc.main()
         assert len(uploaded) == 1
         assert len(uploaded[0]["system_current"]) == 2

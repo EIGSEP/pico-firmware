@@ -173,8 +173,8 @@ def compute_multi_point(currents, voltages):
         return None
     slope, v0 = np.polyfit(currents, voltages, 1)
     residuals = voltages - (slope * currents + v0)
-    residual_rms_v = float(np.sqrt(np.mean(residuals ** 2)))
-    ss_res = float(np.sum(residuals ** 2))
+    residual_rms_v = float(np.sqrt(np.mean(residuals**2)))
+    ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((voltages - voltages.mean()) ** 2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     residual_rms_a = (
@@ -286,9 +286,7 @@ def _print_point_table(currents, voltages, cal):
         fit_v = slope * i + v0
         dv = v - fit_v
         di = dv / slope if slope else float("inf")
-        print(
-            f"  {idx:>5}{i:11.4f}{v:11.4f}{dv * 1e3:12.2f}{di * 1e3:12.2f}"
-        )
+        print(f"  {idx:>5}{i:11.4f}{v:11.4f}{dv * 1e3:12.2f}{di * 1e3:12.2f}")
 
 
 def _build_multi_cal_data(cal, n_samples, currents, voltages, quality):

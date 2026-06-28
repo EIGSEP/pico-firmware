@@ -1096,7 +1096,10 @@ class TestLidarRedisHandler:
                     "current_voltage": 2.5 * (4.64 / 7.96),  # = Vq * k → 0 A
                 },
             )
-            assert [p["sensor_name"] for p in pub] == ["lidar", "system_current"]
+            assert [p["sensor_name"] for p in pub] == [
+                "lidar",
+                "system_current",
+            ]
             # lidar entry keeps distance, drops the current field
             assert pub[0]["distance_m"] == 1.23
             assert "current_voltage" not in pub[0]
@@ -1131,14 +1134,14 @@ class TestLidarRedisHandler:
                 lidar,
                 {
                     "sensor_name": "lidar",
-                    "status": "error",        # lidar I2C failed this cycle
+                    "status": "error",  # lidar I2C failed this cycle
                     "app_id": 4,
                     "distance_m": 9.9,
                     "current_voltage": 2.9 * (4.64 / 7.96),  # 2 A
                 },
             )
-            assert pub[0]["status"] == "error"     # lidar half still errors
-            assert pub[1]["status"] == "update"    # current half independent
+            assert pub[0]["status"] == "error"  # lidar half still errors
+            assert pub[1]["status"] == "update"  # current half independent
             assert pub[1]["current_a"] == pytest.approx(2.0, abs=1e-6)
         finally:
             lidar.disconnect()
@@ -1150,8 +1153,12 @@ class TestLidarRedisHandler:
         try:
             pub = self._capture(
                 lidar,
-                {"sensor_name": "lidar", "status": "update", "app_id": 4,
-                 "distance_m": 2.0},
+                {
+                    "sensor_name": "lidar",
+                    "status": "update",
+                    "app_id": 4,
+                    "distance_m": 2.0,
+                },
             )
             assert [p["sensor_name"] for p in pub] == ["lidar"]
         finally:
