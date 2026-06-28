@@ -43,3 +43,43 @@ def test_precondition_batched():
     a = np.array([[3.0, 0.0, 0.0], [0.0, 0.0, -2.0]])
     u = ig.precondition(a, bias)
     assert np.allclose(np.linalg.norm(u, axis=1), 1.0)
+
+
+def test_kabsch_recovers_known_rotation():
+    M_true = ig.R_z(0.7) @ ig.R_x(0.3)
+    rng = np.random.default_rng(1)
+    body = rng.normal(size=(50, 3))
+    body /= np.linalg.norm(body, axis=1, keepdims=True)
+    host = (M_true @ body.T).T
+    M = ig.kabsch(body, host)
+    assert np.allclose(M, M_true, atol=1e-9)
+    assert np.isclose(np.linalg.det(M), 1.0)
+
+
+def test_fit_plane_normal_of_circle():
+    # points on a circle in the x-y plane -> normal is +/- z
+    ang = np.linspace(0, 2 * np.pi, 40, endpoint=False)
+    pts = np.column_stack([np.cos(ang), np.sin(ang), np.zeros_like(ang)])
+    n = ig.fit_plane_normal(pts)
+    assert np.allclose(np.abs(n), [0, 0, 1], atol=1e-9)
+
+
+def test_nearest_signed_permutation_identity():
+    labels, misalign = ig.nearest_signed_permutation(np.eye(3))
+    assert labels == ["+x", "+y", "+z"]
+    assert misalign == pytest.approx(0.0, abs=1e-9)
+
+
+def test_nearest_signed_permutation_swapped_axes():
+    # body x -> host +y, body y -> host -x, body z -> host +z
+    M = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    labels, misalign = ig.nearest_signed_permutation(M)
+    assert labels == ["+y", "-x", "+z"]
+    assert misalign == pytest.approx(0.0, abs=1e-9)
+
+
+def test_nearest_signed_permutation_reports_small_misalignment():
+    M = ig.R_z(np.radians(4.0))  # 4 deg off identity
+    labels, misalign = ig.nearest_signed_permutation(M)
+    assert labels == ["+x", "+y", "+z"]
+    assert misalign == pytest.approx(4.0, abs=1e-6)

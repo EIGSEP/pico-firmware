@@ -49,3 +49,46 @@ def precondition(a, bias):
     a = np.asarray(a, dtype=float) - np.asarray(bias, dtype=float)
     n = np.linalg.norm(a, axis=-1, keepdims=True)
     return a / n
+
+
+_AXES = {
+    "+x": np.array([1.0, 0.0, 0.0]),
+    "-x": np.array([-1.0, 0.0, 0.0]),
+    "+y": np.array([0.0, 1.0, 0.0]),
+    "-y": np.array([0.0, -1.0, 0.0]),
+    "+z": np.array([0.0, 0.0, 1.0]),
+    "-z": np.array([0.0, 0.0, -1.0]),
+}
+
+
+def kabsch(body, host):
+    """Proper rotation M minimizing sum |M @ body_i - host_i|^2."""
+    B = np.asarray(body, dtype=float)
+    H = np.asarray(host, dtype=float)
+    C = H.T @ B  # 3x3 = sum host_i body_i^T
+    U, _, Vt = np.linalg.svd(C)
+    D = np.diag([1.0, 1.0, np.sign(np.linalg.det(U @ Vt))])
+    return U @ D @ Vt
+
+
+def fit_plane_normal(unit_vectors):
+    """Normal of the best-fit plane (PCA smallest-variance direction)."""
+    X = np.asarray(unit_vectors, dtype=float)
+    Xc = X - X.mean(axis=0)
+    _, _, Vt = np.linalg.svd(Xc)
+    return Vt[-1]
+
+
+def nearest_signed_permutation(M):
+    """Nearest signed-permutation mount + residual misalignment angle (deg).
+
+    Column k of M is body-axis k expressed in the host frame, so the label
+    for column k is the host axis it points most nearly along.
+    """
+    M = np.asarray(M, dtype=float)
+    labels = [max(_AXES, key=lambda k: M[:, c] @ _AXES[k]) for c in range(3)]
+    P = np.column_stack([_AXES[lbl] for lbl in labels])
+    R = M @ P.T
+    cos = (np.trace(R) - 1.0) / 2.0
+    misalign = float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+    return labels, misalign
