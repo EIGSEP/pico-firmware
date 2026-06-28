@@ -12,7 +12,7 @@ import pytest
 from eigsep_redis import HeartbeatReader
 from eigsep_redis.testing import DummyTransport
 
-from picohost.buses import PicoConfigStore
+from picohost.buses import ImuCalStore, PicoConfigStore
 from picohost.keys import (
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
@@ -29,6 +29,7 @@ from picohost.manager import (
     _BLOCKED_ACTIONS,
 )
 from picohost.testing import (
+    DummyPicoIMU,
     DummyPicoMotor,
     DummyPicoPeltier,
     DummyPicoRFSwitch,
@@ -515,6 +516,32 @@ class TestDiscoverNew:
         )
         mgr._discover_new()
         assert mgr.picos == {}
+
+    def test_imu_cal_store_passed_to_pico_imu(self, mgr, monkeypatch):
+        """_register_devices wires imu_cal_store into PicoIMU at init."""
+        import picohost.manager as mgr_mod
+
+        _AZ_CAL = {
+            "accel_bias": [0.0, 0.0, 0.0],
+            "accel_scale": 1.0,
+            "M": [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],
+            "az_accel_offset_deg": 30.0,
+            "az_sign": 1.0,
+            "az_yaw_offset_deg": 30.0,
+            "az_yaw_sign": 1.0,
+            "theta_cross_deg": 1.6,
+        }
+        # Pre-populate the manager's ImuCalStore before discovery.
+        mgr._imu_cal_store.upload({"imu_az": _AZ_CAL})
+        monkeypatch.setitem(mgr_mod.PICO_CLASSES, "imu_az", DummyPicoIMU)
+        mgr._register_devices(
+            [{"app_id": 6, "port": "/dev/dummy", "usb_serial": ""}]
+        )
+        dev = mgr.picos["imu_az"]
+        try:
+            assert dev._imu_cal.get("imu_az") == _AZ_CAL
+        finally:
+            dev.disconnect()
 
     def test_mute_probe_does_not_adopt(self, mgr, monkeypatch):
         import picohost.manager as mgr_mod

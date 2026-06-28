@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
+from eigsep_redis.testing import DummyTransport
 
 from picohost import imu_geometry as ig
+from picohost.buses import ImuCalStore
 from picohost.testing import DummyPicoIMU
 
 _SCALARS = (str, int, float, bool, type(None))
@@ -131,12 +133,67 @@ def test_imu_az_field_set_stable_across_cal_state():
     dev.disconnect()
 
 
+def test_imu_cal_store_loads_at_init():
+    """ImuCalStore pre-populated before construction is applied at init time."""
+    transport = DummyTransport()
+    store = ImuCalStore(transport)
+    store.upload({"imu_az": _AZ_CAL})
+    dev = DummyPicoIMU("/dev/dummy", imu_cal_store=store)
+    try:
+        assert dev._imu_cal.get("imu_az") == _AZ_CAL
+    finally:
+        dev.disconnect()
+
+
+def test_imu_el_uncalibrated_publishes_none_el_no_az_keys():
+    """Uncalibrated imu_el: el_deg is None and no az keys are emitted."""
+    dev = DummyPicoIMU("/dev/dummy", name="imu_el")
+    th = np.radians(25.0)
+    data = {
+        "sensor_name": "imu_el",
+        "status": "update",
+        "app_id": 3,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0,
+        "accel_x": 0.0,
+        "accel_y": float(np.sin(th)),
+        "accel_z": float(np.cos(th)),
+    }
+    pub = _capture(dev, data)
+    assert pub["el_deg"] is None
+    assert "az_deg" not in pub
+    dev.disconnect()
+
+
+def test_imu_el_calibrated_published_dict_is_scalar_only():
+    """Calibrated imu_el: every published value is a scalar (no lists/dicts)."""
+    dev = DummyPicoIMU("/dev/dummy", name="imu_el")
+    dev.set_calibration(imu_el=_EL_CAL)
+    th = np.radians(25.0)
+    data = {
+        "sensor_name": "imu_el",
+        "status": "update",
+        "app_id": 3,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0,
+        "accel_x": 0.0,
+        "accel_y": float(np.sin(th)),
+        "accel_z": float(np.cos(th)),
+    }
+    pub = _capture(dev, data)
+    for k, v in pub.items():
+        assert isinstance(v, _SCALARS), f"{k!r} is {type(v).__name__}"
+    dev.disconnect()
+
+
 def test_emulator_to_handler_roundtrip_identity_mount():
-    """Emulator renders a known pose; handler recovers az/el with a cal
-    whose mount matches the emulator's (identity)."""
+    """Forward-model status dict at a known pose; handler recovers az/el
+    with a cal whose mount matches the forward model's (identity)."""
     dev = DummyPicoIMU(
         "/dev/dummy"
-    )  # app_id 3 default -> name imu_el? see note
+    )  # handler keys off data["sensor_name"], not the device name
     dev.set_calibration(imu_az=_AZ_CAL)
     # craft an imu_az status straight from the forward model at (el=35, az=80)
     pub = _capture(dev, _az_status(35.0, 80.0 - 30.0, 80.0 - 30.0))

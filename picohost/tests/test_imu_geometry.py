@@ -270,3 +270,7 @@ def test_fit_calibration_full_reproduces_truth():
     assert (
         "mount_perm" in cal["imu_az"] and "mount_misalign_deg" in cal["imu_az"]
     )
+    # yaw registration: pot = -phi + 40, yaw = -phi => pot = yaw + 40
+    # => sign = +1, offset = +40
+    assert cal["imu_az"]["az_yaw_sign"] == pytest.approx(1.0)
+    assert cal["imu_az"]["az_yaw_offset_deg"] == pytest.approx(40.0, abs=1.0)

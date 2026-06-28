@@ -844,6 +844,12 @@ class PicoIMU(PicoDevice):
     with derived angles. ``imu_az`` reports az + el; ``imu_el`` reports el
     only (it cannot observe azimuth). All derived fields are ``None`` when
     that IMU is uncalibrated, so the published shape is stable.
+
+    Note on ``el_deg`` sign convention: ``imu_el.el_deg`` is SIGNED
+    (``el_from_imu``, negative below horizontal), while ``imu_az.el_deg``
+    is the unsigned magnitude |θ| (``el_abs_from_imu_az``, assumes θ≥0 for
+    a single-tick az estimate). Downstream consumers must account for this
+    difference.
     """
 
     def __init__(self, *args, imu_cal_store=None, **kwargs):
