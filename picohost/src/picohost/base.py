@@ -857,8 +857,8 @@ class PicoLidar(PicoDevice):
     # These constants give the nominal transfer function used until a measured
     # calibration is uploaded.
     _DIVIDER_RATIO = 4.64 / (3.32 + 4.64)  # = 0.5829 (measured)
-    _SENSOR_VQ = 2.5                     # volts at 0 A (Vcc/2)
-    _SENSOR_SENSITIVITY = 0.2            # volts per amp
+    _SENSOR_VQ = 2.5  # volts at 0 A (Vcc/2)
+    _SENSOR_SENSITIVITY = 0.2  # volts per amp
 
     def __init__(self, *args, current_cal_store=None, **kwargs):
         """
@@ -939,7 +939,9 @@ class PicoLidar(PicoDevice):
                     "current_a": self._v_to_current(v),
                 }
             )
-        elif data.get("sensor_name") == "lidar" and not self._warned_no_current:
+        elif (
+            data.get("sensor_name") == "lidar" and not self._warned_no_current
+        ):
             # The firmware↔host contract for current rides on this field name.
             # If it vanishes, system_current stops updating with no other
             # symptom — surface it once rather than failing silently.

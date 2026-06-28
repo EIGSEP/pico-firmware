@@ -427,12 +427,12 @@ class TestLidarProtocol:
         refreshes every cycle even when the lidar I2C read fails."""
         emu = LidarEmulator()
         emu.op()
-        first = emu.get_status()["current_voltage"]
+        emu.get_status()["current_voltage"]
         emu.simulate_sensor_failure()
         emu.op()
         bad = emu.get_status()
-        assert bad["status"] == "error"          # lidar half failed
-        assert "current_voltage" in bad           # current half still present
+        assert bad["status"] == "error"  # lidar half failed
+        assert "current_voltage" in bad  # current half still present
         assert isinstance(bad["current_voltage"], float)
 
     def test_status_is_per_cycle(self):
