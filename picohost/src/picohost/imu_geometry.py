@@ -136,8 +136,11 @@ def blend_az(az_accel_deg, az_yaw_deg, el_deg, theta_cross_deg):
     weight ramps 0 -> 1 as |el| goes 0 -> 2*theta_cross_deg.
     Interpolation takes the shortest circular path from yaw toward accel.
     When w reaches 1 the accel value is returned directly (avoids an
-    off-by-360 at the wrap boundary).
+    off-by-360 at the wrap boundary). A non-positive theta_cross_deg is a
+    misconfiguration and degrades to all-accel rather than dividing by zero.
     """
+    if theta_cross_deg <= 0:
+        return float(az_accel_deg), 1.0
     w = float(np.clip(abs(el_deg) / (2.0 * theta_cross_deg), 0.0, 1.0))
     if w >= 1.0:
         return float(az_accel_deg), w

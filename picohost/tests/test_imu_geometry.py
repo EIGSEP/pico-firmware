@@ -151,6 +151,13 @@ def test_blend_az_takes_shortest_circular_path():
     assert mid == pytest.approx(360.0, abs=1e-6)  # halfway across the wrap
 
 
+def test_blend_az_zero_cross_defaults_to_accel():
+    # misconfigured crossover -> degrade to all-accel, never divide by zero
+    az, w = ig.blend_az(104.0, 100.0, el_deg=10.0, theta_cross_deg=0.0)
+    assert az == pytest.approx(104.0)
+    assert w == pytest.approx(1.0)
+
+
 def test_estimate_theta_phi_round_trip():
     M_el, M_az = ig.R_x(0.2), ig.R_z(-0.4) @ ig.R_y(0.1)
     theta_t, phi_t = 35.0, -60.0
