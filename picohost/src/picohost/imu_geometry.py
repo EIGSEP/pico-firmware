@@ -92,3 +92,67 @@ def nearest_signed_permutation(M):
     cos = (np.trace(R) - 1.0) / 2.0
     misalign = float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
     return labels, misalign
+
+
+# ---------------------------------------------------------------------------
+# Task 3: handler-facing estimators
+# ---------------------------------------------------------------------------
+
+
+def _wrap180(x):
+    return (x + 180.0) % 360.0 - 180.0
+
+
+def el_from_imu(a_unit, M):
+    """Signed elevation (deg) for imu_el: arctan2(g_y, g_z) in box frame."""
+    g = np.asarray(M, dtype=float) @ np.asarray(a_unit, dtype=float)
+    return float(np.degrees(np.arctan2(g[1], g[2])))
+
+
+def el_abs_from_imu_az(a_unit, M):
+    """|theta| (deg) for imu_az; assumes theta >= 0 for the single-tick case."""
+    g = np.asarray(M, dtype=float) @ np.asarray(a_unit, dtype=float)
+    return float(np.degrees(np.arccos(np.clip(g[2], -1.0, 1.0))))
+
+
+def az_from_accel(a_unit, M, az_sign=1.0, az_offset_deg=0.0):
+    """Azimuth (deg) from the imu_az preconditioned accel, with sign/offset.
+
+    theta >= 0 is assumed (single-tick imu_az), so sign(sin theta) = +1.
+    """
+    g = np.asarray(M, dtype=float) @ np.asarray(a_unit, dtype=float)
+    phi = np.degrees(np.arctan2(g[0], g[1]))
+    return float(az_sign * phi + az_offset_deg)
+
+
+def az_from_yaw(yaw_deg, az_yaw_sign=1.0, az_yaw_offset_deg=0.0):
+    """Azimuth (deg) from BNO08x yaw with sign/offset registration."""
+    return float(az_yaw_sign * yaw_deg + az_yaw_offset_deg)
+
+
+def blend_az(az_accel_deg, az_yaw_deg, el_deg, theta_cross_deg):
+    """Tilt-weighted circular blend: yaw near level, accel when tilted.
+
+    weight ramps 0 -> 1 as |el| goes 0 -> 2*theta_cross_deg.
+    Interpolation takes the shortest circular path from yaw toward accel.
+    When w reaches 1 the accel value is returned directly (avoids an
+    off-by-360 at the wrap boundary).
+    """
+    w = float(np.clip(abs(el_deg) / (2.0 * theta_cross_deg), 0.0, 1.0))
+    if w >= 1.0:
+        return float(az_accel_deg), w
+    delta = _wrap180(az_accel_deg - az_yaw_deg)
+    return float(az_yaw_deg + w * delta), w
+
+
+def estimate_theta_phi_from_accel(a_el, a_az, M_el, M_az):
+    """Closed-form (theta_deg, phi_deg) from two preconditioned accel vectors.
+
+    Port of the notebook inverse. phi is degenerate where sin(theta) -> 0.
+    """
+    g_box = np.asarray(M_el, dtype=float) @ np.asarray(a_el, dtype=float)
+    g_tt = np.asarray(M_az, dtype=float) @ np.asarray(a_az, dtype=float)
+    theta = np.arctan2(g_box[1], g_box[2])
+    s = 1.0 if np.sin(theta) >= 0.0 else -1.0
+    phi = np.arctan2(s * g_tt[0], s * g_tt[1])
+    return float(np.degrees(theta)), float(np.degrees(phi))
