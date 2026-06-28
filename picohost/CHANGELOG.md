@@ -1,5 +1,45 @@
 # Changelog
 
+## [3.9.0](https://github.com/EIGSEP/pico-firmware/compare/v3.8.0...v3.9.0) (2026-06-28)
+
+
+### Features
+
+* **calibrate-pot:** add headroom computation to pot electrical ends ([6437756](https://github.com/EIGSEP/pico-firmware/commit/6437756b02c7b2d25379b335483b0a37d22ea557))
+* **calibrate-pot:** add in-box azimuth sweep collection ([cb82291](https://github.com/EIGSEP/pico-firmware/commit/cb82291800ebd9f2db80bb4a1564a5bd50941ede))
+* **calibrate-pot:** add predicted_angle_divergence helper ([73fcfbb](https://github.com/EIGSEP/pico-firmware/commit/73fcfbb2ce446141596519e1c39f434f48f7ce05))
+* **calibrate-pot:** add prompt_save confirm/discard helper ([82b38af](https://github.com/EIGSEP/pico-firmware/commit/82b38afec781165d1ef83ec47bf3f353d6297c1e))
+* **calibrate-pot:** add read-only stream:motor az reader ([3022060](https://github.com/EIGSEP/pico-firmware/commit/3022060e699c499ea903aa3d0651221ca0ae84ec))
+* **calibrate-pot:** add rezero mode reusing stored slope ([c78f6f2](https://github.com/EIGSEP/pico-firmware/commit/c78f6f24661ff445aa7894b893737d884117e297))
+* **calibrate-pot:** add slope fit with zero pinned to motor-home ([2f7687a](https://github.com/EIGSEP/pico-firmware/commit/2f7687af53b7e5b39ac53c10538de0828b9950aa))
+* **calibrate-pot:** default --turns to the installed 3.75-turn pot ([7ba94ec](https://github.com/EIGSEP/pico-firmware/commit/7ba94ec88fbedc2fcd1097bd1f66b4ced663768c))
+* **calibrate-pot:** report azimuth fit linearity; fix span guard and headroom labels ([9d0a9bd](https://github.com/EIGSEP/pico-firmware/commit/9d0a9bdf0a6451dd5bb235da7184ca5d1309ffca))
+* **calibrate-pot:** wire azimuth and rezero modes into the CLI ([b1529f3](https://github.com/EIGSEP/pico-firmware/commit/b1529f3b4940a1fda549206e8b84b55205785357))
+* **currentmon:** multi-point least-squares fit with quality metric ([f8973b6](https://github.com/EIGSEP/pico-firmware/commit/f8973b6e53c09b9d5bf009b9843ea240b3eb41a6))
+* **currentmon:** two-point calibrate-current tool ([5982542](https://github.com/EIGSEP/pico-firmware/commit/5982542553d5a74d0e7eb9496940ccb5d1805f1b))
+* **flash-picos:** confirm flashed boards via manager-owned pico_config ([e1e61cf](https://github.com/EIGSEP/pico-firmware/commit/e1e61cf9ceed11f334c3adf864ccde3d907f0c1e))
+* **lidar:** emulate current_voltage for emulator/firmware parity ([9e5162b](https://github.com/EIGSEP/pico-firmware/commit/9e5162b2586c21318d20954bec346f16df81e678))
+* **lidar:** fan current out to metadata['system_current'] ([424d848](https://github.com/EIGSEP/pico-firmware/commit/424d848715cb007906b8e9440c23f5f83d89de75))
+* **manager:** continuous self-discovery of unbound CDC ports ([78b3ee0](https://github.com/EIGSEP/pico-firmware/commit/78b3ee093215f9f34936d9f5a7fbc4368020e0e5))
+
+
+### Bug Fixes
+
+* **currentmon:** guard preset-override input; cast residual; cover multi happy path ([25f60a7](https://github.com/EIGSEP/pico-firmware/commit/25f60a7292484b07bc908462878f168e142234b3))
+* **currentmon:** harden co-located current monitor against shared-status coupling ([16d0f6e](https://github.com/EIGSEP/pico-firmware/commit/16d0f6e4adeaf344d3bd60cbadaa04f31d8a2feb))
+* **currentmon:** use DMM-measured divider resistor values (3.32k/4.64k) ([e428e84](https://github.com/EIGSEP/pico-firmware/commit/e428e84f0c4829d27fbc0c346e9bfcd39a84d47f))
+* **flash-picos:** require heartbeat liveness for manager confirmation ([e847ba9](https://github.com/EIGSEP/pico-firmware/commit/e847ba918b655e8342ea866977f396ed67ce7095))
+* **flash-picos:** split GPIO readback into fast discovery + quiet-bus sweep ([f6d5008](https://github.com/EIGSEP/pico-firmware/commit/f6d5008a0cf8dcff4d90881b57dd50a55ed5eaf3))
+* **flash-picos:** stop the GPIO readback from dropping flashed boards ([6654e6e](https://github.com/EIGSEP/pico-firmware/commit/6654e6ecb2fc14f818ff5b3547a32898c87e1181))
+* **manager:** drop removed --uf2 flag from picomanager.service ([b4af160](https://github.com/EIGSEP/pico-firmware/commit/b4af1600e407d106c530c76f21c4ee88e9115c30))
+* **manager:** snapshot device list under lock in _discover_new ([2372ff5](https://github.com/EIGSEP/pico-firmware/commit/2372ff5fd43203c610fbdfe81e0f5a5884908ae5))
+* use the pico gpio26 for currentmon ([77f38f0](https://github.com/EIGSEP/pico-firmware/commit/77f38f0de895958892316415b10129c94d75a3f9))
+
+
+### Documentation
+
+* update flash-picos docs for manager-owned discovery ([07cd444](https://github.com/EIGSEP/pico-firmware/commit/07cd444695c216b4d3db4d7bb5f6d360f7b4db8a))
+
 ## [3.8.0](https://github.com/EIGSEP/pico-firmware/compare/v3.7.0...v3.8.0) (2026-06-20)
 
 
