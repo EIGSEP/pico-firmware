@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.10.0](https://github.com/EIGSEP/pico-firmware/compare/v3.9.0...v3.10.0) (2026-06-29)
+
+
+### Features
+
+* **calibrate-pot:** manual mode + slope sanity check ([190a2c9](https://github.com/EIGSEP/pico-firmware/commit/190a2c9a75eedabd5bcd4ea9e15281ed4aaecde0))
+* IMU az/el calibration + live conversion ([#129](https://github.com/EIGSEP/pico-firmware/issues/129)) ([5f08d79](https://github.com/EIGSEP/pico-firmware/commit/5f08d79436e6fd0b487598e6b14b1419f8a8e9b5))
+
 ## [3.9.0](https://github.com/EIGSEP/pico-firmware/compare/v3.8.0...v3.9.0) (2026-06-28)
 
 
