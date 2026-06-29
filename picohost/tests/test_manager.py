@@ -12,7 +12,7 @@ import pytest
 from eigsep_redis import HeartbeatReader
 from eigsep_redis.testing import DummyTransport
 
-from picohost.buses import ImuCalStore, PicoConfigStore
+from picohost.buses import PicoConfigStore
 from picohost.keys import (
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
