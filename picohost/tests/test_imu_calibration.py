@@ -47,3 +47,30 @@ def test_clear_removes_key():
     assert store.get() is not None
     store.clear()
     assert store.get() is None
+
+
+def test_upload_merges_preserving_other_sections():
+    # A --mode elevation run uploads only imu_el; a prior imu_az section
+    # must survive (read-modify-write merge, not whole-key replace).
+    store = ImuCalStore(DummyTransport())
+    store.upload(_payload())  # imu_az only
+
+    store.upload(
+        {
+            "imu_el": {"accel_bias": [0, 0, 0], "el_sign": 1},
+            "metadata": {"timestamp": "t2", "mode": "elevation"},
+        }
+    )
+
+    loaded = store.get()
+    assert loaded["imu_az"]["az_accel_offset_deg"] == 30.0  # survived
+    assert loaded["imu_el"]["el_sign"] == 1  # newly added
+    assert loaded["metadata"]["mode"] == "elevation"  # latest run wins
+
+
+def test_upload_replaces_same_section():
+    # Re-calibrating the same IMU overwrites its section (no stale merge).
+    store = ImuCalStore(DummyTransport())
+    store.upload(_payload())
+    store.upload({"imu_az": {"az_accel_offset_deg": 99.0}})
+    assert store.get()["imu_az"] == {"az_accel_offset_deg": 99.0}

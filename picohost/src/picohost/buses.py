@@ -258,7 +258,13 @@ class ImuCalStore:
         self.transport = transport
 
     def upload(self, cal):
-        """Upload calibration parameters.
+        """Upload calibration parameters, merging into any existing store.
+
+        Read-modify-write: top-level keys in ``cal`` (sections and
+        ``metadata``) overwrite their counterparts, while sections absent
+        from ``cal`` are preserved. This keeps a partially-calibrated fleet
+        intact — e.g. a ``--mode elevation`` run that only produces
+        ``imu_el`` must not wipe a previously-stored ``imu_az`` section.
 
         Parameters
         ----------
@@ -266,7 +272,11 @@ class ImuCalStore:
             May carry ``imu_az`` and/or ``imu_el`` section dicts and an
             optional ``metadata`` block. Extra fields are preserved verbatim.
         """
-        self.transport.upload_dict(cal, IMU_CAL_KEY)
+        merged = self.get() or {}
+        # Drop the stale top-level upload_time; upload_dict re-injects it.
+        merged.pop("upload_time", None)
+        merged.update(cal)
+        self.transport.upload_dict(merged, IMU_CAL_KEY)
 
     def get(self):
         """Return the stored calibration dict.
