@@ -2,6 +2,7 @@ import time
 
 import numpy as np
 
+from .. import imu_geometry as ig
 from .base import PicoEmulator
 
 NOISE_STDDEV = 0.001
@@ -14,10 +15,18 @@ class ImuEmulator(PicoEmulator):
     Models orientation as rotations around two axes (azimuth and
     elevation), with sensor readings derived from the orientation.
     The BNO08x in RVC mode outputs euler angles and acceleration;
-    this emulator produces matching values.
+    this emulator produces matching values via the same forward model
+    that imu_geometry inverts.
     """
 
     def __init__(self, app_id=3, **kwargs):
+        # Forward-model state (set before super().__init__() in case
+        # super triggers init paths that reference these).
+        self._mount = np.eye(3)
+        self._accel_bias = np.zeros(3)
+        self._accel_scale = 1.0
+        self._hold = False  # True once set_orientation is called
+
         # Orientation state (radians)
         self.az_angle = 0.0
         self.el_angle = 0.0
@@ -64,6 +73,38 @@ class ImuEmulator(PicoEmulator):
         """Simulate BNO08x coming back after a failure."""
         self._sensor_failed = False
 
+    def set_orientation(self, az_deg, el_deg):
+        """Hold a fixed (az, el) pose; disables the idle drift model."""
+        self.az_angle = np.radians(az_deg)
+        self.el_angle = np.radians(el_deg)
+        self._hold = True
+
+    def set_mount(self, M):
+        self._mount = np.asarray(M, dtype=float)
+
+    def set_accel_error(self, bias=(0.0, 0.0, 0.0), scale=1.0):
+        self._accel_bias = np.asarray(bias, dtype=float)
+        self._accel_scale = float(scale)
+
+    def _render(self):
+        """Compute yaw/pitch/roll/accel from current az/el/mount/error.
+
+        imu_el sees elevation only; imu_az sees elevation then azimuth.
+        R = R_x(theta) [@ R_z(phi)] @ M ; accel = R[2,:] * g (+ error).
+        """
+        theta, phi = self.el_angle, self.az_angle
+        if self.name == "imu_az":
+            R = ig.R_x(theta) @ ig.R_z(phi) @ self._mount
+        else:  # imu_el ignores azimuth
+            R = ig.R_x(theta) @ self._mount
+        g_body = R[2, :] * ig.GRAVITY  # R^T @ [0,0,g]
+        g_body = g_body * self._accel_scale + self._accel_bias
+        self.accel_x, self.accel_y, self.accel_z = (float(v) for v in g_body)
+        # ZYX euler of R for yaw/pitch/roll (diagnostic channels)
+        self.pitch = float(np.degrees(-np.arcsin(np.clip(R[2, 0], -1, 1))))
+        self.roll = float(np.degrees(np.arctan2(R[2, 1], R[2, 2])))
+        self.yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
+
     def op(self):
         # Mirrors imu_op -> imu_init, including the memset(&imu.data, 0)
         # at imu.c:109 that zeros sensor data on every (re-)init.
@@ -88,33 +129,11 @@ class ImuEmulator(PicoEmulator):
 
         # Normal operation: sensor produces events
         self._last_event_time = time.monotonic()
-
-        # Small random angular drift (mean-reverting toward 0)
-        self.az_angle = 0.99 * self.az_angle + np.random.normal(0, 0.001)
-        self.el_angle = 0.99 * self.el_angle + np.random.normal(0, 0.001)
-
-        # Convert internal radians to degrees for output.
-        # TODO: verify on hardware which BNO08x euler angle (yaw/pitch/roll)
-        # corresponds to each mechanical axis (az/el).  The mapping below
-        # assumes yaw=az and pitch=el, but that depends on how the sensor
-        # is physically mounted on the antenna box.
-        self.yaw = float(np.degrees(self.az_angle))
-        self.pitch = float(np.degrees(self.el_angle))
-        self.roll = float(np.random.normal(0, NOISE_STDDEV))
-
-        # Acceleration: gravity rotated by pitch/roll + noise
-        cp = np.cos(self.el_angle)
-        sp = np.sin(self.el_angle)
-        cr = np.cos(np.radians(self.roll))
-        sr = np.sin(np.radians(self.roll))
-        self.accel_x = float(9.81 * sp + np.random.normal(0, NOISE_STDDEV))
-        self.accel_y = float(
-            -9.81 * cp * sr + np.random.normal(0, NOISE_STDDEV)
-        )
-        self.accel_z = float(
-            9.81 * cp * cr + np.random.normal(0, NOISE_STDDEV)
-        )
-
+        if not self._hold:
+            # idle: gentle mean-reverting drift (matches prior behaviour)
+            self.az_angle = 0.99 * self.az_angle + np.random.normal(0, 0.001)
+            self.el_angle = 0.99 * self.el_angle + np.random.normal(0, 0.001)
+        self._render()
         self.got_packet_this_cycle = True
 
     def get_status(self):

@@ -46,6 +46,7 @@ from eigsep_redis import SingleStreamReader, SingleStreamWriter
 
 from .keys import (
     CURRENT_CAL_KEY,
+    IMU_CAL_KEY,
     MOTOR_POS_KEY,
     PICO_CMD_STREAM,
     PICO_CONFIG_KEY,
@@ -238,6 +239,70 @@ class CurrentCalStore:
     def clear(self):
         """Delete the stored calibration."""
         self.transport.r.delete(CURRENT_CAL_KEY)
+
+
+class ImuCalStore:
+    """Persistent single-key store for IMU mount calibration.
+
+    Value under :data:`IMU_CAL_KEY` is a JSON object with optional
+    ``imu_el`` / ``imu_az`` sections (each a mount calibration dict) plus
+    a ``metadata`` block; ``upload_time`` is injected by
+    :meth:`Transport.upload_dict` at the top level. Each section is
+    independent so a partially-calibrated fleet (e.g. ``imu_el`` dead)
+    round-trips cleanly.
+    A fresh :class:`picohost.PicoIMU` reads its own section at
+    ``__init__`` and applies the conversion from the first status tick.
+    """
+
+    def __init__(self, transport):
+        self.transport = transport
+
+    def upload(self, cal):
+        """Upload calibration parameters, merging into any existing store.
+
+        Read-modify-write: top-level keys in ``cal`` (sections and
+        ``metadata``) overwrite their counterparts, while sections absent
+        from ``cal`` are preserved. This keeps a partially-calibrated fleet
+        intact — e.g. a ``--mode elevation`` run that only produces
+        ``imu_el`` must not wipe a previously-stored ``imu_az`` section.
+
+        Parameters
+        ----------
+        cal : dict
+            May carry ``imu_az`` and/or ``imu_el`` section dicts and an
+            optional ``metadata`` block. Extra fields are preserved verbatim.
+        """
+        merged = self.get() or {}
+        # Drop the stale top-level upload_time; upload_dict re-injects it.
+        merged.pop("upload_time", None)
+        merged.update(cal)
+        self.transport.upload_dict(merged, IMU_CAL_KEY)
+
+    def get(self):
+        """Return the stored calibration dict.
+
+        Returns
+        -------
+        dict or None
+            ``None`` if no calibration has been uploaded, or if the
+            stored JSON fails to decode. The caller falls back to
+            uncalibrated operation.
+        """
+        raw = self.transport.get_raw(IMU_CAL_KEY)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Corrupted {IMU_CAL_KEY} in Redis ({e}); "
+                "falling back to uncalibrated."
+            )
+            return None
+
+    def clear(self):
+        """Delete the stored calibration."""
+        self.transport.r.delete(IMU_CAL_KEY)
 
 
 class MotorPositionStore:

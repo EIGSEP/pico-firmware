@@ -53,6 +53,7 @@ from .base import (
 )
 from .buses import (
     CurrentCalStore,
+    ImuCalStore,
     MotorPositionStore,
     PicoClaimStore,
     PicoCmdReader,
@@ -147,6 +148,7 @@ class PicoManager:
             :class:`StatusWriter`, :class:`PicoConfigStore`,
             :class:`PotCalStore` (passed to ``PicoPotentiometer``),
             :class:`CurrentCalStore` (passed to ``PicoLidar``),
+            :class:`ImuCalStore` (passed to ``PicoIMU``),
             :class:`PicoCmdReader`, :class:`PicoRespWriter`, and
             :class:`PicoClaimStore`.
         """
@@ -158,6 +160,7 @@ class PicoManager:
         self._pot_cal_store = PotCalStore(transport)
         self._current_cal_store = CurrentCalStore(transport)
         self._motor_pos_store = MotorPositionStore(transport)
+        self._imu_cal_store = ImuCalStore(transport)
         self._cmd_reader = PicoCmdReader(transport)
         self._resp_writer = PicoRespWriter(transport)
         self._claim_store = PicoClaimStore(transport)
@@ -252,6 +255,8 @@ class PicoManager:
                 kwargs["current_cal_store"] = self._current_cal_store
             elif cls is PicoMotor:
                 kwargs["motor_pos_store"] = self._motor_pos_store
+            elif issubclass(cls, PicoIMU):
+                kwargs["imu_cal_store"] = self._imu_cal_store
             try:
                 pico = cls(port, **kwargs)
                 self.picos[name] = pico

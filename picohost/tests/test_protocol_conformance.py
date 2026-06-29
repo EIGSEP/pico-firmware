@@ -385,13 +385,18 @@ class TestImuProtocol:
         assert emu.get_status()["status"] == "error"
 
     def test_euler_angles_are_degrees(self):
-        """RVC output is in degrees."""
-        emu = ImuEmulator()
-        emu.az_angle = 0.5  # ~28.6 degrees
+        """RVC output is in degrees, not radians.
+
+        For imu_el with identity mount and el=30°, the forward model
+        produces roll≈30 (degrees).  If the emitter used radians the
+        value would be ~0.52, which is distinguishable from 30.
+        """
+        emu = ImuEmulator(app_id=3)  # imu_el
+        emu.set_orientation(az_deg=0.0, el_deg=30.0)
         emu.op()
         status = emu.get_status()
-        # yaw should be close to degrees(0.5) ≈ 28.6
-        assert abs(status["yaw"] - 28.6) < 1.0
+        # roll encodes the elevation rotation for imu_el with identity mount
+        assert abs(status["roll"] - 30.0) < 1.0
 
 
 # ---------------------------------------------------------------------------
