@@ -188,6 +188,51 @@ def test_imu_el_calibrated_published_dict_is_scalar_only():
     dev.disconnect()
 
 
+def test_imu_az_malformed_cal_still_publishes_raw():
+    """A partial/broken cal section must never suppress the raw firmware tick.
+
+    The handler derives az/el before its single publish; a missing key in the
+    cal must degrade the derived fields to None, not drop the whole record.
+    """
+    dev = DummyPicoIMU("/dev/dummy")
+    # cal missing "M" (and more) -> derivation raises mid-handler
+    dev.set_calibration(imu_az={"accel_bias": [0.0, 0.0, 0.0]})
+    pub = _capture(dev, _az_status(30, 70, 100))
+    assert pub["yaw"] == 100  # raw tick survived
+    assert pub["accel_x"] is not None
+    for k in (
+        "az_deg",
+        "el_deg",
+        "az_from_accel_deg",
+        "az_from_yaw_deg",
+        "az_blend_weight",
+    ):
+        assert pub[k] is None  # derived degraded to None, shape stays stable
+    dev.disconnect()
+
+
+def test_imu_el_malformed_cal_still_publishes_raw():
+    """imu_el counterpart: a broken cal yields el_deg=None, raw preserved."""
+    dev = DummyPicoIMU("/dev/dummy", name="imu_el")
+    dev.set_calibration(imu_el={"accel_bias": [0.0, 0.0, 0.0]})  # missing M
+    th = np.radians(25.0)
+    data = {
+        "sensor_name": "imu_el",
+        "status": "update",
+        "app_id": 3,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0,
+        "accel_x": 0.0,
+        "accel_y": float(np.sin(th)),
+        "accel_z": float(np.cos(th)),
+    }
+    pub = _capture(dev, data)
+    assert pub["accel_y"] is not None  # raw survived
+    assert pub["el_deg"] is None
+    dev.disconnect()
+
+
 def test_emulator_to_handler_roundtrip_identity_mount():
     """Forward-model status dict at a known pose; handler recovers az/el
     with a cal whose mount matches the forward model's (identity)."""

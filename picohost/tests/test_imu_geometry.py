@@ -274,3 +274,13 @@ def test_fit_calibration_full_reproduces_truth():
     # => sign = +1, offset = +40
     assert cal["imu_az"]["az_yaw_sign"] == pytest.approx(1.0)
     assert cal["imu_az"]["az_yaw_offset_deg"] == pytest.approx(40.0, abs=1.0)
+
+
+def test_circular_mean_deg_handles_wrap():
+    # ordinary samples: circular mean matches the arithmetic mean
+    assert ig.circular_mean_deg([10.0, 20.0, 30.0]) == pytest.approx(20.0)
+    # straddling the +/-180 seam: a linear mean would give ~0; circular = 180
+    assert abs(ig.circular_mean_deg([179.0, -179.0])) == pytest.approx(180.0)
+    assert abs(ig.circular_mean_deg([170.0, -170.0])) == pytest.approx(
+        180.0, abs=1e-6
+    )

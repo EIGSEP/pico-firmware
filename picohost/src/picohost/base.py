@@ -855,6 +855,7 @@ class PicoIMU(PicoDevice):
     def __init__(self, *args, imu_cal_store=None, **kwargs):
         # {"imu_el": {...}, "imu_az": {...}} — only loaded sections present.
         self._imu_cal = {}
+        self._imu_derive_warned = set()
         super().__init__(*args, **kwargs)
         if imu_cal_store is not None:
             cal = imu_cal_store.get()
@@ -884,11 +885,38 @@ class PicoIMU(PicoDevice):
         data = data.copy()
         name = data.get("sensor_name")
         cal = self._imu_cal.get(name)
-        if name == "imu_el":
-            data["el_deg"] = self._el_only(data, cal)
-        elif name == "imu_az":
-            data.update(self._az_and_el(data, cal))
+        try:
+            if name == "imu_el":
+                data["el_deg"] = self._el_only(data, cal)
+            elif name == "imu_az":
+                data.update(self._az_and_el(data, cal))
+        except Exception:
+            # A malformed/partial cal section (or a bad sample) must never
+            # suppress the raw firmware tick: publish raw with null derived
+            # fields, keeping the published shape stable. Warn once per IMU.
+            if name == "imu_el":
+                data["el_deg"] = None
+            elif name == "imu_az":
+                data.update(self._az_null())
+            if name not in self._imu_derive_warned:
+                self._imu_derive_warned.add(name)
+                self.logger.warning(
+                    "IMU derivation failed for %s; publishing raw with null "
+                    "derived fields — check the stored calibration section.",
+                    name,
+                )
         self._base_redis_handler(data)
+
+    @staticmethod
+    def _az_null():
+        """Null-valued imu_az derived shape (stable keys, no calibration)."""
+        return {
+            "el_deg": None,
+            "az_deg": None,
+            "az_from_accel_deg": None,
+            "az_from_yaw_deg": None,
+            "az_blend_weight": None,
+        }
 
     def _el_only(self, data, cal):
         if cal is None:
@@ -899,13 +927,7 @@ class PicoIMU(PicoDevice):
         return ig.el_from_imu(a, cal["M"])
 
     def _az_and_el(self, data, cal):
-        out = {
-            "el_deg": None,
-            "az_deg": None,
-            "az_from_accel_deg": None,
-            "az_from_yaw_deg": None,
-            "az_blend_weight": None,
-        }
+        out = self._az_null()
         if cal is None:
             return out
         a = self._accel_unit(data, cal)

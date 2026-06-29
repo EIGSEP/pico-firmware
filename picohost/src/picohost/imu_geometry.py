@@ -103,6 +103,17 @@ def _wrap180(x):
     return (x + 180.0) % 360.0 - 180.0
 
 
+def circular_mean_deg(values):
+    """Circular mean (deg) of angle samples; robust to the +/-180 wrap.
+
+    A plain arithmetic mean of angles straddling the +/-180 seam (e.g. yaw
+    near +/-179) collapses toward 0; averaging the unit vectors instead keeps
+    the result on the circle.
+    """
+    a = np.radians(np.asarray(values, dtype=float))
+    return float(np.degrees(np.arctan2(np.sin(a).mean(), np.cos(a).mean())))
+
+
 def el_from_imu(a_unit, M):
     """Signed elevation (deg) for imu_el: arctan2(g_y, g_z) in box frame."""
     g = np.asarray(M, dtype=float) @ np.asarray(a_unit, dtype=float)

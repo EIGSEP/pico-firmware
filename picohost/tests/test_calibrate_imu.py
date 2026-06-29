@@ -4,7 +4,7 @@ import pytest
 from eigsep_redis.testing import DummyTransport
 
 from picohost import calibrate_imu
-from picohost.buses import ImuCalStore
+from picohost.buses import ImuCalStore, PotCalStore
 
 
 def test_build_parser_modes():
@@ -35,6 +35,39 @@ def test_collect_vector_averages_named_fields(monkeypatch):
     assert np.allclose(v, [2.0, 0.0, 9.0])  # mean of 1,2,3 -> 2
 
 
+def test_yaw_collected_with_circular_mean(monkeypatch):
+    """_yaw must reduce its samples circularly (robust to the +/-180 wrap),
+    not with the linear mean that collect_vector applies by default."""
+    cal = calibrate_imu.Calibrator(DummyTransport(), 2, {"imu_az"}, "azimuth")
+
+    def fake_collect(transport, name, fields, n, start_id="$", reducer=None):
+        assert reducer is not None  # _yaw must supply a circular reducer
+        return reducer(np.array([[179.0], [-179.0]]))
+
+    monkeypatch.setattr(calibrate_imu, "collect_vector", fake_collect)
+    assert abs(cal._yaw()) == pytest.approx(180.0, abs=1e-6)  # linear -> ~0
+
+
+def test_main_azimuth_uncalibrated_pot_aborts(monkeypatch):
+    """An alive-but-uncalibrated pot is not a usable az standard: azimuth
+    mode must abort up front, not crash mid-sweep on a None pot angle."""
+    transport = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    monkeypatch.setattr(
+        calibrate_imu,
+        "stream_alive",
+        lambda t, n, timeout_s=5.0: n in ("imu_az", "potmon"),
+    )
+    monkeypatch.setattr(
+        calibrate_imu.Calibrator,
+        "run_sweeps",
+        lambda self: pytest.fail("must abort before sweeps"),
+    )
+    # no PotCalStore uploaded -> pot alive but uncalibrated
+    assert calibrate_imu.main(["--mode", "azimuth"]) == 1
+    assert ImuCalStore(transport).get() is None
+
+
 def test_stream_alive_true_false(monkeypatch):
     """Liveness via blocking "$": True only when a NEW entry arrives.
 
@@ -57,10 +90,10 @@ def test_main_persists_and_pushes(monkeypatch):
     from picohost import imu_geometry as ig
 
     transport = DummyTransport()
+    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})  # az standard ready
 
     # Fake operator-driven collection: return forward-model sweeps.
     M_az = ig.R_z(-0.3)
-    el_degs = np.linspace(-60, 60, 25)
     phi_degs = np.linspace(0, 359, 24)
 
     def fake_run_sweeps(self):
@@ -138,6 +171,7 @@ def test_main_discard_writes_nothing(monkeypatch):
     from picohost import imu_geometry as ig
 
     transport = DummyTransport()
+    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})  # az standard ready
 
     M_az = ig.R_z(-0.3)
     phi_degs = np.linspace(0, 359, 24)

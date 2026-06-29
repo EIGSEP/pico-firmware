@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 import numpy as np
 from eigsep_redis import Transport
 
-from .buses import ImuCalStore
-from .imu_geometry import fit_calibration_from_sweeps
+from .buses import ImuCalStore, PotCalStore
+from .imu_geometry import circular_mean_deg, fit_calibration_from_sweeps
 from .proxy import PicoProxy
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,8 @@ SAMPLE_TIMEOUT_S = 5.0
 IMU_AZ, IMU_EL, POTMON = "imu_az", "imu_el", "potmon"
 
 
-def collect_vector(transport, name, fields, n, start_id="$"):
-    """Average `n` fresh entries of `fields` from stream:<name>.
+def collect_vector(transport, name, fields, n, start_id="$", reducer=None):
+    """Reduce `n` fresh entries of `fields` from stream:<name>.
 
     Reads only entries published after this call starts (``start_id``
     defaults to ``"$"``), so repeated calls within one sweep don't
@@ -41,6 +41,10 @@ def collect_vector(transport, name, fields, n, start_id="$"):
     :func:`calibrate_pot.collect_samples`' fail-fast semantics: if no new
     entries arrive within ``SAMPLE_TIMEOUT_S``, raise rather than average a
     stale value. Tests pass ``start_id="0-0"`` to read pre-loaded entries.
+
+    ``reducer`` maps the ``(n, len(fields))`` sample array to the reduced
+    result; it defaults to a per-field arithmetic mean. Pass a circular
+    reducer for angle fields (e.g. yaw) that wrap at +/-180.
     """
     stream = f"stream:{name}"
     rows, last_id = [], start_id
@@ -59,7 +63,8 @@ def collect_vector(transport, name, fields, n, start_id="$"):
                 value = json.loads(f[b"value"])
                 rows.append([float(value[k]) for k in fields])
                 last_id = msg_id
-    return np.mean(rows, axis=0)
+    arr = np.asarray(rows, dtype=float)
+    return arr.mean(axis=0) if reducer is None else reducer(arr)
 
 
 def stream_alive(transport, name, timeout_s=SAMPLE_TIMEOUT_S):
@@ -97,8 +102,13 @@ class Calibrator:
         )
 
     def _yaw(self):
-        return float(
-            collect_vector(self.transport, IMU_AZ, ("yaw",), self.n)[0]
+        # Yaw wraps at +/-180, so average it circularly, not linearly.
+        return collect_vector(
+            self.transport,
+            IMU_AZ,
+            ("yaw",),
+            self.n,
+            reducer=lambda r: circular_mean_deg(r[:, 0]),
         )
 
     def run_sweeps(self):
@@ -186,6 +196,18 @@ def main(argv=None):
     if IMU_AZ not in alive and IMU_EL not in alive:
         print("No IMU streams alive; nothing to calibrate.", file=sys.stderr)
         return 1
+    # The pot must be CALIBRATED, not merely alive, to serve as the az
+    # standard: an uncalibrated pot streams pot_az_angle=None, which would
+    # otherwise crash the az sweep mid-run. Drop it from `alive` so the check
+    # below treats it like a missing pot (azimuth aborts; all skips az).
+    if args.mode in ("azimuth", "all") and POTMON in alive:
+        pot_cal = PotCalStore(transport).get()
+        if not (pot_cal and pot_cal.get("pot_az")):
+            print(
+                "pot is alive but uncalibrated; run calibrate_pot first.",
+                file=sys.stderr,
+            )
+            alive.discard(POTMON)
     if args.mode in ("azimuth", "all") and POTMON not in alive:
         print(
             "pot not alive; azimuth needs the pot standard.", file=sys.stderr
