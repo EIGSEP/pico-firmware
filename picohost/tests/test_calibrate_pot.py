@@ -150,6 +150,31 @@ def test_default_turns_matches_installed_pot():
     assert p.parse_args(["-t", "10"]).turns == pytest.approx(10.0)
 
 
+def test_build_parser_accepts_manual_mode_and_args():
+    p = calibrate_pot.build_parser()
+    a = p.parse_args(
+        [
+            "--mode",
+            "manual",
+            "--slope",
+            "409.0",
+            "--intercept",
+            "-400.0",
+            "--note",
+            "restored from corr_20260615.h5",
+        ]
+    )
+    assert a.mode == "manual"
+    assert a.slope == pytest.approx(409.0)
+    assert a.intercept == pytest.approx(-400.0)
+    assert a.note == "restored from corr_20260615.h5"
+    # Defaults when omitted: slope/intercept None, note None.
+    d = p.parse_args([])
+    assert d.slope is None
+    assert d.intercept is None
+    assert d.note is None
+
+
 def test_build_parser_accepts_new_modes_and_motor_cfg():
     p = calibrate_pot.build_parser()
 
@@ -531,3 +556,239 @@ def test_prompt_save_diverged_requires_full_yes(monkeypatch):
     for ans, expected in cases:
         monkeypatch.setattr("builtins.input", lambda *a, **k: ans)
         assert calibrate_pot.prompt_save(True) is expected
+
+
+# ---------------------------------------------------------------------------
+# slope sanity check (all modes)
+# ---------------------------------------------------------------------------
+
+
+def test_expected_slope_mag_installed_pot():
+    # 3.75-turn pot whose wiper spans the 3.3 V ADC range:
+    #   3.75 * 360 / 3.3 = 409.09... deg/V
+    assert calibrate_pot.expected_slope_mag(3.75) == pytest.approx(
+        3.75 * 360.0 / 3.3
+    )
+    assert calibrate_pot.expected_slope_mag(3.75) == pytest.approx(
+        409.09, abs=0.1
+    )
+
+
+def test_slope_out_of_range_in_window():
+    # Expected ~409 deg/V; factor 1.5 -> in-range ~273..614 deg/V.
+    assert calibrate_pot.slope_out_of_range(409.0, 3.75) is False
+    assert calibrate_pot.slope_out_of_range(300.0, 3.75) is False
+    assert calibrate_pot.slope_out_of_range(600.0, 3.75) is False
+    # Sign is irrelevant — magnitude only.
+    assert calibrate_pot.slope_out_of_range(-409.0, 3.75) is False
+
+
+def test_slope_out_of_range_flags_gross_errors():
+    # An order-of-magnitude typo in either direction is flagged.
+    assert calibrate_pot.slope_out_of_range(40.9, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(4090.0, 3.75) is True
+    # Just outside the 1.5x window on each side.
+    assert calibrate_pot.slope_out_of_range(200.0, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(700.0, 3.75) is True
+    # A zero slope is never sane.
+    assert calibrate_pot.slope_out_of_range(0.0, 3.75) is True
+
+
+# ---------------------------------------------------------------------------
+# manual mode main()
+# ---------------------------------------------------------------------------
+
+
+def _manual_argv(slope, intercept, *extra):
+    return [
+        "calibrate-pot",
+        "--mode",
+        "manual",
+        "--slope",
+        str(slope),
+        "--intercept",
+        str(intercept),
+        *extra,
+    ]
+
+
+def test_main_manual_stores_and_pushes(monkeypatch):
+    """--mode manual writes the typed slope/intercept and pushes live."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _manual_argv(409.0, -400.0, "--note", "restored from corr_x.h5"),
+    )
+
+    calibrate_pot.main()
+
+    stored = PotCalStore(dummy_transport).get()
+    assert stored["pot_az"] == pytest.approx([409.0, -400.0])
+    assert stored["metadata"]["mode"] == "manual"
+    assert stored["metadata"]["note"] == "restored from corr_x.h5"
+    # No sweep happened, so no sample arrays in the metadata.
+    assert "pot_az_voltages" not in stored["metadata"]
+    assert "angles" not in stored["metadata"]
+
+    assert len(fake_proxy.calls) == 1
+    action, kwargs = fake_proxy.calls[0]
+    assert action == "set_calibration"
+    assert kwargs["pot_az_params"] == pytest.approx([409.0, -400.0])
+
+
+def test_main_manual_requires_slope_and_intercept(monkeypatch):
+    """--mode manual without both numbers exits(1) and writes nothing."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # --intercept given but --slope omitted.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["calibrate-pot", "--mode", "manual", "--intercept", "-400.0"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        calibrate_pot.main()
+    assert exc.value.code == 1
+    assert PotCalStore(dummy_transport).get() is None
+
+
+def test_main_manual_redis_first_when_pot_unavailable(monkeypatch, capsys):
+    """Manual mode writes Redis even when the pot is down; no live push."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    fake_proxy.is_available = False  # pot not reachable (e.g. fresh Pi)
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(409.0, -400.0))
+
+    calibrate_pot.main()
+
+    # Durable restore happened despite the pot being down.
+    stored = PotCalStore(dummy_transport).get()
+    assert stored["pot_az"] == pytest.approx([409.0, -400.0])
+    # No live push was attempted (would have timed out).
+    assert fake_proxy.calls == []
+    assert "loads on" in capsys.readouterr().out.lower()
+
+
+def test_main_manual_overwrites_existing_without_divergence(
+    monkeypatch, capsys
+):
+    """Manual mode skips the divergence check (no swept window) and overwrites
+    any existing stored cal without crashing."""
+    dummy_transport = DummyTransport()
+    # A wildly different stored cal must NOT trigger the divergence warning,
+    # and the empty swept window must NOT crash predicted_angle_divergence.
+    PotCalStore(dummy_transport).upload({"pot_az": [50.0, -50.0]})
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(409.0, -400.0))
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "differs from the stored one" not in out
+    stored = PotCalStore(dummy_transport).get()
+    assert stored["pot_az"] == pytest.approx([409.0, -400.0])
+
+
+def test_main_manual_bad_slope_warns_and_requires_full_yes(
+    monkeypatch, capsys
+):
+    """An off-by-10x --slope prints a WARNING and a bare 'y' is not enough."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # slope 4090 deg/V is ~10x the expected ~409 -> out of range.
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(4090.0, -400.0))
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "expected" in out.lower()
+    # Bare 'y' must NOT save under the escalated (typed 'yes') gate.
+    assert PotCalStore(dummy_transport).get() is None
+    assert fake_proxy.calls == []
+
+
+def test_main_manual_bad_slope_full_yes_saves(monkeypatch):
+    """The same off-slope save goes through when the operator types 'yes'."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "yes")
+    monkeypatch.setattr(sys, "argv", _manual_argv(4090.0, -400.0))
+
+    calibrate_pot.main()
+
+    assert PotCalStore(dummy_transport).get()["pot_az"] == pytest.approx(
+        [4090.0, -400.0]
+    )
+    assert len(fake_proxy.calls) == 1
+
+
+def test_main_manual_sane_slope_no_escalation(monkeypatch, capsys):
+    """A sane --slope (~409) prints no slope warning and saves on a bare 'y'."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(409.0, -400.0))
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "off the expected" not in out.lower()
+    assert PotCalStore(dummy_transport).get()["pot_az"] == pytest.approx(
+        [409.0, -400.0]
+    )
+
+
+def test_main_manual_triggers_bgsave(monkeypatch):
+    """Saving in manual mode forces an RDB snapshot (durable restore)."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    bgsave_calls = []
+    monkeypatch.setattr(
+        dummy_transport.r, "bgsave", lambda *a, **k: bgsave_calls.append(1)
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(409.0, -400.0))
+
+    calibrate_pot.main()
+
+    assert bgsave_calls == [1]

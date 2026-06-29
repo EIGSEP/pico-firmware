@@ -18,17 +18,28 @@ Requires PicoManager to be running and the ``potmon`` device to be
 healthy. The script never touches the serial port itself, so it can
 be invoked alongside the manager.
 
-Four modes:
+Five modes:
   --mode minmax   : bench, collect at min and max (2-point fit, default)
   --mode turns    : bench, collect at every full turn (least-squares)
   --mode azimuth  : in-box, operator drives the motor; sweep over the
                     operating turn, slope fit, zero pinned to motor-home
   --mode rezero   : in-box, re-pin the zero using the stored slope (fast;
                     needs only motor access)
+  --mode manual   : recovery, write a hand-supplied --slope/--intercept
+                    directly (no sweep) to restore the cal after a
+                    catastrophic Redis loss (e.g. Pi swap); the two numbers
+                    are read off a recent correlator .h5. Writes Redis even
+                    when the pot is down (loads on the next manager start).
+
+Every mode runs a physical slope sanity check: a 3.75-turn pot over the
+~3.3 V ADC range has a slope of ~409 deg/V, so a slope off by more than
+1.5x prints a WARNING and requires a typed 'yes' to save.
 
 Usage:
     calibrate-pot --mode azimuth
     calibrate-pot --mode rezero
+    calibrate-pot --mode manual --slope 409.1 --intercept -400.0 \\
+        --note "restored from corr_20260615.h5"
 """
 
 from argparse import ArgumentParser
@@ -68,6 +79,14 @@ HOME_AZ_TOL_DEG = 5.0
 # azimuth by more than this (deg) anywhere in the swept window, relative
 # to the calibration already stored in Redis.
 WILDLY_DIFFERENT_WARN_DEG = 30.0
+# Physical sanity bound on the slope, independent of the stored cal. A
+# full-travel `turns`-turn pot whose wiper spans ADC_VREF has a slope of
+# turns*360/Vref deg/V (~409 for the installed 3.75-turn pot over 3.3 V).
+# Warn (and escalate the save to a typed 'yes') when the computed or
+# operator-supplied |slope| is off by more than this factor — catches
+# order-of-magnitude typos (manual mode) and gross sweep/turn-count errors.
+# 1.5x -> an in-range window of ~273..614 deg/V for the installed pot.
+SLOPE_SANITY_FACTOR = 1.5
 
 
 def collect_samples(transport, n):
@@ -242,6 +261,28 @@ def predicted_angle_divergence(new_cal, old_cal, voltages):
     )
 
 
+def expected_slope_mag(turns, vref=ADC_VREF):
+    """Expected |slope| in deg/V for a full-travel ``turns``-turn pot.
+
+    The wiper spans ~0..``vref``, so a pot of ``turns`` full turns
+    (``turns*360`` mechanical degrees) gives ``turns*360/vref`` deg/V.
+    """
+    return turns * 360.0 / vref
+
+
+def slope_out_of_range(m, turns, vref=ADC_VREF, factor=SLOPE_SANITY_FACTOR):
+    """True when ``|m|`` diverges from the expected slope by more than ``factor``.
+
+    Magnitude-only (slope sign is a wiring-direction convention). A zero
+    slope, or a non-positive expected slope, is always out of range.
+    """
+    expected = expected_slope_mag(turns, vref)
+    if expected <= 0 or m == 0:
+        return True
+    ratio = max(abs(m) / expected, expected / abs(m))
+    return ratio > factor
+
+
 def collect_minmax(transport, n_samples, total_degrees):
     """Collect at min and max only (2-point calibration)."""
     input("\nSet the az potentiometer to MINIMUM position, then press Enter.")
@@ -369,17 +410,16 @@ def rezero(transport, n_samples):
     return (m, b), v0
 
 
-def prompt_save(diverged):
+def prompt_save(require_confirm):
     """Ask whether to persist the calibration. Returns True to save.
 
     Safe default: bare Enter (or anything other than y/yes) discards. When
-    ``diverged`` is True the operator must type the full word ``yes`` to
-    confirm overwriting a sharply different stored calibration.
+    ``require_confirm`` is True (a flagged calibration — sharply different
+    from the stored one, or a slope that fails the physical sanity check)
+    the operator must type the full word ``yes`` to confirm.
     """
-    if diverged:
-        resp = (
-            input("Type 'yes' to confirm the large change: ").strip().lower()
-        )
+    if require_confirm:
+        resp = input("Type 'yes' to confirm: ").strip().lower()
         return resp == "yes"
     resp = input("Save this calibration? [y/N]: ").strip().lower()
     return resp in ("y", "yes")
@@ -413,13 +453,36 @@ def build_parser():
         "-m",
         "--mode",
         type=str,
-        choices=["minmax", "turns", "azimuth", "rezero"],
+        choices=["minmax", "turns", "azimuth", "rezero", "manual"],
         default="minmax",
         help=(
             "Calibration mode. Bench: 'minmax' (2-point), 'turns' "
             "(per-turn least-squares). In-box (motor-driven): 'azimuth' "
             "(sweep + zero pinned to motor-home), 'rezero' (re-pin zero "
-            "with the stored slope). Default: minmax."
+            "with the stored slope). Recovery: 'manual' (write a "
+            "hand-supplied --slope/--intercept directly, no sweep). "
+            "Default: minmax."
+        ),
+    )
+    parser.add_argument(
+        "--slope",
+        type=float,
+        default=None,
+        help="Slope m (deg/V) for --mode manual. Required for that mode.",
+    )
+    parser.add_argument(
+        "--intercept",
+        type=float,
+        default=None,
+        help="Intercept b (deg) for --mode manual. Required for that mode.",
+    )
+    parser.add_argument(
+        "--note",
+        type=str,
+        default=None,
+        help=(
+            "Free-text provenance recorded in the calibration metadata, "
+            "e.g. 'restored from corr_20260615.h5'. Useful with --mode manual."
         ),
     )
     parser.add_argument(
@@ -468,10 +531,23 @@ def main():
         print("turns must be positive.", file=sys.stderr)
         sys.exit(1)
 
+    if args.mode == "manual" and (
+        args.slope is None or args.intercept is None
+    ):
+        print(
+            "--mode manual requires both --slope and --intercept.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     transport = Transport(host=args.redis_host, port=args.redis_port)
     pot_proxy = PicoProxy(POTMON_NAME, transport, source="calibrate-pot")
 
-    if not pot_proxy.is_available:
+    # Manual mode is a recovery path: it needs nothing from the pot to
+    # compute the cal, so it writes Redis even when the pot is down (the
+    # cal then loads on the next PicoManager start). Every other mode
+    # samples the live stream, so it still hard-requires the pot.
+    if args.mode != "manual" and not pot_proxy.is_available:
         print(
             f"{POTMON_NAME} is not reachable via PicoManager. "
             "Start the manager and confirm the pot Pico is enumerated.",
@@ -526,6 +602,10 @@ def main():
                 resid = compute_fit_residuals(
                     voltages, angles, free[0], free[1]
                 )
+        elif args.mode == "manual":
+            # Recovery path: no sweep — the operator supplies (m, b) directly.
+            cal = (args.slope, args.intercept)
+            voltages, angles = [], []
         else:  # rezero
             cal, v0 = rezero(transport, args.n_samples)
             voltages, angles = [v0], [0.0]
@@ -571,27 +651,29 @@ def main():
                 "one side — risk of hitting the pot's hard stop in operation."
             )
 
-    cal_data = {
-        "pot_az": list(cal),
-        "metadata": {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "mode": args.mode,
-            "n_points": len(angles),
-            "pot_az_voltages": [float(v) for v in voltages],
-            "angles": [float(a) for a in angles],
-            "n_samples": args.n_samples,
-        },
+    metadata = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": args.mode,
     }
+    # Manual mode has no sweep, so the sample-derived fields are meaningless.
+    if args.mode != "manual":
+        metadata["n_points"] = len(angles)
+        metadata["pot_az_voltages"] = [float(v) for v in voltages]
+        metadata["angles"] = [float(a) for a in angles]
+        metadata["n_samples"] = args.n_samples
     if args.mode in ("minmax", "turns"):
-        cal_data["metadata"]["turns"] = float(args.turns)
-        cal_data["metadata"]["total_degrees"] = total_degrees
+        metadata["turns"] = float(args.turns)
+        metadata["total_degrees"] = total_degrees
     if args.mode == "azimuth":
-        cal_data["metadata"]["motor_cfg"] = motor_cfg
-        cal_data["metadata"]["free_fit_intercept"] = float(free[1])
-        cal_data["metadata"]["residual_max_deg"] = resid["max_abs_deg"]
-        cal_data["metadata"]["residual_rms_deg"] = resid["rms_deg"]
+        metadata["motor_cfg"] = motor_cfg
+        metadata["free_fit_intercept"] = float(free[1])
+        metadata["residual_max_deg"] = resid["max_abs_deg"]
+        metadata["residual_rms_deg"] = resid["rms_deg"]
     if args.mode == "rezero":
-        cal_data["metadata"]["slope_reused"] = True
+        metadata["slope_reused"] = True
+    if args.note:
+        metadata["note"] = args.note
+    cal_data = {"pot_az": list(cal), "metadata": metadata}
 
     # Show the operator what was computed, then compare against the stored
     # calibration before writing anything.
@@ -600,7 +682,12 @@ def main():
         print(f"  ({len(angles)} points used for least-squares fit)")
 
     stored = PotCalStore(transport).get()
-    divergence = predicted_angle_divergence(cal, stored, voltages)
+    # Manual mode has no swept window to compare; the operator is typing
+    # authoritative numbers, so skip the divergence-vs-stored check.
+    if args.mode == "manual":
+        divergence = None
+    else:
+        divergence = predicted_angle_divergence(cal, stored, voltages)
     diverged = (
         divergence is not None and divergence > WILDLY_DIFFERENT_WARN_DEG
     )
@@ -614,7 +701,19 @@ def main():
         print(f"  stored: angle = {m_old:.4f} * V + {b_old:.4f}")
         print(f"  new:    angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
 
-    if not prompt_save(diverged):
+    # Physical sanity bound on the slope (all modes), independent of any
+    # stored cal — the main guard against a fat-fingered manual --slope.
+    slope_bad = slope_out_of_range(cal[0], args.turns)
+    if slope_bad:
+        expected = expected_slope_mag(args.turns)
+        print(
+            f"\nWARNING: slope |{cal[0]:.1f}| deg/V is more than "
+            f"{SLOPE_SANITY_FACTOR:g}x off the expected ~{expected:.0f} deg/V "
+            f"for a {args.turns:g}-turn pot over {ADC_VREF:.1f} V. "
+            "Check the wiring, --turns, or a typo in the slope."
+        )
+
+    if not prompt_save(diverged or slope_bad):
         print("Discarded. Nothing written to Redis or the live pot.")
         return
 
@@ -632,7 +731,15 @@ def main():
     )
 
     # Push to the running PicoPotentiometer so the new cal takes effect on
-    # the next status tick.
+    # the next status tick. Skip when the pot is known-down (manual recovery
+    # path) to avoid a guaranteed ~5 s timeout — the Redis write above already
+    # restored it for the next PicoManager start.
+    if not pot_proxy.is_available:
+        print(
+            "Pot not reachable; calibration is stored in Redis and "
+            "loads on the next PicoManager restart."
+        )
+        return
     try:
         pot_proxy.send_command(
             "set_calibration",
