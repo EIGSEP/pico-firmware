@@ -55,8 +55,8 @@ def test_main_azimuth_uncalibrated_pot_aborts(monkeypatch):
     monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
     monkeypatch.setattr(
         calibrate_imu,
-        "stream_alive",
-        lambda t, n, timeout_s=5.0: n in ("imu_az", "potmon"),
+        "stream_status",
+        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
     )
     monkeypatch.setattr(
         calibrate_imu.Calibrator,
@@ -138,8 +138,8 @@ def test_main_persists_and_pushes(monkeypatch):
     )
     monkeypatch.setattr(
         calibrate_imu,
-        "stream_alive",
-        lambda t, n, timeout_s=5.0: n == "imu_az" or n == "potmon",
+        "stream_status",
+        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
     )
     monkeypatch.setattr("builtins.input", lambda *a: "y")  # confirm save
 
@@ -218,8 +218,8 @@ def test_main_discard_writes_nothing(monkeypatch):
     )
     monkeypatch.setattr(
         calibrate_imu,
-        "stream_alive",
-        lambda t, n, timeout_s=5.0: n == "imu_az" or n == "potmon",
+        "stream_status",
+        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
     )
     monkeypatch.setattr("builtins.input", lambda *a: "n")  # decline save
 
@@ -294,3 +294,79 @@ def test_stream_alive_delegates_to_status(monkeypatch):
     monkeypatch.setattr(calibrate_imu, "stream_status",
                         lambda *a, **k: "faulted")
     assert calibrate_imu.stream_alive(DummyTransport(), "imu_el") is False
+
+
+def _answers(*seq):
+    """Return an input() stand-in that yields the given answers in order."""
+    it = iter(seq)
+    return lambda *a, **k: next(it)
+
+
+def test_main_faulted_imu_aborts_by_default(monkeypatch):
+    """imu_el publishing only status=error: main names it and aborts (return
+    1) when the operator does not opt to continue — never reaching the fit."""
+    transport = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status",
+        lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
+    )
+    monkeypatch.setattr(
+        calibrate_imu.Calibrator, "run_sweeps",
+        lambda self: pytest.fail("must abort before sweeps"),
+    )
+    monkeypatch.setattr("builtins.input", _answers(""))  # Enter = abort
+    assert calibrate_imu.main(["--mode", "elevation"]) == 1
+    assert ImuCalStore(transport).get() is None
+
+
+def test_main_faulted_imu_continue_skips_it(monkeypatch):
+    """Operator opts to continue without the faulted imu_el: main proceeds and
+    imu_el is absent from the alive set handed to the Calibrator."""
+    transport = DummyTransport()
+    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status",
+        lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
+    )
+    seen = {}
+
+    def fake_run_sweeps(self):
+        seen["alive"] = set(self.alive)
+        # Minimal empty sweeps -> no sections -> main returns 1 cleanly.
+        return (
+            {"imu_el": None, "imu_az": None, "level_index": 0, "direction": 1},
+            {"imu_az": None, "yaw_deg": None, "pot_deg": None},
+            {"imu_az": None, "pot_deg": None, "imu_el": None},
+        )
+
+    monkeypatch.setattr(calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps)
+    monkeypatch.setattr("builtins.input", _answers("y"))  # continue past fault
+    calibrate_imu.main(["--mode", "all"])
+    assert "imu_el" not in seen["alive"]
+    assert "imu_az" in seen["alive"]
+
+
+def test_main_fit_valueerror_is_clean(monkeypatch):
+    """A backstop ValueError from the fit surfaces as a clean return 1, not an
+    uncaught traceback."""
+    transport = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
+    )
+    monkeypatch.setattr(
+        calibrate_imu.Calibrator, "run_sweeps",
+        lambda self: ({"imu_el": None, "imu_az": None, "level_index": 0,
+                       "direction": 1},
+                      {"imu_az": None, "yaw_deg": None, "pot_deg": None},
+                      {"imu_az": None, "pot_deg": None, "imu_el": None}),
+    )
+
+    def boom(*a, **k):
+        raise ValueError("degenerate accel sphere")
+
+    monkeypatch.setattr(calibrate_imu, "fit_calibration_from_sweeps", boom)
+    monkeypatch.setattr("builtins.input", _answers("y"))
+    assert calibrate_imu.main(["--mode", "elevation"]) == 1

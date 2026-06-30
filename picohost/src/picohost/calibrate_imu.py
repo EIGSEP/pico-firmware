@@ -241,7 +241,31 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO)
     transport = Transport(host=args.redis_host, port=args.redis_port)
 
-    alive = {n for n in (IMU_AZ, IMU_EL, POTMON) if stream_alive(transport, n)}
+    states = {
+        n: stream_status(transport, n) for n in (IMU_AZ, IMU_EL, POTMON)
+    }
+    alive = {n for n, s in states.items() if s == "healthy"}
+    # A faulted IMU (publisher up, sensor down) streams status=error frames
+    # with accel=[0,0,0]. Without this gate it would pass a naive liveness
+    # check and poison the fit with a cryptic 'SVD did not converge'. Surface
+    # it and let the operator fix wiring (abort) or proceed without it.
+    faulted_imus = [n for n in (IMU_AZ, IMU_EL) if states[n] == "faulted"]
+    if faulted_imus:
+        for n in faulted_imus:
+            print(
+                f"{n}: stream is publishing only status=error "
+                f"(sensor faulted -- check wiring/power).",
+                file=sys.stderr,
+            )
+        ans = input(
+            f"Continue calibration without {', '.join(faulted_imus)}? "
+            f"[y to continue / Enter to abort]: "
+        ).strip().lower()
+        if ans not in ("y", "yes"):
+            print(
+                "Aborted -- fix the sensor(s) and rerun.", file=sys.stderr
+            )
+            return 1
     if IMU_AZ not in alive and IMU_EL not in alive:
         print("No IMU streams alive; nothing to calibrate.", file=sys.stderr)
         return 1
@@ -266,9 +290,15 @@ def main(argv=None):
 
     cal = Calibrator(transport, args.n_samples, alive, args.mode)
     el_sweep, az_level, az_tilt = cal.run_sweeps()
-    sections = fit_calibration_from_sweeps(
-        el_sweep, az_level, az_tilt, theta_cross_deg=args.theta_cross_deg
-    )
+    try:
+        sections = fit_calibration_from_sweeps(
+            el_sweep, az_level, az_tilt, theta_cross_deg=args.theta_cross_deg
+        )
+    except ValueError as e:
+        # Backstop: a degenerate/zero-norm fit (e.g. a fault that slipped in
+        # mid-sweep) names its cause here instead of an opaque SVD failure.
+        print(f"Fit failed: {e}", file=sys.stderr)
+        return 1
     if not sections:
         print("Fit produced no sections.", file=sys.stderr)
         return 1
