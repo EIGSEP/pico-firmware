@@ -5,7 +5,7 @@ Covers three layers, mirroring the potentiometer calibration suite:
   - ``compute_two_point``: the (V0, slope) fit from a 0 A point and a
     known-reference-current point.
   - ``CurrentCalStore``: the Redis-backed cal store round-trip / error paths.
-  - ``PicoLidar``: cal loaded at __init__, applied in ``_v_to_current`` and
+  - ``PicoLidar``: cal loaded at __init__, applied in ``_current_fields`` and
     the redis handler, and updated live via ``set_calibration``.
 """
 
@@ -119,15 +119,12 @@ class TestCurrentCalStore:
 class TestPicoLidarCurrentCal:
     """PicoLidar loads, applies, and live-updates the current cal."""
 
-    def test_uncalibrated_uses_nominal_conversion(self):
-        """No cal store → nominal ACS724 + divider transfer function."""
+    def test_uncalibrated_returns_none(self):
+        """No cal store → no nominal fallback; all three fields are None."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
             assert not lidar.is_current_calibrated
-            # V_adc at 0 A is Vq*k = 2.5 * (4.64/7.96) = 1.45729
-            assert lidar._v_to_current(2.5 * (4.64 / 7.96)) == pytest.approx(
-                0.0, abs=1e-6
-            )
+            assert lidar._current_fields(1.46) == (None, None, None)
         finally:
             lidar.disconnect()
 
@@ -140,8 +137,12 @@ class TestPicoLidarCurrentCal:
             assert lidar.is_current_calibrated
             assert lidar._current_cal == (1.0, 0.2)
             # I = (V_adc - V0) / slope = (1.2 - 1.0)/0.2 = 1.0 A
-            assert lidar._v_to_current(1.2) == pytest.approx(1.0, abs=1e-9)
-            assert lidar._v_to_current(1.0) == pytest.approx(0.0, abs=1e-9)
+            assert lidar._current_fields(1.2)[0] == pytest.approx(
+                1.0, abs=1e-9
+            )
+            assert lidar._current_fields(1.0)[0] == pytest.approx(
+                0.0, abs=1e-9
+            )
         finally:
             lidar.disconnect()
 
@@ -150,7 +151,9 @@ class TestPicoLidarCurrentCal:
         try:
             lidar.set_calibration(system_current_params=[1.0, 0.2])
             assert lidar.is_current_calibrated
-            assert lidar._v_to_current(1.4) == pytest.approx(2.0, abs=1e-9)
+            assert lidar._current_fields(1.4)[0] == pytest.approx(
+                2.0, abs=1e-9
+            )
         finally:
             lidar.disconnect()
 

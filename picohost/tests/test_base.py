@@ -1069,23 +1069,28 @@ class TestLidarRedisHandler:
     """PicoLidar fans the merged lidar status line into two metadata
     publishes: distance under 'lidar', current under 'system_current'.
 
-    The current entry is decoupled from the lidar I2C status, and its
-    derived current_a follows the nominal ACS724 + 3.3k/4.7k divider
-    transfer function. Every added field is a scalar (scalar-only contract
-    on picohost.base.redis_handler).
+    The current entry is decoupled from the lidar I2C status. current_a and
+    the cal scalars (current_cal_slope A/V, current_cal_intercept A) come from
+    the measured two-point cal projected to amps-vs-volts; all three are None
+    when no cal is loaded (no nominal fallback). Every added field is a scalar
+    (scalar-only contract on picohost.base.redis_handler).
     """
 
+    # A measured two-point cal (V0, slope_VperA): I = (V - V0) / slope.
+    _CAL = (1.4871, 0.11873)
+
     def _capture(self, lidar, data):
-        """Run the handler and return the list of dicts the base handler
-        would publish, in order."""
         published = []
         lidar._base_redis_handler = lambda d: published.append(dict(d))
         lidar._lidar_redis_handler(data)
         return published
 
-    def test_splits_into_lidar_and_system_current(self):
+    def test_splits_into_lidar_and_system_current_uncalibrated(self):
+        """No measured cal: current_a and both cal fields are None; the raw
+        current_voltage still rides along on its own system_current entry."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
+            assert lidar._current_cal is None  # boots uncalibrated
             pub = self._capture(
                 lidar,
                 {
@@ -1093,26 +1098,31 @@ class TestLidarRedisHandler:
                     "status": "update",
                     "app_id": 4,
                     "distance_m": 1.23,
-                    "current_voltage": 2.5 * (4.64 / 7.96),  # = Vq * k → 0 A
+                    "current_voltage": 0.7057,
                 },
             )
             assert [p["sensor_name"] for p in pub] == [
                 "lidar",
                 "system_current",
             ]
-            # lidar entry keeps distance, drops the current field
             assert pub[0]["distance_m"] == 1.23
             assert "current_voltage" not in pub[0]
-            # system_current entry carries raw + derived
-            assert pub[1]["current_voltage"] == 2.5 * (4.64 / 7.96)
-            assert pub[1]["current_a"] == pytest.approx(0.0, abs=1e-6)
+            sc = pub[1]
+            assert sc["current_voltage"] == 0.7057
+            assert sc["current_a"] is None
+            assert sc["current_cal_slope"] is None
+            assert sc["current_cal_intercept"] is None
         finally:
             lidar.disconnect()
 
-    def test_current_conversion_at_five_amps(self):
+    def test_calibrated_publishes_projected_cal_and_invariant(self):
+        """With a measured cal loaded the handler emits the amps-vs-volts
+        projection, and current_a == slope*V + intercept exactly."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
-            # 5 A → Vsensor = 2.5 + 0.2*5 = 3.5 V → Vadc = 3.5 * (4.64/7.96)
+            lidar._current_cal = self._CAL
+            v0, slope = self._CAL
+            v_adc = 1.84
             pub = self._capture(
                 lidar,
                 {
@@ -1120,29 +1130,37 @@ class TestLidarRedisHandler:
                     "status": "update",
                     "app_id": 4,
                     "distance_m": 0.0,
-                    "current_voltage": 3.5 * (4.64 / 7.96),
+                    "current_voltage": v_adc,
                 },
             )
-            assert pub[1]["current_a"] == pytest.approx(5.0, abs=1e-6)
+            sc = pub[1]
+            assert sc["current_cal_slope"] == pytest.approx(1.0 / slope)
+            assert sc["current_cal_intercept"] == pytest.approx(-v0 / slope)
+            assert sc["current_a"] == pytest.approx(
+                sc["current_cal_slope"] * v_adc + sc["current_cal_intercept"]
+            )
+            assert sc["current_a"] == pytest.approx((v_adc - v0) / slope)
         finally:
             lidar.disconnect()
 
     def test_current_status_decoupled_from_lidar_error(self):
+        """A lidar I2C error does not taint the current half's status."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
+            lidar._current_cal = self._CAL
             pub = self._capture(
                 lidar,
                 {
                     "sensor_name": "lidar",
-                    "status": "error",  # lidar I2C failed this cycle
+                    "status": "error",
                     "app_id": 4,
                     "distance_m": 9.9,
-                    "current_voltage": 2.9 * (4.64 / 7.96),  # 2 A
+                    "current_voltage": 1.60,
                 },
             )
-            assert pub[0]["status"] == "error"  # lidar half still errors
-            assert pub[1]["status"] == "update"  # current half independent
-            assert pub[1]["current_a"] == pytest.approx(2.0, abs=1e-6)
+            assert pub[0]["status"] == "error"
+            assert pub[1]["status"] == "update"
+            assert pub[1]["current_a"] is not None
         finally:
             lidar.disconnect()
 

@@ -966,14 +966,6 @@ class PicoLidar(PicoDevice):
     ``current_a``) and scalar-only.
     """
 
-    # ACS724-10AB (bidirectional, Vcc/2 zero point, 200 mV/A) read through a
-    # 3.32k (top) / 4.64k (bottom) divider into GP26 (DMM-measured values).
-    # These constants give the nominal transfer function used until a measured
-    # calibration is uploaded.
-    _DIVIDER_RATIO = 4.64 / (3.32 + 4.64)  # = 0.5829 (measured)
-    _SENSOR_VQ = 2.5  # volts at 0 A (Vcc/2)
-    _SENSOR_SENSITIVITY = 0.2  # volts per amp
-
     def __init__(self, *args, current_cal_store=None, **kwargs):
         """
         Parameters
@@ -982,11 +974,13 @@ class PicoLidar(PicoDevice):
             Redis-backed two-point current calibration. When provided and
             the store holds a cal, ``(V0, slope)`` is applied before the
             first status tick, so a rebooted lidar Pico comes up calibrated
-            from Redis. Falls back to the nominal transfer function when
-            absent. Other args/kwargs pass through to :class:`PicoDevice`.
+            from Redis. With no cal loaded, ``current_a`` and the published
+            cal scalars are ``None`` (no nominal fallback). Other args/kwargs
+            pass through to :class:`PicoDevice`.
         """
         # (V0, slope) at the ADC pin: I = (V_adc - V0) / slope. None ⇒
-        # nominal conversion. Set before super().__init__ so the handler
+        # uncalibrated: current_a and the published cal scalars are None
+        # (no nominal fallback). Set before super().__init__ so the handler
         # never sees an undefined attribute.
         self._current_cal = None
         # Warn-once latch: trips if a lidar status line ever arrives without
@@ -1020,17 +1014,23 @@ class PicoLidar(PicoDevice):
         if system_current_params is not None:
             self._current_cal = tuple(system_current_params)
 
-    def _v_to_current(self, v_adc):
-        """Convert the raw ADC-pin voltage to amps.
+    def _current_fields(self, v_adc):
+        """Project the loaded cal onto published (current_a, slope, intercept).
 
-        Uses the measured two-point cal ``(V0, slope)`` when one is loaded,
-        otherwise the nominal ACS724 + divider transfer function.
+        Returns the amps-vs-volts line actually applied to ``v_adc`` so the
+        published row is self-describing: ``current_a == slope * v_adc +
+        intercept``. All three are ``None`` when no measured two-point cal is
+        loaded — there is no nominal fallback, so an uncalibrated current
+        sensor reports ``None`` rather than a guessed value (mirrors potmon's
+        uncalibrated angle).
         """
-        if self._current_cal is not None:
-            v0, slope = self._current_cal
-            return (v_adc - v0) / slope
-        v_sensor = v_adc / self._DIVIDER_RATIO
-        return (v_sensor - self._SENSOR_VQ) / self._SENSOR_SENSITIVITY
+        if self._current_cal is None:
+            return None, None, None
+        v0, slope = self._current_cal
+        cal_slope = 1.0 / slope
+        cal_intercept = -v0 / slope
+        current_a = cal_slope * v_adc + cal_intercept
+        return current_a, cal_slope, cal_intercept
 
     def _lidar_redis_handler(self, data):
         """Split the merged lidar line into two metadata keys.
@@ -1045,12 +1045,15 @@ class PicoLidar(PicoDevice):
         v = data.pop("current_voltage", None)
         self._base_redis_handler(data)
         if v is not None:
+            current_a, cal_slope, cal_intercept = self._current_fields(v)
             self._base_redis_handler(
                 {
                     "sensor_name": "system_current",
                     "status": "update",
                     "current_voltage": v,
-                    "current_a": self._v_to_current(v),
+                    "current_a": current_a,
+                    "current_cal_slope": cal_slope,
+                    "current_cal_intercept": cal_intercept,
                 }
             )
         elif (
