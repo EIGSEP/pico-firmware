@@ -242,3 +242,33 @@ def test_main_discard_writes_nothing(monkeypatch):
     assert rc == 0  # clean discard
     assert ImuCalStore(transport).get() is None  # nothing persisted
     assert "set_calibration" not in captured  # no live push
+
+
+def _xadd(t, stream, **fields):
+    t.r.xadd(stream, {"value": json.dumps(fields)})
+
+
+def test_collect_vector_skips_error_frames(monkeypatch):
+    """status=error frames carry junk (accel=[0,0,0]); collect_vector must
+    drop them and average only the valid samples."""
+    t = DummyTransport()
+    _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
+    _xadd(t, "stream:imu_el", status="update", accel_x=2.0, accel_y=0.0, accel_z=8.0)
+    _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
+    _xadd(t, "stream:imu_el", status="update", accel_x=4.0, accel_y=0.0, accel_z=10.0)
+    v = calibrate_imu.collect_vector(
+        t, "imu_el", ("accel_x", "accel_y", "accel_z"), n=2, start_id="0-0"
+    )
+    assert np.allclose(v, [3.0, 0.0, 9.0])  # mean of the two valid frames
+
+
+def test_collect_vector_all_error_raises_named(monkeypatch):
+    """A faulted IMU (every frame status=error) must abort with a message
+    naming the stream and the valid/required counts — not block or NaN."""
+    t = DummyTransport()
+    for _ in range(3):
+        _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
+    with pytest.raises(RuntimeError, match="imu_el.*status=error"):
+        calibrate_imu.collect_vector(
+            t, "imu_el", ("accel_x", "accel_y", "accel_z"), n=3, start_id="0-0"
+        )
