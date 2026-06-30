@@ -33,21 +33,25 @@ IMU_AZ, IMU_EL, POTMON = "imu_az", "imu_el", "potmon"
 
 
 def collect_vector(transport, name, fields, n, start_id="$", reducer=None):
-    """Reduce `n` fresh entries of `fields` from stream:<name>.
+    """Reduce `n` fresh VALID entries of `fields` from stream:<name>.
 
     Reads only entries published after this call starts (``start_id``
     defaults to ``"$"``), so repeated calls within one sweep don't
-    double-count the same firmware tick. Mirrors
-    :func:`calibrate_pot.collect_samples`' fail-fast semantics: if no new
-    entries arrive within ``SAMPLE_TIMEOUT_S``, raise rather than average a
-    stale value. Tests pass ``start_id="0-0"`` to read pre-loaded entries.
+    double-count the same firmware tick. Frames whose ``status`` is
+    ``"error"`` carry junk (a faulted IMU streams accel=[0,0,0]) and are
+    skipped. To avoid looping forever on a sustained fault, abort once
+    ``n`` consecutive error frames have been skipped, naming the stream.
+    Mirrors :func:`calibrate_pot.collect_samples`' fail-fast semantics: if
+    no new entries arrive within ``SAMPLE_TIMEOUT_S``, raise rather than
+    average a stale value. Tests pass ``start_id="0-0"`` to read pre-loaded
+    entries.
 
     ``reducer`` maps the ``(n, len(fields))`` sample array to the reduced
     result; it defaults to a per-field arithmetic mean. Pass a circular
     reducer for angle fields (e.g. yaw) that wrap at +/-180.
     """
     stream = f"stream:{name}"
-    rows, last_id = [], start_id
+    rows, last_id, consec_err = [], start_id, 0
     while len(rows) < n:
         resp = transport.r.xread(
             {stream: last_id},
@@ -60,9 +64,19 @@ def collect_vector(transport, name, fields, n, start_id="$", reducer=None):
             )
         for _s, msgs in resp:
             for msg_id, f in msgs:
-                value = json.loads(f[b"value"])
-                rows.append([float(value[k]) for k in fields])
                 last_id = msg_id
+                value = json.loads(f[b"value"])
+                if value.get("status") == "error":
+                    consec_err += 1
+                    if consec_err >= n:
+                        raise RuntimeError(
+                            f"{name}: {consec_err} consecutive status=error "
+                            f"frames (sensor faulted); collected only "
+                            f"{len(rows)}/{n} valid samples."
+                        )
+                    continue
+                consec_err = 0
+                rows.append([float(value[k]) for k in fields])
     arr = np.asarray(rows, dtype=float)
     return arr.mean(axis=0) if reducer is None else reducer(arr)
 
