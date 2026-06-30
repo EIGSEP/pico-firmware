@@ -23,7 +23,12 @@ import numpy as np
 from eigsep_redis import Transport
 
 from .buses import ImuCalStore, PotCalStore
-from .imu_geometry import circular_mean_deg, fit_calibration_from_sweeps
+from .imu_geometry import (
+    DEFAULT_THETA_DEAD_DEG,
+    DEFAULT_THETA_SAT_DEG,
+    circular_mean_deg,
+    fit_calibration_from_sweeps,
+)
 from .proxy import PicoProxy
 
 logger = logging.getLogger(__name__)
@@ -230,7 +235,12 @@ def build_parser():
         "-m", "--mode", default="all", choices=["elevation", "azimuth", "all"]
     )
     p.add_argument("-n", "--n-samples", type=int, default=10)
-    p.add_argument("--theta-cross-deg", type=float, default=1.6)
+    p.add_argument(
+        "--theta-sat-deg", type=float, default=DEFAULT_THETA_SAT_DEG
+    )
+    p.add_argument(
+        "--theta-dead-deg", type=float, default=DEFAULT_THETA_DEAD_DEG
+    )
     p.add_argument("--redis-host", default="localhost")
     p.add_argument("--redis-port", type=int, default=6379)
     return p
@@ -298,7 +308,11 @@ def main(argv=None):
         return 1
     try:
         sections = fit_calibration_from_sweeps(
-            el_sweep, az_level, az_tilt, theta_cross_deg=args.theta_cross_deg
+            el_sweep,
+            az_level,
+            az_tilt,
+            theta_sat_deg=args.theta_sat_deg,
+            theta_dead_deg=args.theta_dead_deg,
         )
     except ValueError as e:
         # Backstop: a degenerate/zero-norm fit (e.g. a fault that slipped in

@@ -18,7 +18,8 @@ _AZ_CAL = {
     "az_sign": 1.0,
     "az_yaw_offset_deg": 30.0,
     "az_yaw_sign": 1.0,
-    "theta_cross_deg": 1.6,
+    "theta_sat_deg": 45.0,
+    "theta_dead_deg": 8.0,
 }
 _EL_CAL = {
     "accel_bias": [0.0, 0.0, 0.0],
@@ -73,13 +74,30 @@ def test_imu_az_uncalibrated_publishes_none_fields():
 def test_imu_az_calibrated_reports_az_and_el():
     dev = DummyPicoIMU("/dev/dummy")
     dev.set_calibration(imu_az=_AZ_CAL)
-    pub = _capture(dev, _az_status(40.0, 70.0, 100.0))
-    assert pub["el_deg"] == pytest.approx(40.0, abs=1e-3)
-    # tilted -> accel regime -> az = phi + 30 = 100
+    pub = _capture(dev, _az_status(60.0, 70.0, 100.0))
+    assert pub["el_deg"] == pytest.approx(60.0, abs=1e-3)
+    # well tilted (in the 45-135 deg plateau) -> accel regime -> az = phi + 30
     assert pub["az_from_accel_deg"] == pytest.approx(100.0, abs=1e-3)
     assert pub["az_from_yaw_deg"] == pytest.approx(130.0, abs=1e-3)
     assert pub["az_blend_weight"] == pytest.approx(1.0)
     assert pub["az_deg"] == pytest.approx(100.0, abs=1e-3)
+    dev.disconnect()
+
+
+def test_imu_az_legacy_cal_deadband_suppresses_pole_garbage():
+    # A cal written before the sin^2 blend (only the old theta_cross_deg key)
+    # must still pick up the deadband via the handler's .get(...) fallbacks, so
+    # a near-pole tilt -- which the old linear ramp would have trusted as full
+    # accel -- now falls entirely on yaw.
+    legacy = {k: v for k, v in _AZ_CAL.items()}
+    del legacy["theta_sat_deg"]
+    del legacy["theta_dead_deg"]
+    legacy["theta_cross_deg"] = 1.6
+    dev = DummyPicoIMU("/dev/dummy")
+    dev.set_calibration(imu_az=legacy)
+    pub = _capture(dev, _az_status(5.0, 70.0, 100.0))  # 5 deg < 8 deg deadband
+    assert pub["az_blend_weight"] == pytest.approx(0.0)
+    assert pub["az_deg"] == pytest.approx(130.0, abs=1e-3)  # yaw + 30
     dev.disconnect()
 
 
