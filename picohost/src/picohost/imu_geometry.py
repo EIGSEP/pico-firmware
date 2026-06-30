@@ -40,14 +40,29 @@ def fit_accel_sphere(samples):
     b = np.sum(p**2, axis=1)
     sol, *_ = np.linalg.lstsq(A, b, rcond=None)
     bias = sol[:3]
-    scale = float(np.sqrt(sol[3] + bias @ bias))
+    scale = float(np.sqrt(max(sol[3] + bias @ bias, 0.0)))
+    if not np.isfinite(scale) or scale < 1e-6:
+        raise ValueError(
+            "fit_accel_sphere: degenerate accel sphere (scale "
+            f"{scale:.3g} ~ 0; sensor likely faulted: all accel=[0,0,0])"
+        )
     return bias, scale
 
 
 def precondition(a, bias):
-    """(a - bias) normalized to unit length. Accepts (3,) or (N,3)."""
+    """(a - bias) normalized to unit length. Accepts (3,) or (N,3).
+
+    Raises ValueError on a zero-norm vector (a faulted IMU streams
+    accel=[0,0,0], which would otherwise normalize to NaN and surface
+    several calls later as an opaque ``SVD did not converge``).
+    """
     a = np.asarray(a, dtype=float) - np.asarray(bias, dtype=float)
     n = np.linalg.norm(a, axis=-1, keepdims=True)
+    if np.any(n < 1e-9):
+        raise ValueError(
+            "precondition: zero-norm accel vector "
+            "(sensor likely faulted: accel=[0,0,0])"
+        )
     return a / n
 
 
