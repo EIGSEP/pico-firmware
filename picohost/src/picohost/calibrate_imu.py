@@ -241,9 +241,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO)
     transport = Transport(host=args.redis_host, port=args.redis_port)
 
-    states = {
-        n: stream_status(transport, n) for n in (IMU_AZ, IMU_EL, POTMON)
-    }
+    states = {n: stream_status(transport, n) for n in (IMU_AZ, IMU_EL, POTMON)}
     alive = {n for n, s in states.items() if s == "healthy"}
     # A faulted IMU (publisher up, sensor down) streams status=error frames
     # with accel=[0,0,0]. Without this gate it would pass a naive liveness
@@ -257,14 +255,16 @@ def main(argv=None):
                 f"(sensor faulted -- check wiring/power).",
                 file=sys.stderr,
             )
-        ans = input(
-            f"Continue calibration without {', '.join(faulted_imus)}? "
-            f"[y to continue / Enter to abort]: "
-        ).strip().lower()
-        if ans not in ("y", "yes"):
-            print(
-                "Aborted -- fix the sensor(s) and rerun.", file=sys.stderr
+        ans = (
+            input(
+                f"Continue calibration without {', '.join(faulted_imus)}? "
+                f"[y to continue / Enter to abort]: "
             )
+            .strip()
+            .lower()
+        )
+        if ans not in ("y", "yes"):
+            print("Aborted -- fix the sensor(s) and rerun.", file=sys.stderr)
             return 1
     if IMU_AZ not in alive and IMU_EL not in alive:
         print("No IMU streams alive; nothing to calibrate.", file=sys.stderr)

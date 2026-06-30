@@ -68,8 +68,6 @@ def test_main_azimuth_uncalibrated_pot_aborts(monkeypatch):
     assert ImuCalStore(transport).get() is None
 
 
-
-
 def test_main_persists_and_pushes(monkeypatch):
     """End-to-end main(): synthetic sweeps -> fit -> ImuCalStore + proxy push."""
     from picohost import imu_geometry as ig
@@ -237,10 +235,38 @@ def test_collect_vector_skips_error_frames():
     """status=error frames carry junk (accel=[0,0,0]); collect_vector must
     drop them and average only the valid samples."""
     t = DummyTransport()
-    _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
-    _xadd(t, "stream:imu_el", status="update", accel_x=2.0, accel_y=0.0, accel_z=8.0)
-    _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
-    _xadd(t, "stream:imu_el", status="update", accel_x=4.0, accel_y=0.0, accel_z=10.0)
+    _xadd(
+        t,
+        "stream:imu_el",
+        status="error",
+        accel_x=0.0,
+        accel_y=0.0,
+        accel_z=0.0,
+    )
+    _xadd(
+        t,
+        "stream:imu_el",
+        status="update",
+        accel_x=2.0,
+        accel_y=0.0,
+        accel_z=8.0,
+    )
+    _xadd(
+        t,
+        "stream:imu_el",
+        status="error",
+        accel_x=0.0,
+        accel_y=0.0,
+        accel_z=0.0,
+    )
+    _xadd(
+        t,
+        "stream:imu_el",
+        status="update",
+        accel_x=4.0,
+        accel_y=0.0,
+        accel_z=10.0,
+    )
     v = calibrate_imu.collect_vector(
         t, "imu_el", ("accel_x", "accel_y", "accel_z"), n=2, start_id="0-0"
     )
@@ -252,7 +278,14 @@ def test_collect_vector_all_error_raises_named():
     naming the stream and the valid/required counts — not block or NaN."""
     t = DummyTransport()
     for _ in range(3):
-        _xadd(t, "stream:imu_el", status="error", accel_x=0.0, accel_y=0.0, accel_z=0.0)
+        _xadd(
+            t,
+            "stream:imu_el",
+            status="error",
+            accel_x=0.0,
+            accel_y=0.0,
+            accel_z=0.0,
+        )
     with pytest.raises(RuntimeError, match="imu_el.*status=error"):
         calibrate_imu.collect_vector(
             t, "imu_el", ("accel_x", "accel_y", "accel_z"), n=3, start_id="0-0"
@@ -262,8 +295,21 @@ def test_collect_vector_all_error_raises_named():
 def test_stream_status_healthy(monkeypatch):
     """An update frame -> healthy."""
     t = DummyTransport()
-    resp = [("stream:imu_az", [(b"1-0", {b"value": json.dumps(
-        {"status": "update", "accel_x": 0.0}).encode()})])]
+    resp = [
+        (
+            "stream:imu_az",
+            [
+                (
+                    b"1-0",
+                    {
+                        b"value": json.dumps(
+                            {"status": "update", "accel_x": 0.0}
+                        ).encode()
+                    },
+                )
+            ],
+        )
+    ]
     monkeypatch.setattr(t.r, "xread", lambda *a, **k: resp)
     assert calibrate_imu.stream_status(t, "imu_az", timeout_s=0.1) == "healthy"
 
@@ -272,10 +318,25 @@ def test_stream_status_faulted(monkeypatch):
     """Frames arriving but all status=error -> faulted (publisher up, sensor
     down). Drained one window then an empty read ends the loop."""
     t = DummyTransport()
-    err = [("stream:imu_el", [(b"1-0", {b"value": json.dumps(
-        {"status": "error", "accel_x": 0.0}).encode()})])]
+    err = [
+        (
+            "stream:imu_el",
+            [
+                (
+                    b"1-0",
+                    {
+                        b"value": json.dumps(
+                            {"status": "error", "accel_x": 0.0}
+                        ).encode()
+                    },
+                )
+            ],
+        )
+    ]
     calls = [err, []]  # first read: an error frame; second: nothing more
-    monkeypatch.setattr(t.r, "xread", lambda *a, **k: calls.pop(0) if calls else [])
+    monkeypatch.setattr(
+        t.r, "xread", lambda *a, **k: calls.pop(0) if calls else []
+    )
     assert calibrate_imu.stream_status(t, "imu_el", timeout_s=0.1) == "faulted"
 
 
@@ -288,11 +349,13 @@ def test_stream_status_dead(monkeypatch):
 
 def test_stream_alive_delegates_to_status(monkeypatch):
     """stream_alive is True only for a healthy stream."""
-    monkeypatch.setattr(calibrate_imu, "stream_status",
-                        lambda *a, **k: "healthy")
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda *a, **k: "healthy"
+    )
     assert calibrate_imu.stream_alive(DummyTransport(), "imu_az") is True
-    monkeypatch.setattr(calibrate_imu, "stream_status",
-                        lambda *a, **k: "faulted")
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda *a, **k: "faulted"
+    )
     assert calibrate_imu.stream_alive(DummyTransport(), "imu_el") is False
 
 
@@ -308,11 +371,13 @@ def test_main_faulted_imu_aborts_by_default(monkeypatch):
     transport = DummyTransport()
     monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
     monkeypatch.setattr(
-        calibrate_imu, "stream_status",
+        calibrate_imu,
+        "stream_status",
         lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
     )
     monkeypatch.setattr(
-        calibrate_imu.Calibrator, "run_sweeps",
+        calibrate_imu.Calibrator,
+        "run_sweeps",
         lambda self: pytest.fail("must abort before sweeps"),
     )
     monkeypatch.setattr("builtins.input", _answers(""))  # Enter = abort
@@ -327,7 +392,8 @@ def test_main_faulted_imu_continue_skips_it(monkeypatch):
     PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})
     monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
     monkeypatch.setattr(
-        calibrate_imu, "stream_status",
+        calibrate_imu,
+        "stream_status",
         lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
     )
     seen = {}
@@ -341,7 +407,9 @@ def test_main_faulted_imu_continue_skips_it(monkeypatch):
             {"imu_az": None, "pot_deg": None, "imu_el": None},
         )
 
-    monkeypatch.setattr(calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps)
+    monkeypatch.setattr(
+        calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps
+    )
 
     prompts = []
 
@@ -353,7 +421,9 @@ def test_main_faulted_imu_continue_skips_it(monkeypatch):
     calibrate_imu.main(["--mode", "all"])
     assert "imu_el" not in seen["alive"]
     assert "imu_az" in seen["alive"]
-    assert any("imu_el" in p for p in prompts)  # operator was actually prompted
+    assert any(
+        "imu_el" in p for p in prompts
+    )  # operator was actually prompted
 
 
 def test_main_fit_valueerror_is_clean(monkeypatch):
@@ -365,19 +435,23 @@ def test_main_fit_valueerror_is_clean(monkeypatch):
         calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
     )
     monkeypatch.setattr(
-        calibrate_imu.Calibrator, "run_sweeps",
-        lambda self: ({"imu_el": None, "imu_az": None, "level_index": 0,
-                       "direction": 1},
-                      {"imu_az": None, "yaw_deg": None, "pot_deg": None},
-                      {"imu_az": None, "pot_deg": None, "imu_el": None}),
+        calibrate_imu.Calibrator,
+        "run_sweeps",
+        lambda self: (
+            {"imu_el": None, "imu_az": None, "level_index": 0, "direction": 1},
+            {"imu_az": None, "yaw_deg": None, "pot_deg": None},
+            {"imu_az": None, "pot_deg": None, "imu_el": None},
+        ),
     )
 
     def boom(*a, **k):
         raise ValueError("degenerate accel sphere")
 
     monkeypatch.setattr(calibrate_imu, "fit_calibration_from_sweeps", boom)
-    monkeypatch.setattr("builtins.input",
-                        lambda *a, **k: pytest.fail("no prompt expected before fit error"))
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda *a, **k: pytest.fail("no prompt expected before fit error"),
+    )
     assert calibrate_imu.main(["--mode", "elevation"]) == 1
 
 
@@ -390,6 +464,7 @@ def test_main_sweep_runtimeerror_is_clean(monkeypatch):
     monkeypatch.setattr(
         calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
     )
+
     def boom(self):
         raise RuntimeError(
             "imu_el: 3 consecutive status=error frames (sensor faulted); "
