@@ -68,21 +68,6 @@ def test_main_azimuth_uncalibrated_pot_aborts(monkeypatch):
     assert ImuCalStore(transport).get() is None
 
 
-def test_stream_alive_true_false(monkeypatch):
-    """Liveness via blocking "$": True only when a NEW entry arrives.
-
-    Monkeypatch xread directly so the test is deterministic and doesn't
-    depend on fakeredis racing the "$" cursor against pre-loaded entries
-    (a "$" read correctly sees nothing for pre-existing entries).
-    """
-    t = DummyTransport()
-
-    alive = [("stream:imu_az", [(b"1-0", {b"value": b"{}"})])]
-    monkeypatch.setattr(t.r, "xread", lambda *a, **k: alive)
-    assert calibrate_imu.stream_alive(t, "imu_az", timeout_s=0.1) is True
-
-    monkeypatch.setattr(t.r, "xread", lambda *a, **k: [])
-    assert calibrate_imu.stream_alive(t, "imu_el", timeout_s=0.1) is False
 
 
 def test_main_persists_and_pushes(monkeypatch):
@@ -272,3 +257,40 @@ def test_collect_vector_all_error_raises_named(monkeypatch):
         calibrate_imu.collect_vector(
             t, "imu_el", ("accel_x", "accel_y", "accel_z"), n=3, start_id="0-0"
         )
+
+
+def test_stream_status_healthy(monkeypatch):
+    """An update frame -> healthy."""
+    t = DummyTransport()
+    resp = [("stream:imu_az", [(b"1-0", {b"value": json.dumps(
+        {"status": "update", "accel_x": 0.0}).encode()})])]
+    monkeypatch.setattr(t.r, "xread", lambda *a, **k: resp)
+    assert calibrate_imu.stream_status(t, "imu_az", timeout_s=0.1) == "healthy"
+
+
+def test_stream_status_faulted(monkeypatch):
+    """Frames arriving but all status=error -> faulted (publisher up, sensor
+    down). Drained one window then an empty read ends the loop."""
+    t = DummyTransport()
+    err = [("stream:imu_el", [(b"1-0", {b"value": json.dumps(
+        {"status": "error", "accel_x": 0.0}).encode()})])]
+    calls = [err, []]  # first read: an error frame; second: nothing more
+    monkeypatch.setattr(t.r, "xread", lambda *a, **k: calls.pop(0) if calls else [])
+    assert calibrate_imu.stream_status(t, "imu_el", timeout_s=0.1) == "faulted"
+
+
+def test_stream_status_dead(monkeypatch):
+    """No frame within the window -> dead."""
+    t = DummyTransport()
+    monkeypatch.setattr(t.r, "xread", lambda *a, **k: [])
+    assert calibrate_imu.stream_status(t, "imu_el", timeout_s=0.1) == "dead"
+
+
+def test_stream_alive_delegates_to_status(monkeypatch):
+    """stream_alive is True only for a healthy stream."""
+    monkeypatch.setattr(calibrate_imu, "stream_status",
+                        lambda *a, **k: "healthy")
+    assert calibrate_imu.stream_alive(DummyTransport(), "imu_az") is True
+    monkeypatch.setattr(calibrate_imu, "stream_status",
+                        lambda *a, **k: "faulted")
+    assert calibrate_imu.stream_alive(DummyTransport(), "imu_el") is False

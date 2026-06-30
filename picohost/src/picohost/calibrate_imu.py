@@ -29,6 +29,7 @@ from .proxy import PicoProxy
 logger = logging.getLogger(__name__)
 
 SAMPLE_TIMEOUT_S = 5.0
+STATUS_SAMPLES = 5  # frames to sample when classifying a stream's liveness
 IMU_AZ, IMU_EL, POTMON = "imu_az", "imu_el", "potmon"
 
 
@@ -81,17 +82,51 @@ def collect_vector(transport, name, fields, n, start_id="$", reducer=None):
     return arr.mean(axis=0) if reducer is None else reducer(arr)
 
 
-def stream_alive(transport, name, timeout_s=SAMPLE_TIMEOUT_S):
-    """True if stream:<name> publishes a NEW entry within timeout_s.
+def stream_status(
+    transport, name, timeout_s=SAMPLE_TIMEOUT_S, samples=STATUS_SAMPLES
+):
+    """Classify stream:<name> as 'healthy', 'faulted', or 'dead'.
 
-    Uses a blocking ``$`` read so a dead-but-stale stream (old entries, no
-    current publisher) reads False — the graceful-degradation gate must not
-    treat a crashed IMU as alive and feed its junk into the fit.
+    Blocks on a ``$`` cursor so a stale stream (old entries, no live
+    publisher) reads 'dead' — the graceful-degradation gate must not treat
+    a crashed IMU as alive. Samples up to ``samples`` fresh frames within
+    ``timeout_s``:
+
+      - no frame arrives           -> 'dead'    (no live publisher)
+      - >=1 frame status=='update' -> 'healthy'
+      - frames arrive, all error   -> 'faulted' (publisher up, sensor down;
+                                       these frames carry accel=[0,0,0])
+
+    A single-frame check is too noisy (one stray error frame on a healthy
+    sensor would false-trip), so 'faulted' requires a full window with no
+    'update'.
     """
-    resp = transport.r.xread(
-        {f"stream:{name}": "$"}, block=int(timeout_s * 1000), count=1
-    )
-    return bool(resp)
+    stream = f"stream:{name}"
+    last_id, seen_any, remaining = "$", False, samples
+    while remaining > 0:
+        resp = transport.r.xread(
+            {stream: last_id}, block=int(timeout_s * 1000), count=remaining
+        )
+        if not resp:
+            break
+        for _s, msgs in resp:
+            for msg_id, f in msgs:
+                value = json.loads(f[b"value"])
+                if value.get("status") == "update":
+                    return "healthy"
+                seen_any = True
+                last_id = msg_id
+                remaining -= 1
+    return "faulted" if seen_any else "dead"
+
+
+def stream_alive(transport, name, timeout_s=SAMPLE_TIMEOUT_S):
+    """True only if stream:<name> is publishing valid (status=update) frames.
+
+    Thin wrapper over :func:`stream_status`; a faulted or dead stream is not
+    alive for calibration.
+    """
+    return stream_status(transport, name, timeout_s=timeout_s) == "healthy"
 
 
 class Calibrator:
