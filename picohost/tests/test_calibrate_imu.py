@@ -233,7 +233,7 @@ def _xadd(t, stream, **fields):
     t.r.xadd(stream, {"value": json.dumps(fields)})
 
 
-def test_collect_vector_skips_error_frames(monkeypatch):
+def test_collect_vector_skips_error_frames():
     """status=error frames carry junk (accel=[0,0,0]); collect_vector must
     drop them and average only the valid samples."""
     t = DummyTransport()
@@ -247,7 +247,7 @@ def test_collect_vector_skips_error_frames(monkeypatch):
     assert np.allclose(v, [3.0, 0.0, 9.0])  # mean of the two valid frames
 
 
-def test_collect_vector_all_error_raises_named(monkeypatch):
+def test_collect_vector_all_error_raises_named():
     """A faulted IMU (every frame status=error) must abort with a message
     naming the stream and the valid/required counts — not block or NaN."""
     t = DummyTransport()
@@ -342,10 +342,18 @@ def test_main_faulted_imu_continue_skips_it(monkeypatch):
         )
 
     monkeypatch.setattr(calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps)
-    monkeypatch.setattr("builtins.input", _answers("y"))  # continue past fault
+
+    prompts = []
+
+    def spy_input(prompt=""):
+        prompts.append(prompt)
+        return "y"
+
+    monkeypatch.setattr("builtins.input", spy_input)
     calibrate_imu.main(["--mode", "all"])
     assert "imu_el" not in seen["alive"]
     assert "imu_az" in seen["alive"]
+    assert any("imu_el" in p for p in prompts)  # operator was actually prompted
 
 
 def test_main_fit_valueerror_is_clean(monkeypatch):
@@ -368,5 +376,25 @@ def test_main_fit_valueerror_is_clean(monkeypatch):
         raise ValueError("degenerate accel sphere")
 
     monkeypatch.setattr(calibrate_imu, "fit_calibration_from_sweeps", boom)
-    monkeypatch.setattr("builtins.input", _answers("y"))
+    monkeypatch.setattr("builtins.input",
+                        lambda *a, **k: pytest.fail("no prompt expected before fit error"))
+    assert calibrate_imu.main(["--mode", "elevation"]) == 1
+
+
+def test_main_sweep_runtimeerror_is_clean(monkeypatch):
+    """A RuntimeError raised by collect_vector during a sweep (sustained fault
+    beginning mid-sweep) must surface as a clean return 1, not an uncaught
+    traceback."""
+    transport = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
+    )
+    def boom(self):
+        raise RuntimeError(
+            "imu_el: 3 consecutive status=error frames (sensor faulted); "
+            "collected only 0/10 valid samples."
+        )
+
+    monkeypatch.setattr(calibrate_imu.Calibrator, "run_sweeps", boom)
     assert calibrate_imu.main(["--mode", "elevation"]) == 1

@@ -289,7 +289,13 @@ def main(argv=None):
             return 1
 
     cal = Calibrator(transport, args.n_samples, alive, args.mode)
-    el_sweep, az_level, az_tilt = cal.run_sweeps()
+    try:
+        el_sweep, az_level, az_tilt = cal.run_sweeps()
+    except RuntimeError as e:
+        # A fault that begins mid-sweep makes collect_vector abort with a
+        # named RuntimeError; surface it cleanly rather than as a traceback.
+        print(f"Sweep aborted: {e}", file=sys.stderr)
+        return 1
     try:
         sections = fit_calibration_from_sweeps(
             el_sweep, az_level, az_tilt, theta_cross_deg=args.theta_cross_deg
