@@ -284,3 +284,30 @@ def test_circular_mean_deg_handles_wrap():
     assert abs(ig.circular_mean_deg([170.0, -170.0])) == pytest.approx(
         180.0, abs=1e-6
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Math backstops (zero-norm and degenerate accel guards)
+# ---------------------------------------------------------------------------
+
+
+def test_precondition_rejects_zero_norm_vector():
+    """A faulted IMU streams accel=[0,0,0]; with a zero bias that normalizes
+    to NaN. precondition must raise a descriptive ValueError instead."""
+    with pytest.raises(ValueError, match="zero-norm"):
+        ig.precondition(np.zeros((4, 3)), np.zeros(3))
+
+
+def test_precondition_accepts_normal_vectors():
+    """Guard must not disturb the normal path: real |g| accel preconditions
+    to unit vectors."""
+    a = np.array([[0.0, 0.0, 9.81], [9.81, 0.0, 0.0]])
+    u = ig.precondition(a, np.zeros(3))
+    assert np.allclose(np.linalg.norm(u, axis=-1), 1.0)
+
+
+def test_fit_accel_sphere_rejects_degenerate_scale():
+    """All-zero accel samples fit a sphere of radius 0; that degenerate scale
+    must raise, not silently feed scale=0 into a divide."""
+    with pytest.raises(ValueError, match="degenerate"):
+        ig.fit_accel_sphere(np.zeros((6, 3)))
