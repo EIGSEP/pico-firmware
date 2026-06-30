@@ -945,7 +945,13 @@ class PicoIMU(PicoDevice):
             az_y = ig.az_from_yaw(
                 yaw, cal["az_yaw_sign"], cal["az_yaw_offset_deg"]
             )
-            az, w = ig.blend_az(az_a, az_y, el, cal["theta_cross_deg"])
+            az, w = ig.blend_az(
+                az_a,
+                az_y,
+                el,
+                cal.get("theta_sat_deg", ig.DEFAULT_THETA_SAT_DEG),
+                cal.get("theta_dead_deg", ig.DEFAULT_THETA_DEAD_DEG),
+            )
             out["az_from_yaw_deg"] = az_y
             out["az_deg"] = az
             out["az_blend_weight"] = w

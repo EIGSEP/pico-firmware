@@ -529,7 +529,8 @@ class TestDiscoverNew:
             "az_sign": 1.0,
             "az_yaw_offset_deg": 30.0,
             "az_yaw_sign": 1.0,
-            "theta_cross_deg": 1.6,
+            "theta_sat_deg": 45.0,
+            "theta_dead_deg": 8.0,
         }
         # Pre-populate the manager's ImuCalStore before discovery.
         mgr._imu_cal_store.upload({"imu_az": _AZ_CAL})

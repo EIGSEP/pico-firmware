@@ -135,27 +135,77 @@ def test_az_from_yaw_applies_sign_and_offset():
 
 def test_blend_az_picks_yaw_near_level_and_accel_when_tilted():
     az_y, az_a = 100.0, 104.0
-    near, w_near = ig.blend_az(az_a, az_y, el_deg=0.0, theta_cross_deg=1.6)
-    tilt, w_tilt = ig.blend_az(az_a, az_y, el_deg=45.0, theta_cross_deg=1.6)
-    assert near == pytest.approx(100.0)  # all yaw
+    near, w_near = ig.blend_az(
+        az_a, az_y, el_deg=0.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
+    tilt, w_tilt = ig.blend_az(
+        az_a, az_y, el_deg=90.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
+    assert near == pytest.approx(100.0)  # near a pole -> all yaw
     assert w_near == pytest.approx(0.0)
-    assert tilt == pytest.approx(104.0)  # all accel
+    assert tilt == pytest.approx(104.0)  # well tilted -> all accel
     assert w_tilt == pytest.approx(1.0)
+
+
+def test_blend_az_full_accel_plateau_between_thresholds():
+    # sin^2 weight saturates to 1 across the well-tilted band
+    # [theta_sat, 180 - theta_sat]; both edges and the midpoint are pure accel.
+    for el in (45.0, 90.0, 135.0):
+        az, w = ig.blend_az(
+            104.0, 100.0, el_deg=el, theta_sat_deg=45.0, theta_dead_deg=8.0
+        )
+        assert w == pytest.approx(1.0)
+        assert az == pytest.approx(104.0)
+
+
+def test_blend_az_deadband_zeros_weight_near_both_poles():
+    # within theta_dead of colatitude 0 OR 180 deg the accel-azimuth is
+    # degenerate, so the weight is hard-zeroed and the blend is pure yaw.
+    for el in (5.0, 175.0):
+        az, w = ig.blend_az(
+            104.0, 100.0, el_deg=el, theta_sat_deg=45.0, theta_dead_deg=8.0
+        )
+        assert w == pytest.approx(0.0)
+        assert az == pytest.approx(100.0)  # pure yaw
+
+
+def test_blend_az_weight_is_pole_symmetric():
+    # weight depends on |sin(el)|, so el and 180-el give identical weight:
+    # the inverted high pole is handled exactly like the low one.
+    _, w_lo = ig.blend_az(
+        104.0, 100.0, el_deg=20.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
+    _, w_hi = ig.blend_az(
+        104.0, 100.0, el_deg=160.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
+    assert w_lo == pytest.approx(w_hi)
+    expected = (np.sin(np.radians(20.0)) / np.sin(np.radians(45.0))) ** 2
+    assert w_lo == pytest.approx(expected)
 
 
 def test_blend_az_takes_shortest_circular_path():
     # yaw 359, accel 1 -> blend should cross 0, not sweep backwards
-    az, w = ig.blend_az(1.0, 359.0, el_deg=45.0, theta_cross_deg=1.6)
+    az, w = ig.blend_az(
+        1.0, 359.0, el_deg=90.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
     assert az == pytest.approx(1.0)  # w=1 -> accel; sanity on wrap helper
-    mid, _ = ig.blend_az(1.0, 359.0, el_deg=1.6, theta_cross_deg=1.6)
-    assert mid == pytest.approx(360.0, abs=1e-6)  # halfway across the wrap
+    # el=30 -> w = (sin30/sin45)^2 = 0.5; halfway across the wrap seam
+    mid, w_mid = ig.blend_az(
+        1.0, 359.0, el_deg=30.0, theta_sat_deg=45.0, theta_dead_deg=8.0
+    )
+    assert w_mid == pytest.approx(0.5)
+    assert mid == pytest.approx(360.0, abs=1e-6)
 
 
-def test_blend_az_zero_cross_defaults_to_accel():
-    # misconfigured crossover -> degrade to all-accel, never divide by zero
-    az, w = ig.blend_az(104.0, 100.0, el_deg=10.0, theta_cross_deg=0.0)
-    assert az == pytest.approx(104.0)
-    assert w == pytest.approx(1.0)
+def test_blend_az_misconfig_defaults_to_yaw():
+    # non-positive theta_sat is a misconfiguration -> degrade to all-yaw
+    # (accel-azimuth is the untrustworthy estimator near the poles), never
+    # dividing by zero.
+    az, w = ig.blend_az(
+        104.0, 100.0, el_deg=90.0, theta_sat_deg=0.0, theta_dead_deg=8.0
+    )
+    assert az == pytest.approx(100.0)
+    assert w == pytest.approx(0.0)
 
 
 def test_estimate_theta_phi_round_trip():
@@ -270,6 +320,9 @@ def test_fit_calibration_full_reproduces_truth():
     assert (
         "mount_perm" in cal["imu_az"] and "mount_misalign_deg" in cal["imu_az"]
     )
+    # blend shaping stamped for the live handler (base.py reads these back)
+    assert cal["imu_az"]["theta_sat_deg"] == pytest.approx(45.0)
+    assert cal["imu_az"]["theta_dead_deg"] == pytest.approx(8.0)
     # yaw registration: pot = -phi + 40, yaw = -phi => pot = yaw + 40
     # => sign = +1, offset = +40
     assert cal["imu_az"]["az_yaw_sign"] == pytest.approx(1.0)

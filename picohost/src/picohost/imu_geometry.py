@@ -156,18 +156,43 @@ def az_from_yaw(yaw_deg, az_yaw_sign=1.0, az_yaw_offset_deg=0.0):
     return float(az_yaw_sign * yaw_deg + az_yaw_offset_deg)
 
 
-def blend_az(az_accel_deg, az_yaw_deg, el_deg, theta_cross_deg):
-    """Tilt-weighted circular blend: yaw near level, accel when tilted.
+# Default blend shaping (deg). Centralized so the calibrate_imu CLI, the fit
+# that stamps them into the cal section, and the live handler that reads them
+# back all agree -- and so deployed cals written before these keys existed pick
+# up the same values via .get(...) fallbacks.
+DEFAULT_THETA_SAT_DEG = 45.0  # |sin el| >= sin(this) -> full accel
+DEFAULT_THETA_DEAD_DEG = 8.0  # within this of either pole -> pure yaw
 
-    weight ramps 0 -> 1 as |el| goes 0 -> 2*theta_cross_deg.
-    Interpolation takes the shortest circular path from yaw toward accel.
-    When w reaches 1 the accel value is returned directly (avoids an
-    off-by-360 at the wrap boundary). A non-positive theta_cross_deg is a
-    misconfiguration and degrades to all-accel rather than dividing by zero.
+
+def blend_az(az_accel_deg, az_yaw_deg, el_deg, theta_sat_deg, theta_dead_deg):
+    """Tilt-weighted circular blend: yaw near the poles, accel when tilted.
+
+    ``el_deg`` is the az-IMU colatitude (angle between gravity and the azimuth
+    spin axis). Accel-azimuth quality scales as ``|sin(el)|``, which is zero at
+    *both* poles (colatitude 0 and 180 deg, i.e. level and inverted) and peaks
+    at 90 deg. The weight on the accel estimate is a sin^2 ("signal power")
+    ramp::
+
+        w = clip((|sin el| / sin theta_sat)**2, 0, 1)
+
+    which saturates to full accel across the well-tilted band
+    ``[theta_sat, 180 - theta_sat]`` and is hard-zeroed inside a deadband
+    within ``theta_dead`` of either pole, where accel-azimuth is degenerate.
+    Keying on ``|sin el|`` makes the curve symmetric about 90 deg, so the
+    inverted high pole is handled exactly like the low one.
+
+    Interpolation takes the shortest circular path from yaw toward accel; when
+    w reaches 1 the accel value is returned directly (avoids an off-by-360 at
+    the wrap boundary). A non-positive ``theta_sat_deg`` is a misconfiguration
+    and degrades to all-yaw -- accel is the untrustworthy estimator near the
+    poles -- rather than dividing by zero.
     """
-    if theta_cross_deg <= 0:
-        return float(az_accel_deg), 1.0
-    w = float(np.clip(abs(el_deg) / (2.0 * theta_cross_deg), 0.0, 1.0))
+    if theta_sat_deg <= 0:
+        return float(az_yaw_deg), 0.0
+    s = abs(float(np.sin(np.radians(el_deg))))
+    if s <= np.sin(np.radians(theta_dead_deg)):
+        return float(az_yaw_deg), 0.0
+    w = float(np.clip((s / np.sin(np.radians(theta_sat_deg))) ** 2, 0.0, 1.0))
     if w >= 1.0:
         return float(az_accel_deg), w
     delta = _wrap180(az_accel_deg - az_yaw_deg)
@@ -247,7 +272,12 @@ def _host_el(theta_rad):
 
 
 def fit_calibration_from_sweeps(
-    el_sweep, az_level, az_tilt, *, theta_cross_deg=1.6
+    el_sweep,
+    az_level,
+    az_tilt,
+    *,
+    theta_sat_deg=DEFAULT_THETA_SAT_DEG,
+    theta_dead_deg=DEFAULT_THETA_DEAD_DEG,
 ):
     """Fit per-IMU calibration sections from the three sweeps.
 
@@ -321,7 +351,8 @@ def fit_calibration_from_sweeps(
             "M": M_az.tolist(),
             "az_sign": az_sign,
             "az_accel_offset_deg": az_off,
-            "theta_cross_deg": float(theta_cross_deg),
+            "theta_sat_deg": float(theta_sat_deg),
+            "theta_dead_deg": float(theta_dead_deg),
             "mount_perm": perm,
             "mount_misalign_deg": mis,
             "az_yaw_sign": 1.0,
