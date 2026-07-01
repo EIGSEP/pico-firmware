@@ -213,6 +213,18 @@ ACS724 OUT ──[ R1 = 3.3 kΩ ]──┬── GP26 (ADC0)
 - Wire `IP+ → IP−` so output rises **above** 2.5 V (forward half); if reversed, flip the sign in the conversion.
 - No decoupling capacitor is currently fitted. An optional 100 nF from GP26 to GND would anti-alias ACS724 noise if a reading proves jittery, but it is not required.
 
+### RF Switch Wiring (APP_RFSWITCH)
+
+The RF switch PCB holds the signal-path lookup table in two AT28BV64B EEPROMs driving three ADGM1004 switches plus the noise-diode bias. The firmware's only job is to present a 5-bit address on the EEPROMs' select lines; the byte burned at that address drives the switch control inputs.
+
+| Signal | GPIO | JSON Key |
+|--------|------|----------|
+| EEPROM select A0–A4 (LSB→MSB) | 8–12 | `sw_state` (path address, 0–15) |
+
+- Addresses ≥ 16 are unused on the chips and rejected by the firmware. Path name → address mapping lives in `PicoRFSwitch.PATHS` (picohost) and the `rf_path_t` enum in `src/rfswitch.h`.
+- **Table source of truth**: the [eeprom_api](https://github.com/EIGSEP/eeprom_api) repo — `program_paths/program_paths.c` defines and burns the table; the seated chips are the physical ground truth (`test_paths.uf2` read-back verifies them).
+- **Burned-table version**: eeprom_api commit `8681ed8`. Update this hash whenever the chips are reburned and re-verified.
+
 ## 5. Install Python Host Library (Optional)
 
 For controlling devices from a host computer:
@@ -223,9 +235,9 @@ cd pico-firmware
 pip install -e ./picohost
 
 # Test your device
-python3 picohost/scripts/test_motor_pico_v2.py    # For motor control
-python3 picohost/scripts/test_peltier_v2.py       # For temperature control
-python3 picohost/scripts/test_rfswitch_pico_v2.py # For RF switch
+python3 picohost/scripts/test_motor_pico.py    # For motor control
+python3 picohost/scripts/control_temp.py       # For temperature control
+python3 picohost/scripts/test_rfswitch_pico.py # For RF switch
 ```
 
 ## Monitor Serial Output
