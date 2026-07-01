@@ -300,6 +300,19 @@ class _FakeProxy:
         return None
 
 
+class _FakeProxyDown(_FakeProxy):
+    """PicoProxy stand-in reporting the device unreachable. Pushing to a
+    down device is a bug — the live push must be skipped — so send_command
+    fails loudly if the guard is ever removed."""
+
+    is_available = False
+
+    def send_command(self, *args, **kwargs):
+        raise AssertionError(
+            "send_command must not be called when the device is down"
+        )
+
+
 class _FakeTransport:
     """Stand-in for Transport with a no-op ``.r.bgsave()``."""
 
@@ -429,3 +442,96 @@ class TestMainDispatch:
         meta = uploaded[0]["metadata"]
         assert meta["mode"] == "multi"
         assert meta["n_points"] == 4
+
+    def test_manual_uploads_slope_intercept_verbatim(self, monkeypatch):
+        """--mode manual writes the supplied (slope, intercept) verbatim
+        with a 'manual' mode tag and the note."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "8.4223",
+                "--intercept",
+                "-12.5248",
+                "--note",
+                "restored from corr_20260629.h5",
+            ],
+        )
+        cc.main()
+        assert len(uploaded) == 1
+        assert uploaded[0]["system_current"] == [8.4223, -12.5248]
+        meta = uploaded[0]["metadata"]
+        assert meta["mode"] == "manual"
+        assert meta["note"] == "restored from corr_20260629.h5"
+
+    def test_manual_writes_even_when_device_down(self, monkeypatch):
+        """Recovery path: manual writes Redis and skips the live push when
+        the lidar Pico is unreachable."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxyDown)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "8.4223",
+                "--intercept",
+                "-12.5248",
+            ],
+        )
+        cc.main()
+        assert len(uploaded) == 1
+        assert uploaded[0]["system_current"] == [8.4223, -12.5248]
+
+    def test_manual_missing_intercept_exits_without_upload(self, monkeypatch):
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            ["calibrate-current", "--mode", "manual", "--slope", "8.4"],
+        )
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert uploaded == []
+
+    def test_manual_zero_slope_exits_without_upload(self, monkeypatch):
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "0",
+                "--intercept",
+                "1.0",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert uploaded == []
