@@ -7,24 +7,16 @@
 static RFSwitch rfswitch;
 
 void rfswitch_init(uint8_t app_id) {
-    rfswitch.commanded_state = 0;
-    rfswitch.reported_state = 0;
+    rfswitch.commanded_state = RF_PATH_LNA_FEED;
+    rfswitch.reported_state = RF_PATH_LNA_FEED;
     // Boot starts a transition: the physical switch position is not
-    // knowable until the settle timer elapses, even though GPIOs drive
-    // to 0 immediately.
+    // knowable until the settle timer elapses, even though the address
+    // lines drive to 0 (the LNA->Feed fail-safe) immediately.
     rfswitch.in_transition = true;
     rfswitch.transition_end = make_timeout_time_ms(SWITCH_SETTLE_MS);
-    rfswitch.pins[0] = RFSWITCH0_PIN;
-    rfswitch.pins[1] = RFSWITCH1_PIN;
-    rfswitch.pins[2] = RFSWITCH2_PIN;
-    rfswitch.pins[3] = RFSWITCH3_PIN;
-    rfswitch.pins[4] = RFSWITCH4_PIN;
-    rfswitch.pins[5] = RFSWITCH5_PIN;
-    rfswitch.pins[6] = RFSWITCH6_PIN;
-    rfswitch.pins[7] = RFSWITCH7_PIN;
-    for (int i = 0; i < 8; i++) {
-        gpio_init(rfswitch.pins[i]);
-        gpio_set_dir(rfswitch.pins[i], GPIO_OUT);
+    for (int i = 0; i < RFSWITCH_ADDR_LINES; i++) {
+        gpio_init(RFSWITCH_A0_PIN + i);
+        gpio_set_dir(RFSWITCH_A0_PIN + i, GPIO_OUT);
     }
 }
 
@@ -43,11 +35,13 @@ void rfswitch_server(uint8_t app_id, const char *json_str) {
             isfinite(new_state_value) &&
             modf(new_state_value, &integral_part) == 0.0
         );
+        // Addresses >= RFSWITCH_NUM_PATHS hold 0xFF on the EEPROMs
+        // (every switch input closed, noise diode on) and must never
+        // be presented on the bus.
         bool is_valid_state = (
             is_exact_int &&
             new_state_value >= 0 &&
-            new_state_value <= 255 &&
-            new_state_value != SW_STATE_UNKNOWN
+            new_state_value < RFSWITCH_NUM_PATHS
         );
         // Only re-enter a transition when the commanded state actually
         // changes; repeated commands at the current state are no-ops
@@ -78,9 +72,16 @@ void rfswitch_status(uint8_t app_id) {
 }
 
 void rfswitch_op(uint8_t app_id) {
-    for (int i = 0; i < 8; i++) {
-        gpio_put(rfswitch.pins[i], (rfswitch.commanded_state >> i) & 0x1);
+    // Update all five address lines in one register write so the
+    // EEPROM never sees a transient intermediate address.
+    uint32_t mask = 0, vals = 0;
+    for (int i = 0; i < RFSWITCH_ADDR_LINES; i++) {
+        mask |= 1u << (RFSWITCH_A0_PIN + i);
+        if ((rfswitch.commanded_state >> i) & 0x1) {
+            vals |= 1u << (RFSWITCH_A0_PIN + i);
+        }
     }
+    gpio_put_masked(mask, vals);
     if (rfswitch.in_transition && time_reached(rfswitch.transition_end)) {
         rfswitch.reported_state = rfswitch.commanded_state;
         rfswitch.in_transition = false;

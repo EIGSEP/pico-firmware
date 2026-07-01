@@ -1129,11 +1129,18 @@ class TestRFSwitchEmulator:
         assert emu.get_status()["sw_state"] == 5
 
     def test_reject_out_of_range(self):
-        """Values outside [0, 255] must be ignored (firmware parity)."""
+        """Values outside [0, NUM_PATHS) must be ignored (firmware parity).
+
+        Addresses >= NUM_PATHS hold 0xFF on the path EEPROMs (every
+        switch input closed + noise diode on); the firmware guard keeps
+        them off the bus.
+        """
         emu = RFSwitchEmulator(settle_ms=0)
         emu.server({"sw_state": 5})
         assert emu.commanded_state == 5
-        emu.server({"sw_state": 256})
+        emu.server({"sw_state": emu.NUM_PATHS})
+        assert emu.commanded_state == 5
+        emu.server({"sw_state": 255})
         assert emu.commanded_state == 5
         emu.server({"sw_state": -2})
         assert emu.commanded_state == 5

@@ -440,47 +440,47 @@ class PicoDevice:
 
 
 class PicoRFSwitch(PicoDevice):
-    """Specialized class for RF switch control Pico devices."""
+    """Specialized class for RF switch control Pico devices.
+
+    ``sw_state`` is an EEPROM path address: the RF switch PCB holds the
+    path lookup table in two AT28BV64B EEPROMs, and the firmware drives
+    the 5-bit address onto their select lines. Table ground truth is
+    eeprom_api/program_paths/program_paths.c; the firmware rejects
+    addresses >= 16 (unused table entries hold 0xFF = every switch
+    input closed + noise diode on).
+    """
 
     # Sentinel sw_state value the firmware emits while the RF switch is
     # settling. Mirrors SW_STATE_UNKNOWN in src/rfswitch.h.
     SW_STATE_UNKNOWN = -1
     SW_STATE_UNKNOWN_NAME = "UNKNOWN"
 
-    path_str = {
-        "VNAO": "10000000",  # checked 7/7/25
-        "VNAS": "11000000",  # checked 7/7/25
-        "VNAL": "00100000",  # checked 7/7/25
-        "VNAANT": "00000001",  # checked 7/7/25
-        "VNANON": "00000111",  # checked 7/7/25
-        "VNANOFF": "00000101",  # checked 7/7/25
-        "VNARF": "00011000",  # checked 7/7/25
-        "RFNON": "00000110",  # checked 7/7/25
-        "RFNOFF": "00000100",  # checked 7/7/25
-        "RFANT": "00000000",  # checked 7/7/25
+    # Path name -> EEPROM address. Legacy keys (pre-PCB naming: VNA* =
+    # VNA chain, RF* = LNA/receiver chain, ANT = feed) keep their
+    # science meaning at the new addresses; AMB/SP* paths are new with
+    # the PCB hardware.
+    PATHS = {
+        "RFANT": 0x00,  # LNA -> Feed (hardware fail-safe default)
+        "VNAL": 0x01,  # VNA -> Cal Load
+        "VNAO": 0x02,  # VNA -> Cal Open
+        "VNAS": 0x03,  # VNA -> Cal Short
+        "VNAANT": 0x04,  # VNA -> Feed
+        "VNANON": 0x05,  # VNA -> Noise Diode ON
+        "VNANOFF": 0x06,  # VNA -> Noise Diode OFF
+        "VNARF": 0x07,  # VNA -> LNA
+        "VNAAMB": 0x08,  # VNA -> Amb/Hot Load
+        "VNASP1": 0x09,  # VNA -> Spare 1
+        "VNASP2": 0x0A,  # VNA -> Spare 2
+        "RFNON": 0x0B,  # LNA -> Noise Diode ON
+        "RFNOFF": 0x0C,  # LNA -> Noise Diode OFF
+        "RFAMB": 0x0D,  # LNA -> Amb/Hot Load
+        "RFSP1": 0x0E,  # LNA -> Spare 1
+        "RFSP2": 0x0F,  # LNA -> Spare 2
     }
-
-    @staticmethod
-    def rbin(s):
-        """
-        Convert a str of 0s and 1s to binary, where the first char is the LSB.
-
-        Parameters
-        ----------
-        s : str
-            String of 0s and 1s.
-
-        Returns
-        -------
-        int
-            Integer representation of the binary string.
-
-        """
-        return int(s[::-1], 2)  # reverse the string and convert to int
 
     @property
     def paths(self):
-        return {k: self.rbin(v) for k, v in self.path_str.items()}
+        return dict(self.PATHS)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -492,7 +492,7 @@ class PicoRFSwitch(PicoDevice):
     def _rfswitch_redis_handler(self, data):
         """Add the human-readable switch name before uploading to Redis.
 
-        Firmware reports ``sw_state`` as a raw 8-bit integer, or
+        Firmware reports ``sw_state`` as an EEPROM path address, or
         :attr:`SW_STATE_UNKNOWN` (-1) while the physical switch is
         settling after a command. Downstream consumers see a named
         state (``"VNAO"``, ``"RFANT"``, ...) alongside the raw integer:
