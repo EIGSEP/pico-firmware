@@ -962,8 +962,10 @@ class PicoLidar(PicoDevice):
     other ADC). The firmware merges the raw ``current_voltage`` into the lidar
     status line; this class fans that out into a separate
     ``metadata['system_current']`` entry so the user-facing key never names
-    lidar. The publish stays additive (raw ``current_voltage`` + derived
-    ``current_a``) and scalar-only.
+    lidar. The publish stays additive and scalar-only: raw
+    ``current_voltage``, derived ``current_a``, and the two cal scalars
+    ``current_cal_slope`` (A/V) / ``current_cal_intercept`` (A) that project
+    it — all three ``None`` when uncalibrated (no nominal fallback).
     """
 
     def __init__(self, *args, current_cal_store=None, **kwargs):
