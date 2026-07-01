@@ -2,10 +2,10 @@
 Tests for the whole-system current-monitor calibration.
 
 Covers three layers, mirroring the potentiometer calibration suite:
-  - ``compute_two_point``: the (V0, slope) fit from a 0 A point and a
-    known-reference-current point.
+  - ``compute_two_point``: the amps-vs-volts (slope, intercept) from a 0 A
+    point and a known-reference-current point.
   - ``CurrentCalStore``: the Redis-backed cal store round-trip / error paths.
-  - ``PicoLidar``: cal loaded at __init__, applied in ``_v_to_current`` and
+  - ``PicoLidar``: cal loaded at __init__, applied in ``_current_fields`` and
     the redis handler, and updated live via ``set_calibration``.
 """
 
@@ -27,12 +27,13 @@ from picohost.testing import DummyPicoLidar
 
 
 class TestComputeTwoPoint:
-    """The two-point fit folds offset and gain into (V0, slope)."""
+    """The two-point fit folds offset and gain into (slope, intercept)."""
 
-    def test_fit_returns_v0_and_slope(self):
-        # 0 A → 1.0 V, 5 A → 2.0 V  ⇒  V0 = 1.0, slope = (2-1)/5 = 0.2 V/A
+    def test_fit_returns_slope_and_intercept(self):
+        # 0 A → 1.0 V, 5 A → 2.0 V ⇒ V0=1.0, slope=0.2 V/A ⇒
+        # slope_a = 1/0.2 = 5.0 A/V, intercept_a = -1.0/0.2 = -5.0 A
         cal = compute_two_point(1.0, 2.0, 5.0)
-        assert cal == pytest.approx((1.0, 0.2))
+        assert cal == pytest.approx((5.0, -5.0))
 
     def test_zero_reference_current_rejected(self):
         """A 0 A 'reference' can't define a slope → None (caller aborts)."""
@@ -44,7 +45,7 @@ class TestComputeTwoPoint:
 
 
 class TestComputeMultiPoint:
-    """Least-squares (V0, slope) fit over N known currents."""
+    """Least-squares fit converted to the stored (slope, intercept)."""
 
     def _clean_line(self):
         # V = 0.1175 * I + 1.469  (nominal ACS724 + divider line)
@@ -54,9 +55,12 @@ class TestComputeMultiPoint:
 
     def test_recovers_slope_and_intercept(self):
         currents, voltages = self._clean_line()
-        (v0, slope), quality = compute_multi_point(currents, voltages)
-        assert v0 == pytest.approx(1.469, abs=1e-6)
-        assert slope == pytest.approx(0.1175, abs=1e-6)
+        # V=1.469+0.1175*I ⇒ slope_a=1/0.1175≈8.5106, intercept_a=-1.469/0.1175≈-12.5021
+        (slope_a, intercept_a), quality = compute_multi_point(
+            currents, voltages
+        )
+        assert slope_a == pytest.approx(8.5106, abs=1e-3)
+        assert intercept_a == pytest.approx(-12.5021, abs=1e-3)
         assert quality["r_squared"] == pytest.approx(1.0, abs=1e-9)
         assert quality["residual_rms_v"] == pytest.approx(0.0, abs=1e-9)
         assert quality["residual_rms_a"] == pytest.approx(0.0, abs=1e-9)
@@ -66,11 +70,13 @@ class TestComputeMultiPoint:
         currents = [0.0, 1.0, 2.0, 5.0, 8.0]
         voltages = [1.469 + 0.1175 * i for i in currents]
         voltages[2] += 0.05  # 50 mV kink
-        (_v0, slope), quality = compute_multi_point(currents, voltages)
+        (slope_a, _intercept), quality = compute_multi_point(
+            currents, voltages
+        )
         assert quality["residual_rms_v"] > 0.0
-        # residual in amps is residual_v / slope, kept positive.
+        # residual_rms_a = residual_rms_v / slope_VperA = residual_rms_v * slope_a
         assert quality["residual_rms_a"] == pytest.approx(
-            quality["residual_rms_v"] / slope, rel=1e-9
+            quality["residual_rms_v"] * abs(slope_a), rel=1e-9
         )
         assert quality["r_squared"] < 1.0
 
@@ -79,6 +85,23 @@ class TestComputeMultiPoint:
 
     def test_zero_voltage_spread_rejected(self):
         assert compute_multi_point([0.0, 1.0, 2.0], [1.5, 1.5, 1.5]) is None
+
+    def test_point_table_zero_residuals_on_clean_line(self, capsys):
+        """The per-point QA table reads the cal as (slope_a, intercept_a):
+        a clean line prints ~0 residuals. Guards against the old (V0, slope)
+        misbinding, which prints garbage residuals for a perfect line."""
+        currents, voltages = self._clean_line()
+        cal, _quality = compute_multi_point(currents, voltages)
+        cc._print_point_table(currents, voltages, cal)
+        out = capsys.readouterr().out
+        rows = 0
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 5 and parts[0].isdigit():
+                rows += 1
+                assert abs(float(parts[3])) < 0.01  # resid mV
+                assert abs(float(parts[4])) < 0.01  # resid mA
+        assert rows == len(currents)
 
 
 class TestCurrentCalStore:
@@ -119,29 +142,32 @@ class TestCurrentCalStore:
 class TestPicoLidarCurrentCal:
     """PicoLidar loads, applies, and live-updates the current cal."""
 
-    def test_uncalibrated_uses_nominal_conversion(self):
-        """No cal store → nominal ACS724 + divider transfer function."""
+    def test_uncalibrated_returns_none(self):
+        """No cal store → no nominal fallback; all three fields are None."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
             assert not lidar.is_current_calibrated
-            # V_adc at 0 A is Vq*k = 2.5 * (4.64/7.96) = 1.45729
-            assert lidar._v_to_current(2.5 * (4.64 / 7.96)) == pytest.approx(
-                0.0, abs=1e-6
-            )
+            assert lidar._current_fields(1.46) == (None, None, None)
         finally:
             lidar.disconnect()
 
     def test_cal_from_redis_applied_at_init(self):
         transport = DummyTransport()
         store = CurrentCalStore(transport)
-        store.upload({"system_current": [1.0, 0.2]})
+        store.upload(
+            {"system_current": [1.0, 0.2]}
+        )  # slope_a=1.0, intercept_a=0.2
         lidar = DummyPicoLidar("/dev/dummy", current_cal_store=store)
         try:
             assert lidar.is_current_calibrated
             assert lidar._current_cal == (1.0, 0.2)
-            # I = (V_adc - V0) / slope = (1.2 - 1.0)/0.2 = 1.0 A
-            assert lidar._v_to_current(1.2) == pytest.approx(1.0, abs=1e-9)
-            assert lidar._v_to_current(1.0) == pytest.approx(0.0, abs=1e-9)
+            # I = slope*V + intercept = 1.0*1.2 + 0.2 = 1.4 A
+            assert lidar._current_fields(1.2)[0] == pytest.approx(
+                1.4, abs=1e-9
+            )
+            assert lidar._current_fields(1.0)[0] == pytest.approx(
+                1.2, abs=1e-9
+            )
         finally:
             lidar.disconnect()
 
@@ -150,7 +176,10 @@ class TestPicoLidarCurrentCal:
         try:
             lidar.set_calibration(system_current_params=[1.0, 0.2])
             assert lidar.is_current_calibrated
-            assert lidar._v_to_current(1.4) == pytest.approx(2.0, abs=1e-9)
+            # 1.0*1.4 + 0.2 = 1.6 A
+            assert lidar._current_fields(1.4)[0] == pytest.approx(
+                1.6, abs=1e-9
+            )
         finally:
             lidar.disconnect()
 
@@ -173,7 +202,8 @@ class TestPicoLidarCurrentCal:
             )
             current = published[1]
             assert current["sensor_name"] == "system_current"
-            assert current["current_a"] == pytest.approx(1.0, abs=1e-9)
+            # 1.0*1.2 + 0.2 = 1.4 A
+            assert current["current_a"] == pytest.approx(1.4, abs=1e-9)
         finally:
             lidar.disconnect()
 
@@ -268,6 +298,19 @@ class _FakeProxy:
 
     def send_command(self, *args, **kwargs):
         return None
+
+
+class _FakeProxyDown(_FakeProxy):
+    """PicoProxy stand-in reporting the device unreachable. Pushing to a
+    down device is a bug — the live push must be skipped — so send_command
+    fails loudly if the guard is ever removed."""
+
+    is_available = False
+
+    def send_command(self, *args, **kwargs):
+        raise AssertionError(
+            "send_command must not be called when the device is down"
+        )
 
 
 class _FakeTransport:
@@ -399,3 +442,96 @@ class TestMainDispatch:
         meta = uploaded[0]["metadata"]
         assert meta["mode"] == "multi"
         assert meta["n_points"] == 4
+
+    def test_manual_uploads_slope_intercept_verbatim(self, monkeypatch):
+        """--mode manual writes the supplied (slope, intercept) verbatim
+        with a 'manual' mode tag and the note."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "8.4223",
+                "--intercept",
+                "-12.5248",
+                "--note",
+                "restored from corr_20260629.h5",
+            ],
+        )
+        cc.main()
+        assert len(uploaded) == 1
+        assert uploaded[0]["system_current"] == [8.4223, -12.5248]
+        meta = uploaded[0]["metadata"]
+        assert meta["mode"] == "manual"
+        assert meta["note"] == "restored from corr_20260629.h5"
+
+    def test_manual_writes_even_when_device_down(self, monkeypatch):
+        """Recovery path: manual writes Redis and skips the live push when
+        the lidar Pico is unreachable."""
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxyDown)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "8.4223",
+                "--intercept",
+                "-12.5248",
+            ],
+        )
+        cc.main()
+        assert len(uploaded) == 1
+        assert uploaded[0]["system_current"] == [8.4223, -12.5248]
+
+    def test_manual_missing_intercept_exits_without_upload(self, monkeypatch):
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            ["calibrate-current", "--mode", "manual", "--slope", "8.4"],
+        )
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert uploaded == []
+
+    def test_manual_zero_slope_exits_without_upload(self, monkeypatch):
+        uploaded = []
+        monkeypatch.setattr(cc, "Transport", _FakeTransport)
+        monkeypatch.setattr(cc, "PicoProxy", _FakeProxy)
+        monkeypatch.setattr(
+            cc, "CurrentCalStore", _spy_store_factory(uploaded)
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calibrate-current",
+                "--mode",
+                "manual",
+                "--slope",
+                "0",
+                "--intercept",
+                "1.0",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            cc.main()
+        assert uploaded == []

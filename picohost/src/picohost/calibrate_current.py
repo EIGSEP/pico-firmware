@@ -16,10 +16,12 @@ the fit to two places:
      tick without restarting the manager.
 
 The two-point fit folds both the ACS724's untrimmed zero offset and the
-divider/resistor tolerance into a single measured ``(V0, slope)`` at the
-ADC pin, so ``I = (V_adc - V0) / slope`` — no reliance on nominal resistor
-values. Point 1 is the system at 0 A (load off); point 2 is a known
-reference current read from an inline ammeter.
+divider/resistor tolerance into a single measured line ``I = slope*V_adc +
+intercept`` (A/V, A) — no reliance on nominal resistor values. This is the
+same amps-vs-volts pair that is published and saved to the file, so it can be
+restored verbatim (see ``--mode manual``, added separately). Point 1 is the
+system at 0 A (load off); point 2 is a known reference current read from an
+inline ammeter.
 
 Requires PicoManager to be running and the ``lidar`` device healthy. The
 script never touches the serial port itself, so it can be invoked
@@ -30,6 +32,15 @@ Usage:
     calibrate-current --mode multi         # N-point, loop until done
     calibrate-current --currents 0,1,2,5,8 # N-point preset sweep
     calibrate-current --n-samples 20
+    calibrate-current --mode manual --slope 8.4223 --intercept -12.5248 \\
+        --note "restored from corr_20260629.h5"
+
+--mode manual is a recovery path: it writes the operator-supplied
+current_cal_slope (A/V) / current_cal_intercept (A) — read straight off a
+saved correlator .h5 — directly to Redis, even when the lidar Pico is down.
+No backward-compat: after upgrading to this picohost, an existing
+current_calibration stored in the old (V0, slope) form is reinterpreted as
+(slope, intercept); re-run calibrate-current (any mode) to re-establish it.
 """
 
 from argparse import ArgumentParser
@@ -90,8 +101,21 @@ def collect_samples(transport, n):
     return float(np.mean(samples))
 
 
+def _to_amps_per_volt(v0, slope_vpera):
+    """Convert a fit's physical (V0, slope V/A) to the stored amps-vs-volts
+    pair (slope A/V, intercept A) for ``I = slope_a*V + intercept_a``.
+
+    A fit produces ``V = slope_vpera*I + V0`` (voltage is the noisy measured
+    quantity), so ``slope_a = 1/slope_vpera`` and
+    ``intercept_a = -V0/slope_vpera``.
+    """
+    slope_a = 1.0 / slope_vpera
+    return (float(slope_a), float(-v0 * slope_a))
+
+
 def compute_two_point(v0, v1, i_ref):
-    """Compute ``(V0, slope)`` for ``I = (V_adc - V0) / slope``.
+    """Compute the stored ``(slope, intercept)`` for
+    ``I = slope*V_adc + intercept``.
 
     ``v0`` is the raw ADC voltage at 0 A, ``v1`` at the known reference
     current ``i_ref``. The slope absorbs the divider ratio and the sensor
@@ -109,7 +133,7 @@ def compute_two_point(v0, v1, i_ref):
         return None
     slope = (v1 - v0) / i_ref
     _warn_on_slope(slope)
-    return (float(v0), float(slope))
+    return _to_amps_per_volt(v0, slope)
 
 
 def _warn_on_slope(slope):
@@ -155,10 +179,11 @@ def compute_multi_point(currents, voltages):
     Returns
     -------
     tuple or None
-        ``((V0, slope), quality)`` where ``quality`` is a dict with
-        ``residual_rms_v``, ``residual_rms_a`` and ``r_squared``; or
-        ``None`` (with a printed reason) when the points cannot define a
-        gain. Downstream conversion is ``I = (V_adc - V0) / slope``.
+        ``(stored (slope, intercept), quality)`` where ``quality`` is a
+        dict with ``residual_rms_v``, ``residual_rms_a`` and
+        ``r_squared``; or ``None`` (with a printed reason) when the
+        points cannot define a gain. Downstream conversion is
+        ``I = slope*V_adc + intercept``.
     """
     currents = np.asarray(currents, dtype=float)
     voltages = np.asarray(voltages, dtype=float)
@@ -186,7 +211,7 @@ def compute_multi_point(currents, voltages):
         "residual_rms_a": residual_rms_a,
         "r_squared": r_squared,
     }
-    return ((float(v0), float(slope)), quality)
+    return (_to_amps_per_volt(v0, slope), quality)
 
 
 def collect_two_point(transport, n_samples):
@@ -280,12 +305,12 @@ def collect_multi_point(transport, n_samples, currents=None):
 
 def _print_point_table(currents, voltages, cal):
     """Print a per-point I / V / residual table so a bad point is obvious."""
-    v0, slope = cal
+    slope_a, intercept_a = cal
     print("\n  point  I_ref [A]  V_adc [V]  resid [mV]  resid [mA]")
     for idx, (i, v) in enumerate(zip(currents, voltages), start=1):
-        fit_v = slope * i + v0
-        dv = v - fit_v
-        di = dv / slope if slope else float("inf")
+        fit_i = slope_a * v + intercept_a
+        di = i - fit_i
+        dv = di / slope_a if slope_a else float("inf")
         print(f"  {idx:>5}{i:11.4f}{v:11.4f}{dv * 1e3:12.2f}{di * 1e3:12.2f}")
 
 
@@ -324,11 +349,13 @@ def main():
     parser.add_argument(
         "-m",
         "--mode",
-        choices=["two-point", "multi"],
+        choices=["two-point", "multi", "manual"],
         default="two-point",
         help=(
             "Calibration mode: 'two-point' (default) for the 0 A + one "
-            "reference flow, 'multi' for an N-point least-squares fit."
+            "reference flow, 'multi' for an N-point least-squares fit, "
+            "'manual' to write a hand-supplied --slope/--intercept directly "
+            "(recovery, no sampling)."
         ),
     )
     parser.add_argument(
@@ -337,6 +364,33 @@ def main():
         help=(
             "Comma-separated known currents (A) for a preset multi-point "
             "sweep, e.g. '0,1,2,5,8'. Implies --mode multi (>= 3 points)."
+        ),
+    )
+    parser.add_argument(
+        "--slope",
+        type=float,
+        default=None,
+        help=(
+            "Slope (A/V) for --mode manual — the file's current_cal_slope. "
+            "Required for that mode."
+        ),
+    )
+    parser.add_argument(
+        "--intercept",
+        type=float,
+        default=None,
+        help=(
+            "Intercept (A) for --mode manual — the file's "
+            "current_cal_intercept. Required for that mode."
+        ),
+    )
+    parser.add_argument(
+        "--note",
+        type=str,
+        default=None,
+        help=(
+            "Free-text provenance recorded in the calibration metadata, "
+            "e.g. 'restored from corr_20260629.h5'. Useful with --mode manual."
         ),
     )
     parser.add_argument(
@@ -363,7 +417,11 @@ def main():
     transport = Transport(host=args.redis_host, port=args.redis_port)
     lidar_proxy = PicoProxy(LIDAR_NAME, transport, source="calibrate-current")
 
-    if not lidar_proxy.is_available:
+    # Manual recovery writes the operator-supplied cal straight to Redis, so
+    # it must work even when the lidar Pico is down (the cal loads on the next
+    # PicoManager start). Every other mode samples the live stream, so it
+    # still hard-requires the device.
+    if mode != "manual" and not lidar_proxy.is_available:
         print(
             f"{LIDAR_NAME} is not reachable via PicoManager. "
             "Start the manager and confirm the lidar Pico is enumerated.",
@@ -371,71 +429,102 @@ def main():
         )
         sys.exit(1)
 
-    print(
-        f"{mode} current calibration ({args.n_samples} samples/point).\n"
-        f"Reading voltages from {CURRENT_STREAM}."
-    )
-
-    try:
-        if mode == "multi":
-            if preset is not None and len(preset) < 3:
-                print(
-                    "--currents needs >= 3 points for a multi-point fit.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            currents, voltages = collect_multi_point(
-                transport, args.n_samples, preset
-            )
-        else:
-            v0, v1, i_ref = collect_two_point(transport, args.n_samples)
-    except (RuntimeError, ConnectionError) as exc:
-        print(f"Calibration sample collection failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    if mode == "multi":
-        result = compute_multi_point(currents, voltages)
-        if result is None:
-            print("\nCalibration failed. Exiting.", file=sys.stderr)
-            sys.exit(1)
-        cal, quality = result
-        _print_point_table(currents, voltages, cal)
-        print(
-            f"\n  residual RMS: {quality['residual_rms_v'] * 1e3:.2f} mV "
-            f"({quality['residual_rms_a'] * 1e3:.2f} mA), "
-            f"r^2 = {quality['r_squared']:.5f}"
-        )
-        threshold = _residual_threshold_a(currents)
-        if quality["residual_rms_a"] > threshold:
+    if mode == "manual":
+        if args.slope is None or args.intercept is None:
             print(
-                f"\n  WARNING: residual "
-                f"{quality['residual_rms_a'] * 1e3:.2f} mA exceeds "
-                f"{threshold * 1e3:.1f} mA — possible bad point or sensor "
-                "nonlinearity."
+                "--mode manual requires both --slope and --intercept.",
+                file=sys.stderr,
             )
-            ans = input("  Store this calibration anyway? [y/N]: ").strip()
-            if ans.lower() not in ("y", "yes"):
-                print("Aborted; calibration not stored.", file=sys.stderr)
-                sys.exit(1)
-        cal_data = _build_multi_cal_data(
-            cal, args.n_samples, currents, voltages, quality
-        )
-    else:
-        cal = compute_two_point(v0, v1, i_ref)
-        if cal is None:
-            print("\nCalibration failed. Exiting.", file=sys.stderr)
             sys.exit(1)
+        if abs(args.slope) < 1e-12:
+            print(
+                "--mode manual: --slope must be non-zero (A/V).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cal = (float(args.slope), float(args.intercept))
+        # Sanity-check the implied V/A sensitivity (the fits' native units).
+        _warn_on_slope(1.0 / args.slope)
+        print(f"\nManual calibration: I = {cal[0]:.6g}*V + {cal[1]:.6g}")
         cal_data = {
             "system_current": list(cal),
             "metadata": {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "mode": "two-point",
-                "v0": float(v0),
-                "v1": float(v1),
-                "i_ref": float(i_ref),
-                "n_samples": args.n_samples,
+                "mode": "manual",
             },
         }
+    else:
+        print(
+            f"{mode} current calibration ({args.n_samples} samples/point).\n"
+            f"Reading voltages from {CURRENT_STREAM}."
+        )
+
+        try:
+            if mode == "multi":
+                if preset is not None and len(preset) < 3:
+                    print(
+                        "--currents needs >= 3 points for a multi-point fit.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                currents, voltages = collect_multi_point(
+                    transport, args.n_samples, preset
+                )
+            else:
+                v0, v1, i_ref = collect_two_point(transport, args.n_samples)
+        except (RuntimeError, ConnectionError) as exc:
+            print(
+                f"Calibration sample collection failed: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if mode == "multi":
+            result = compute_multi_point(currents, voltages)
+            if result is None:
+                print("\nCalibration failed. Exiting.", file=sys.stderr)
+                sys.exit(1)
+            cal, quality = result
+            _print_point_table(currents, voltages, cal)
+            print(
+                f"\n  residual RMS: {quality['residual_rms_v'] * 1e3:.2f} mV "
+                f"({quality['residual_rms_a'] * 1e3:.2f} mA), "
+                f"r^2 = {quality['r_squared']:.5f}"
+            )
+            threshold = _residual_threshold_a(currents)
+            if quality["residual_rms_a"] > threshold:
+                print(
+                    f"\n  WARNING: residual "
+                    f"{quality['residual_rms_a'] * 1e3:.2f} mA exceeds "
+                    f"{threshold * 1e3:.1f} mA — possible bad point or sensor "
+                    "nonlinearity."
+                )
+                ans = input("  Store this calibration anyway? [y/N]: ").strip()
+                if ans.lower() not in ("y", "yes"):
+                    print("Aborted; calibration not stored.", file=sys.stderr)
+                    sys.exit(1)
+            cal_data = _build_multi_cal_data(
+                cal, args.n_samples, currents, voltages, quality
+            )
+        else:
+            cal = compute_two_point(v0, v1, i_ref)
+            if cal is None:
+                print("\nCalibration failed. Exiting.", file=sys.stderr)
+                sys.exit(1)
+            cal_data = {
+                "system_current": list(cal),
+                "metadata": {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mode": "two-point",
+                    "v0": float(v0),
+                    "v1": float(v1),
+                    "i_ref": float(i_ref),
+                    "n_samples": args.n_samples,
+                },
+            }
+
+    if args.note:
+        cal_data["metadata"]["note"] = args.note
 
     # Persist to Redis first — if the live push later fails, the cal is
     # still stored and will load on the next PicoManager restart.
@@ -449,22 +538,29 @@ def main():
         "BGSAVE triggered."
     )
 
-    # Push to the running PicoLidar so the new cal takes effect on the
-    # next status tick.
-    try:
-        lidar_proxy.send_command(
-            "set_calibration",
-            system_current_params=list(cal),
-        )
-        print("Live PicoLidar updated with new calibration.")
-    except (TimeoutError, RuntimeError) as e:
+    # Push to the running PicoLidar so the new cal takes effect on the next
+    # status tick. Skip when the device is down (manual recovery path) — the
+    # Redis write above already restored it for the next PicoManager start.
+    if lidar_proxy.is_available:
+        try:
+            lidar_proxy.send_command(
+                "set_calibration",
+                system_current_params=list(cal),
+            )
+            print("Live PicoLidar updated with new calibration.")
+        except (TimeoutError, RuntimeError) as e:
+            print(
+                f"Live cal push failed: {e}\n"
+                "Calibration is stored in Redis; restart PicoManager to apply.",
+                file=sys.stderr,
+            )
+    else:
         print(
-            f"Live cal push failed: {e}\n"
-            "Calibration is stored in Redis; restart PicoManager to apply.",
-            file=sys.stderr,
+            "Lidar Pico not reachable; calibration stored in Redis and "
+            "loads on the next PicoManager restart."
         )
 
-    print(f"  system_current: I = (V_adc - {cal[0]:.4f}) / {cal[1]:.4f}")
+    print(f"  system_current: I = {cal[0]:.6g}*V + {cal[1]:.6g}")
 
 
 if __name__ == "__main__":

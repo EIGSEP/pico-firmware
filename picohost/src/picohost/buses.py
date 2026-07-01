@@ -185,12 +185,12 @@ class CurrentCalStore:
     Persistent single-key store for the whole-system current monitor.
 
     The value under :data:`CURRENT_CAL_KEY` is a JSON object shaped like
-    ``{"system_current": [V0, slope], "metadata": {...},
+    ``{"system_current": [slope, intercept], "metadata": {...},
     "upload_time": ...}`` — the canonical ``upload_time`` field is injected
     by :meth:`Transport.upload_dict` at the top level. ``system_current`` is
-    the two-point calibration: ``V0`` is the raw ADC voltage at 0 A and
-    ``slope`` is V/A *at the ADC pin* (it absorbs both the divider ratio and
-    the ACS724 sensitivity), so ``I = (V_adc - V0) / slope``.
+    the two-point calibration in amps-vs-volts form: ``slope`` (A/V) and
+    ``intercept`` (A), stored exactly as published, so
+    ``I = slope*V_adc + intercept``.
 
     ``calibrate-current`` uploads after each calibration run. A fresh
     :class:`picohost.PicoLidar` reads this store at ``__init__`` time when
@@ -208,9 +208,9 @@ class CurrentCalStore:
         Parameters
         ----------
         cal : dict
-            Must carry a ``system_current`` entry, a ``(V0, slope)`` pair
-            (list or tuple). Extra fields (e.g. ``metadata``) are preserved
-            verbatim.
+            Must carry a ``system_current`` entry, a ``(slope, intercept)``
+            pair (list or tuple). Extra fields (e.g. ``metadata``) are
+            preserved verbatim.
         """
         self.transport.upload_dict(cal, CURRENT_CAL_KEY)
 
@@ -221,8 +221,8 @@ class CurrentCalStore:
         -------
         dict or None
             ``None`` if no calibration has been uploaded, or if the stored
-            JSON fails to decode. The caller falls back to the nominal
-            transfer function.
+            JSON fails to decode. The device then stays uncalibrated
+            (``current_a`` publishes as ``None``).
         """
         raw = self.transport.get_raw(CURRENT_CAL_KEY)
         if raw is None:
@@ -232,7 +232,7 @@ class CurrentCalStore:
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Corrupted {CURRENT_CAL_KEY} in Redis ({e}); "
-                "falling back to nominal current conversion."
+                "the device stays uncalibrated (current_a=None)."
             )
             return None
 
