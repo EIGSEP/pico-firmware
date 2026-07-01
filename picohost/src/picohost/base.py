@@ -964,8 +964,9 @@ class PicoLidar(PicoDevice):
     ``metadata['system_current']`` entry so the user-facing key never names
     lidar. The publish stays additive and scalar-only: raw
     ``current_voltage``, derived ``current_a``, and the two cal scalars
-    ``current_cal_slope`` (A/V) / ``current_cal_intercept`` (A) that project
-    it — all three ``None`` when uncalibrated (no nominal fallback).
+    ``current_cal_slope`` (A/V) / ``current_cal_intercept`` (A) that describe
+    it (the stored line ``I = slope*V + intercept``) — all three ``None``
+    when uncalibrated (no nominal fallback).
     """
 
     def __init__(self, *args, current_cal_store=None, **kwargs):
@@ -974,13 +975,13 @@ class PicoLidar(PicoDevice):
         ----------
         current_cal_store : picohost.buses.CurrentCalStore, optional
             Redis-backed two-point current calibration. When provided and
-            the store holds a cal, ``(V0, slope)`` is applied before the
-            first status tick, so a rebooted lidar Pico comes up calibrated
+            the store holds a cal, ``(slope, intercept)`` is applied before
+            the first status tick, so a rebooted lidar Pico comes up calibrated
             from Redis. With no cal loaded, ``current_a`` and the published
             cal scalars are ``None`` (no nominal fallback). Other args/kwargs
             pass through to :class:`PicoDevice`.
         """
-        # (V0, slope) at the ADC pin: I = (V_adc - V0) / slope. None ⇒
+        # (slope, intercept) at the ADC pin: I = slope*V_adc + intercept. None ⇒
         # uncalibrated: current_a and the published cal scalars are None
         # (no nominal fallback). Set before super().__init__ so the handler
         # never sees an undefined attribute.
@@ -1009,7 +1010,7 @@ class PicoLidar(PicoDevice):
         Parameters
         ----------
         system_current_params : sequence of (float, float), optional
-            ``(V0, slope)`` such that ``I = (V_adc - V0) / slope``.
+            ``(slope, intercept)`` such that ``I = slope*V_adc + intercept``.
             ``calibrate-current`` pushes this to the running device so a new
             cal takes effect on the next status tick without a restart.
         """
@@ -1017,22 +1018,19 @@ class PicoLidar(PicoDevice):
             self._current_cal = tuple(system_current_params)
 
     def _current_fields(self, v_adc):
-        """Project the loaded cal onto published (current_a, slope, intercept).
+        """Return published (current_a, cal_slope, cal_intercept) for v_adc.
 
-        Returns the amps-vs-volts line actually applied to ``v_adc`` so the
-        published row is self-describing: ``current_a == slope * v_adc +
-        intercept``. All three are ``None`` when no measured two-point cal is
-        loaded — there is no nominal fallback, so an uncalibrated current
-        sensor reports ``None`` rather than a guessed value (mirrors potmon's
+        The stored cal IS the amps-vs-volts line (slope A/V, intercept A) that
+        the metadata/file records verbatim, so publishing is a passthrough:
+        ``current_a == cal_slope * v_adc + cal_intercept``. All three are
+        ``None`` when no cal is loaded — there is no nominal fallback, so an
+        uncalibrated current sensor reports ``None`` (mirrors potmon's
         uncalibrated angle).
         """
         if self._current_cal is None:
             return None, None, None
-        v0, slope = self._current_cal
-        cal_slope = 1.0 / slope
-        cal_intercept = -v0 / slope
-        current_a = cal_slope * v_adc + cal_intercept
-        return current_a, cal_slope, cal_intercept
+        cal_slope, cal_intercept = self._current_cal
+        return cal_slope * v_adc + cal_intercept, cal_slope, cal_intercept
 
     def _lidar_redis_handler(self, data):
         """Split the merged lidar line into two metadata keys.

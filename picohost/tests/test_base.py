@@ -1071,13 +1071,13 @@ class TestLidarRedisHandler:
 
     The current entry is decoupled from the lidar I2C status. current_a and
     the cal scalars (current_cal_slope A/V, current_cal_intercept A) come from
-    the measured two-point cal projected to amps-vs-volts; all three are None
+    the measured two-point cal stored in amps-vs-volts form; all three are None
     when no cal is loaded (no nominal fallback). Every added field is a scalar
     (scalar-only contract on picohost.base.redis_handler).
     """
 
-    # A measured two-point cal (V0, slope_VperA): I = (V - V0) / slope.
-    _CAL = (1.4871, 0.11873)
+    # Measured cal stored in the amps-vs-volts form (slope A/V, intercept A).
+    _CAL = (8.4223, -12.5248)
 
     def _capture(self, lidar, data):
         published = []
@@ -1115,13 +1115,13 @@ class TestLidarRedisHandler:
         finally:
             lidar.disconnect()
 
-    def test_calibrated_publishes_projected_cal_and_invariant(self):
-        """With a measured cal loaded the handler emits the amps-vs-volts
-        projection, and current_a == slope*V + intercept exactly."""
+    def test_calibrated_publishes_cal_and_invariant(self):
+        """With a measured cal loaded the handler passes the stored
+        amps-vs-volts pair through and current_a == slope*V + intercept."""
         lidar = DummyPicoLidar("/dev/dummy")
         try:
             lidar._current_cal = self._CAL
-            v0, slope = self._CAL
+            cal_slope, cal_intercept = self._CAL
             v_adc = 1.84
             pub = self._capture(
                 lidar,
@@ -1134,12 +1134,11 @@ class TestLidarRedisHandler:
                 },
             )
             sc = pub[1]
-            assert sc["current_cal_slope"] == pytest.approx(1.0 / slope)
-            assert sc["current_cal_intercept"] == pytest.approx(-v0 / slope)
+            assert sc["current_cal_slope"] == cal_slope
+            assert sc["current_cal_intercept"] == cal_intercept
             assert sc["current_a"] == pytest.approx(
-                sc["current_cal_slope"] * v_adc + sc["current_cal_intercept"]
+                cal_slope * v_adc + cal_intercept
             )
-            assert sc["current_a"] == pytest.approx((v_adc - v0) / slope)
         finally:
             lidar.disconnect()
 

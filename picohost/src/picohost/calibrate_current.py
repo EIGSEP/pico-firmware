@@ -16,10 +16,12 @@ the fit to two places:
      tick without restarting the manager.
 
 The two-point fit folds both the ACS724's untrimmed zero offset and the
-divider/resistor tolerance into a single measured ``(V0, slope)`` at the
-ADC pin, so ``I = (V_adc - V0) / slope`` — no reliance on nominal resistor
-values. Point 1 is the system at 0 A (load off); point 2 is a known
-reference current read from an inline ammeter.
+divider/resistor tolerance into a single measured line ``I = slope*V_adc +
+intercept`` (A/V, A) — no reliance on nominal resistor values. This is the
+same amps-vs-volts pair that is published and saved to the file, so it can be
+restored verbatim (see ``--mode manual``, added separately). Point 1 is the
+system at 0 A (load off); point 2 is a known reference current read from an
+inline ammeter.
 
 Requires PicoManager to be running and the ``lidar`` device healthy. The
 script never touches the serial port itself, so it can be invoked
@@ -90,8 +92,21 @@ def collect_samples(transport, n):
     return float(np.mean(samples))
 
 
+def _to_amps_per_volt(v0, slope_vpera):
+    """Convert a fit's physical (V0, slope V/A) to the stored amps-vs-volts
+    pair (slope A/V, intercept A) for ``I = slope_a*V + intercept_a``.
+
+    A fit produces ``V = slope_vpera*I + V0`` (voltage is the noisy measured
+    quantity), so ``slope_a = 1/slope_vpera`` and
+    ``intercept_a = -V0/slope_vpera``.
+    """
+    slope_a = 1.0 / slope_vpera
+    return (float(slope_a), float(-v0 * slope_a))
+
+
 def compute_two_point(v0, v1, i_ref):
-    """Compute ``(V0, slope)`` for ``I = (V_adc - V0) / slope``.
+    """Compute the stored ``(slope, intercept)`` for
+    ``I = slope*V_adc + intercept``.
 
     ``v0`` is the raw ADC voltage at 0 A, ``v1`` at the known reference
     current ``i_ref``. The slope absorbs the divider ratio and the sensor
@@ -109,7 +124,7 @@ def compute_two_point(v0, v1, i_ref):
         return None
     slope = (v1 - v0) / i_ref
     _warn_on_slope(slope)
-    return (float(v0), float(slope))
+    return _to_amps_per_volt(v0, slope)
 
 
 def _warn_on_slope(slope):
@@ -155,10 +170,11 @@ def compute_multi_point(currents, voltages):
     Returns
     -------
     tuple or None
-        ``((V0, slope), quality)`` where ``quality`` is a dict with
-        ``residual_rms_v``, ``residual_rms_a`` and ``r_squared``; or
-        ``None`` (with a printed reason) when the points cannot define a
-        gain. Downstream conversion is ``I = (V_adc - V0) / slope``.
+        ``(stored (slope, intercept), quality)`` where ``quality`` is a
+        dict with ``residual_rms_v``, ``residual_rms_a`` and
+        ``r_squared``; or ``None`` (with a printed reason) when the
+        points cannot define a gain. Downstream conversion is
+        ``I = slope*V_adc + intercept``.
     """
     currents = np.asarray(currents, dtype=float)
     voltages = np.asarray(voltages, dtype=float)
@@ -186,7 +202,7 @@ def compute_multi_point(currents, voltages):
         "residual_rms_a": residual_rms_a,
         "r_squared": r_squared,
     }
-    return ((float(v0), float(slope)), quality)
+    return (_to_amps_per_volt(v0, slope), quality)
 
 
 def collect_two_point(transport, n_samples):
@@ -280,12 +296,12 @@ def collect_multi_point(transport, n_samples, currents=None):
 
 def _print_point_table(currents, voltages, cal):
     """Print a per-point I / V / residual table so a bad point is obvious."""
-    v0, slope = cal
+    slope_a, intercept_a = cal
     print("\n  point  I_ref [A]  V_adc [V]  resid [mV]  resid [mA]")
     for idx, (i, v) in enumerate(zip(currents, voltages), start=1):
-        fit_v = slope * i + v0
-        dv = v - fit_v
-        di = dv / slope if slope else float("inf")
+        fit_i = slope_a * v + intercept_a
+        di = i - fit_i
+        dv = di / slope_a if slope_a else float("inf")
         print(f"  {idx:>5}{i:11.4f}{v:11.4f}{dv * 1e3:12.2f}{di * 1e3:12.2f}")
 
 
@@ -464,7 +480,7 @@ def main():
             file=sys.stderr,
         )
 
-    print(f"  system_current: I = (V_adc - {cal[0]:.4f}) / {cal[1]:.4f}")
+    print(f"  system_current: I = {cal[0]:.6g}*V + {cal[1]:.6g}")
 
 
 if __name__ == "__main__":
