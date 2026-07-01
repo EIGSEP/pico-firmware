@@ -7,6 +7,13 @@ from .base import PicoEmulator
 class RFSwitchEmulator(PicoEmulator):
     """Emulates src/rfswitch.c firmware.
 
+    ``sw_state`` is an EEPROM path address (0 to ``NUM_PATHS``-1)
+    driven onto the RF switch PCB's A0..A4 select lines; the byte
+    burned at that address drives the physical switches. Addresses at
+    or above ``NUM_PATHS`` hold 0xFF on the EEPROMs (every switch
+    input closed, noise diode on) and are rejected, mirroring the
+    firmware guard.
+
     Mirrors the firmware's settle-timer behavior: after a commanded
     state change, ``sw_state`` is reported as
     :attr:`SW_STATE_UNKNOWN` (-1) until ``settle_ms`` has elapsed, at
@@ -20,6 +27,8 @@ class RFSwitchEmulator(PicoEmulator):
     """
 
     SW_STATE_UNKNOWN = -1
+    # Mirrors RFSWITCH_NUM_PATHS in src/rfswitch.h.
+    NUM_PATHS = 16
     DEFAULT_SETTLE_MS = 20
 
     def __init__(self, app_id=5, settle_ms=None, **kwargs):
@@ -49,11 +58,7 @@ class RFSwitchEmulator(PicoEmulator):
         if not math.isfinite(raw) or raw != int(raw):
             return
         new_state = int(raw)
-        if (
-            new_state < 0
-            or new_state > 255
-            or new_state == self.SW_STATE_UNKNOWN
-        ):
+        if new_state < 0 or new_state >= self.NUM_PATHS:
             return
         if new_state != self.commanded_state:
             self.commanded_state = new_state
