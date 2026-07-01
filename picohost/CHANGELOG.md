@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.11.0](https://github.com/EIGSEP/pico-firmware/compare/v3.10.0...v3.11.0) (2026-07-01)
+
+
+### Features
+
+* **calibrate-imu:** gate faulted IMU at startup with operator prompt, guard fit ([65add47](https://github.com/EIGSEP/pico-firmware/commit/65add472b3d8d228282ff8c0f482a26964a4ed39))
+* **calibrate-imu:** three-state stream_status classifier (healthy/faulted/dead) ([49d7308](https://github.com/EIGSEP/pico-firmware/commit/49d73081979d3247b911a426f36aa91d2f3ebf44))
+* **current:** record system_current cal in metadata (symmetric) + manual recovery ([#137](https://github.com/EIGSEP/pico-firmware/issues/137)) ([d09866d](https://github.com/EIGSEP/pico-firmware/commit/d09866d1a0503e0d862015a3c9885b0dc3471281))
+* **motor:** smooth constant-acceleration step ramp ([8b71de2](https://github.com/EIGSEP/pico-firmware/commit/8b71de2d039edc67cf59b0dfdf953b18f952f111))
+
+
+### Bug Fixes
+
+* **calibrate-imu:** clean abort on mid-sweep fault; harden faulted-prompt test ([b91ac34](https://github.com/EIGSEP/pico-firmware/commit/b91ac341e00b13231a878168f15f7120d36636b1))
+* **calibrate-imu:** drop status=error frames in collect_vector, abort on sustained fault ([f73fca6](https://github.com/EIGSEP/pico-firmware/commit/f73fca67f3b9c62e3ab633947d2d6bfb3cce03cb))
+* **imu_geometry:** reject zero-norm/degenerate accel with clear ValueError ([f0f5bba](https://github.com/EIGSEP/pico-firmware/commit/f0f5bbacea3d578d10f92dcda55cc479fb993d84))
+* **imu:** pole-symmetric sin² azimuth blend with deadband ([#133](https://github.com/EIGSEP/pico-firmware/issues/133)) ([f6d798b](https://github.com/EIGSEP/pico-firmware/commit/f6d798bd33f40819e037b449aa3bd6a267394422))
+
 ## [3.10.0](https://github.com/EIGSEP/pico-firmware/compare/v3.9.0...v3.10.0) (2026-06-29)
 
 
