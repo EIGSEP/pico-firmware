@@ -11,9 +11,10 @@
 // table driving three ADGM1004 switches plus the noise-diode bias: the
 // byte stored at the address presented on A0..A4 drives the switch
 // control lines. Selecting a path therefore means driving a 5-bit
-// address onto GP8..GP12; this firmware never touches the EEPROM bus
+// address onto the (non-contiguous) select pins listed in
+// rfswitch_addr_pins in rfswitch.c — A0=GP8, A1=GP10, A2=GP12,
+// A3=GP14, A4=GP15; this firmware never touches the EEPROM bus
 // itself. Table ground truth: eeprom_api/program_paths/program_paths.c
-#define RFSWITCH_A0_PIN      8   // A_i = GP(RFSWITCH_A0_PIN + i)
 #define RFSWITCH_ADDR_LINES  5
 
 // Addresses 0x00-0x0F are burned with the path table below; 0x10-0x1F

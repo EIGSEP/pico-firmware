@@ -6,6 +6,10 @@
 
 static RFSwitch rfswitch;
 
+// EEPROM select pins, index = address bit (LSB first). This table IS
+// the wiring spec for the harness — see "RF Switch Wiring" in README.md.
+static const uint rfswitch_addr_pins[RFSWITCH_ADDR_LINES] = {8, 10, 12, 14, 15};
+
 void rfswitch_init(uint8_t app_id) {
     rfswitch.commanded_state = RF_PATH_LNA_FEED;
     rfswitch.reported_state = RF_PATH_LNA_FEED;
@@ -15,8 +19,8 @@ void rfswitch_init(uint8_t app_id) {
     rfswitch.in_transition = true;
     rfswitch.transition_end = make_timeout_time_ms(SWITCH_SETTLE_MS);
     for (int i = 0; i < RFSWITCH_ADDR_LINES; i++) {
-        gpio_init(RFSWITCH_A0_PIN + i);
-        gpio_set_dir(RFSWITCH_A0_PIN + i, GPIO_OUT);
+        gpio_init(rfswitch_addr_pins[i]);
+        gpio_set_dir(rfswitch_addr_pins[i], GPIO_OUT);
     }
 }
 
@@ -76,9 +80,9 @@ void rfswitch_op(uint8_t app_id) {
     // EEPROM never sees a transient intermediate address.
     uint32_t mask = 0, vals = 0;
     for (int i = 0; i < RFSWITCH_ADDR_LINES; i++) {
-        mask |= 1u << (RFSWITCH_A0_PIN + i);
+        mask |= 1u << rfswitch_addr_pins[i];
         if ((rfswitch.commanded_state >> i) & 0x1) {
-            vals |= 1u << (RFSWITCH_A0_PIN + i);
+            vals |= 1u << rfswitch_addr_pins[i];
         }
     }
     gpio_put_masked(mask, vals);
