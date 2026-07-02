@@ -94,7 +94,15 @@ LIDAR_FIELDS = {
     "current_voltage",
 }
 
-RFSWITCH_FIELDS = {"sensor_name", "status", "app_id", "sw_state"}
+RFSWITCH_FIELDS = {
+    "sensor_name",
+    "status",
+    "app_id",
+    "sw_state",
+    "volt_therm0",
+    "volt_therm1",
+    "volt_therm2",
+}
 
 
 # --- Fixtures ---
@@ -197,6 +205,7 @@ class TestRFSwitchIntegration:
             cadence_ms=cadence,
         )
         assert rfswitch.last_status["sensor_name"] == "rfswitch"
+        assert set(rfswitch.last_status.keys()) == RFSWITCH_FIELDS
 
     def test_command_round_trip(self, rfswitch):
         """Switch command round-trips through serial."""
