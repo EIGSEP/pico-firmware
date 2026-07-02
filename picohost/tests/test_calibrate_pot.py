@@ -70,11 +70,10 @@ def test_read_motor_az_steps_reads_latest():
 
 
 def test_read_motor_az_deg_converts_with_geometry():
+    # 22600 steps = one full turn for the installed drive (MOTOR_GEOMETRY).
     t = DummyTransport()
     _xadd_motor(t, 22600)
-    deg = calibrate_pot.read_motor_az_deg(
-        t, step_angle_deg=1.8, gear_teeth=113, microstep=1, start_id="0-0"
-    )
+    deg = calibrate_pot.read_motor_az_deg(t, start_id="0-0")
     assert deg == pytest.approx(360.0)
 
 
@@ -90,6 +89,26 @@ def _seq(values):
     return lambda *a, **k: next(it)
 
 
+class FakePicoProxy:
+    """Records send_command calls; the one fake proxy for every test here.
+
+    ``fail_on`` raises ``fail_exc`` when that action is sent; flip
+    ``is_available`` to simulate a heartbeat drop.
+    """
+
+    def __init__(self, name="", available=True, fail_on=None, fail_exc=None):
+        self.name = name
+        self.is_available = available
+        self.calls = []
+        self._fail_on = fail_on
+        self._fail_exc = fail_exc or RuntimeError("boom")
+
+    def send_command(self, action, **kwargs):
+        self.calls.append((action, kwargs))
+        if action == self._fail_on:
+            raise self._fail_exc
+
+
 def test_collect_azimuth_pairs_voltage_with_motor_az(monkeypatch):
     monkeypatch.setattr(
         calibrate_pot, "collect_samples", _seq([1.0, 1.5, 2.0])
@@ -100,9 +119,8 @@ def test_collect_azimuth_pairs_voltage_with_motor_az(monkeypatch):
     # home prompt, two stop prompts, then 'q' to finish
     monkeypatch.setattr("builtins.input", _seq(["", "", "", "q"]))
 
-    cfg = {"step_angle_deg": 1.8, "gear_teeth": 113, "microstep": 1}
     voltages, angles, v0 = calibrate_pot.collect_azimuth(
-        DummyTransport(), n_samples=10, motor_cfg=cfg
+        DummyTransport(), n_samples=10
     )
 
     assert v0 == pytest.approx(1.0)
@@ -117,9 +135,283 @@ def test_collect_azimuth_warns_when_not_homed(monkeypatch, capsys):
         calibrate_pot, "read_motor_az_deg", _seq([45.0, 360.0])
     )
     monkeypatch.setattr("builtins.input", _seq(["", "", "q"]))
-    cfg = {"step_angle_deg": 1.8, "gear_teeth": 113, "microstep": 1}
-    calibrate_pot.collect_azimuth(DummyTransport(), 10, cfg)
+    calibrate_pot.collect_azimuth(DummyTransport(), 10)
     assert "WARNING" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# collect_auto (--mode auto): motor-driven sweep
+# ---------------------------------------------------------------------------
+
+
+def test_collect_auto_commands_expected_targets_and_reads_actual_az(
+    monkeypatch,
+):
+    # The sweep must cover the production operating window (-180..+180
+    # deg around home), not 0..360: n_stops=2 -> 180 deg spacing gives
+    # commanded targets -180, 0, +180, then home (0). Actual settled
+    # reads are offset from the commanded target (within the settle
+    # tolerance) to prove angles come from the stream, not the target.
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq(
+            [
+                1.0,  # home read
+                -179.0,
+                -179.0,  # settle at stop 1 (target -180)
+                0.5,
+                0.5,  # settle at stop 2 (target 0)
+                179.5,
+                179.5,  # settle at stop 3 (target +180)
+                0.2,
+                0.2,  # settle back at home (target 0)
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([1.0, 1.4, 1.5, 1.6])
+    )
+
+    proxy = FakePicoProxy()
+    voltages, angles, v0 = calibrate_pot.collect_auto(
+        DummyTransport(), proxy, n_samples=10, n_stops=2
+    )
+
+    assert v0 == pytest.approx(1.0)
+    assert voltages == [1.0, 1.4, 1.5, 1.6]
+    # Recorded angles are the actual stream reads (-179, 0.5, 179.5),
+    # not the commanded targets (-180, 0, 180).
+    assert angles == [0.0, -179.0, 0.5, 179.5]
+
+    move_calls = [c for c in proxy.calls if c[0] == "az_target_deg"]
+    assert [c[1]["target_deg"] for c in move_calls] == [
+        -180.0,
+        0.0,
+        180.0,
+        0.0,
+    ]
+    # Moves must be non-blocking -- the manager's command thread cannot
+    # afford to wait on a multi-minute move.
+    for _action, kwargs in move_calls:
+        assert kwargs["wait_for_start"] is False
+        assert kwargs["wait_for_stop"] is False
+
+    # Claimed at the start, released at the end; no halt on success.
+    assert proxy.calls[0][0] == "claim"
+    assert proxy.calls[-1][0] == "release"
+    assert "halt" not in [c[0] for c in proxy.calls]
+
+
+def test_collect_auto_warns_when_not_homed(monkeypatch, capsys):
+    # n_stops=1 -> targets -180, +180, then home (0).
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq([10.0, -180.2, -180.2, 179.8, 179.8, 0.2, 0.2]),
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([1.5, 1.0, 2.0])
+    )
+
+    proxy = FakePicoProxy()
+    calibrate_pot.collect_auto(
+        DummyTransport(), proxy, n_samples=10, n_stops=1
+    )
+
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_collect_auto_halts_and_releases_on_command_failure(monkeypatch):
+    monkeypatch.setattr(calibrate_pot, "read_motor_az_deg", _seq([0.0]))
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0]))
+
+    proxy = FakePicoProxy(fail_on="az_target_deg")
+    with pytest.raises(RuntimeError, match="boom"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=1
+        )
+
+    # Moves are non-blocking, so the failure path must stop the motor
+    # before giving up the claim.
+    assert proxy.calls[0][0] == "claim"
+    assert [c[0] for c in proxy.calls[-2:]] == ["halt", "release"]
+
+
+def test_collect_auto_halts_and_releases_on_settle_timeout(monkeypatch):
+    # The motor never reaches the commanded target -- read_motor_az_deg
+    # always reports the same stale value.
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", lambda *a, **k: 0.0
+    )
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0]))
+
+    proxy = FakePicoProxy()
+    with pytest.raises(TimeoutError, match="did not settle"):
+        calibrate_pot.collect_auto(
+            DummyTransport(),
+            proxy,
+            n_samples=10,
+            n_stops=1,
+            settle_timeout_s=0.05,
+        )
+
+    # The motor may still be en route after a settle timeout: halt it,
+    # then release the claim.
+    assert proxy.calls[0][0] == "claim"
+    assert [c[0] for c in proxy.calls[-2:]] == ["halt", "release"]
+
+
+def test_collect_auto_fails_fast_when_motor_drops_mid_sweep(monkeypatch):
+    proxy = FakePicoProxy()
+
+    def _sample_and_drop_heartbeat(*a, **k):
+        # Heartbeat lapses while the home stop is being sampled — the
+        # next move must raise immediately, not silently no-op and then
+        # burn the full settle timeout.
+        proxy.is_available = False
+        return 1.0
+
+    monkeypatch.setattr(calibrate_pot, "read_motor_az_deg", _seq([0.0]))
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _sample_and_drop_heartbeat
+    )
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=1
+        )
+
+    # No move was dispatched; cleanup still ran.
+    assert "az_target_deg" not in [c[0] for c in proxy.calls]
+    assert proxy.calls[-1][0] == "release"
+
+
+# ---------------------------------------------------------------------------
+# rail guards: near the ADC rails the wiper clips and the pot silently
+# stops being an absolute azimuth reference, so in-box sampling and the
+# auto sweep must abort rather than record clipped voltages.
+# ---------------------------------------------------------------------------
+
+
+def test_check_off_rails_bounds():
+    # Mid-range passes silently.
+    calibrate_pot._check_off_rails(1.65, where="test")
+    # Within the guard margin of either rail raises.
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._check_off_rails(0.05, where="test")
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._check_off_rails(3.25, where="test")
+
+
+def test_sample_stop_aborts_on_railed_voltage(monkeypatch):
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([0.05]))
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._sample_stop(DummyTransport(), 10, 45.0)
+
+
+def test_collect_auto_halts_on_railed_sample(monkeypatch):
+    # Home samples fine; the first sweep stop reads a clipped voltage.
+    # The sweep must halt the motor and release the claim, not keep
+    # collecting a fit from clipped data.
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq([0.0, -179.5, -179.5]),
+    )
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0, 3.28]))
+
+    proxy = FakePicoProxy()
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=2
+        )
+
+    assert [c[0] for c in proxy.calls[-2:]] == ["halt", "release"]
+
+
+def test_collect_auto_preflight_aborts_before_moving_when_home_near_rail(
+    monkeypatch,
+):
+    # v0=0.4 V: at the field-measured slope (~320 deg/V) the -180 deg
+    # half of the sweep needs ~0.56 V of travel, which would cross the
+    # 0 V rail. The preflight must abort before any move is commanded.
+    monkeypatch.setattr(calibrate_pot, "read_motor_az_deg", _seq([0.0]))
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([0.4]))
+
+    proxy = FakePicoProxy()
+    with pytest.raises(RuntimeError, match="headroom"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=8
+        )
+
+    assert "az_target_deg" not in [c[0] for c in proxy.calls]
+    assert proxy.calls[-1][0] == "release"
+
+
+def test_collect_auto_preflight_uses_stored_slope(monkeypatch):
+    # A stored steep slope (1000 deg/V -> 0.18 V per 180 deg) makes the
+    # same 0.4 V home viable; the empirical fallback alone would abort.
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [1000.0, -400.0]})
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq([0.0, -179.8, -179.8, 179.9, 179.9, 0.1, 0.1]),
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([0.4, 0.3, 0.55])
+    )
+
+    proxy = FakePicoProxy()
+    voltages, angles, v0 = calibrate_pot.collect_auto(
+        t, proxy, n_samples=10, n_stops=1
+    )
+
+    assert v0 == pytest.approx(0.4)
+    move_calls = [c for c in proxy.calls if c[0] == "az_target_deg"]
+    assert [c[1]["target_deg"] for c in move_calls] == [-180.0, 180.0, 0.0]
+
+
+def test_wait_for_settle_aborts_when_pot_rails_mid_move(monkeypatch):
+    # The motor is settling happily on target, but the pot hit a rail
+    # mid-move: the settle poll must abort (upstream halts the motor)
+    # rather than report a clean arrival.
+    t = DummyTransport()
+    t.r.xadd(
+        calibrate_pot.POTMON_STREAM,
+        {"value": json.dumps({"pot_az_voltage": 0.05})},
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", lambda *a, **k: 180.0
+    )
+
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._wait_for_settle(t, 180.0, timeout_s=1.0)
+
+
+def test_wait_for_settle_passes_with_healthy_pot(monkeypatch):
+    t = DummyTransport()
+    t.r.xadd(
+        calibrate_pot.POTMON_STREAM,
+        {"value": json.dumps({"pot_az_voltage": 1.5})},
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", lambda *a, **k: 180.0
+    )
+
+    az = calibrate_pot._wait_for_settle(t, 180.0, timeout_s=1.0)
+    assert az == pytest.approx(180.0)
+
+
+def test_rezero_aborts_on_railed_home(monkeypatch):
+    # Re-pinning zero to a clipped voltage would poison the intercept.
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [320.0, -50.0]})
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([3.25]))
+    monkeypatch.setattr("builtins.input", _seq([""]))
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot.rezero(t, n_samples=10)
 
 
 def test_rezero_reuses_stored_slope(monkeypatch):
@@ -175,20 +467,34 @@ def test_build_parser_accepts_manual_mode_and_args():
     assert d.note is None
 
 
-def test_build_parser_accepts_new_modes_and_motor_cfg():
+def test_build_parser_accepts_new_modes():
     p = calibrate_pot.build_parser()
 
-    a = p.parse_args(["--mode", "azimuth", "--gear-teeth", "200"])
-    assert a.mode == "azimuth"
-    assert a.gear_teeth == 200
-
+    assert p.parse_args(["--mode", "azimuth"]).mode == "azimuth"
     assert p.parse_args(["--mode", "rezero"]).mode == "rezero"
+    assert p.parse_args([]).mode == "azimuth"  # in-box is the common case
 
-    d = p.parse_args([])
-    assert d.mode == "azimuth"  # in-box calibration is the common case
-    assert d.step_angle_deg == pytest.approx(1.8)
-    assert d.gear_teeth == 113
-    assert d.microstep == 1
+
+def test_build_parser_rejects_motor_geometry_flags():
+    # Geometry is a fixed hardware property (picohost.motor constants),
+    # deliberately not CLI-tunable: a client-side override would desync
+    # deg->steps (manager) from steps->deg (calibrate-pot) and make
+    # --mode auto's settle detection unreachable.
+    p = calibrate_pot.build_parser()
+    for flag in ("--step-angle-deg", "--gear-teeth", "--microstep"):
+        with pytest.raises(SystemExit):
+            p.parse_args([flag, "2"])
+
+
+def test_build_parser_accepts_auto_mode():
+    p = calibrate_pot.build_parser()
+
+    a = p.parse_args(["--mode", "auto"])
+    assert a.mode == "auto"
+    assert a.n_stops == 8  # ~45 deg spacing over one 360 deg turn
+
+    a = p.parse_args(["--mode", "auto", "--n-stops", "4"])
+    assert a.n_stops == 4
 
 
 # ---------------------------------------------------------------------------
@@ -197,16 +503,7 @@ def test_build_parser_accepts_new_modes_and_motor_cfg():
 
 
 def _make_fake_proxy():
-    """Return a fake PicoProxy class whose instances record send_command calls."""
-
-    class FakePicoProxy:
-        def __init__(self, *args, **kwargs):
-            self.is_available = True
-            self.calls = []
-
-        def send_command(self, action, **kwargs):
-            self.calls.append((action, kwargs))
-
+    """Return a shared FakePicoProxy instance and a factory that yields it."""
     instance = FakePicoProxy()
     return instance, lambda *a, **k: instance
 
@@ -280,6 +577,117 @@ def test_main_rezero_mode(monkeypatch):
     action, kwargs = fake_proxy.calls[0]
     assert action == "set_calibration"
     assert kwargs["pot_az_params"] == pytest.approx([100.0, -100.0])
+
+
+def _make_named_fake_proxy_factory(unavailable=frozenset()):
+    """FakePicoProxy factory keyed by device name.
+
+    Unlike ``_make_fake_proxy`` (a single shared instance), --mode auto
+    constructs two proxies (pot and motor) that must be independently
+    controllable and independently record their calls.
+    """
+    proxies = {}
+
+    def factory(name, *args, **kwargs):
+        proxy = FakePicoProxy(name, available=name not in unavailable)
+        proxies[name] = proxy
+        return proxy
+
+    return proxies, factory
+
+
+def test_main_auto_mode(monkeypatch):
+    """main() --mode auto: collects via collect_auto, fits, stores, pushes."""
+    dummy_transport = DummyTransport()
+    proxies, proxy_factory = _make_named_fake_proxy_factory()
+
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_auto",
+        lambda *a, **k: ([1.0, 1.9], [0.0, 360.0], 1.0),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "auto"])
+
+    calibrate_pot.main()
+
+    stored = PotCalStore(dummy_transport).get()
+    expected_m, expected_b = calibrate_pot.fit_slope_pin_zero(
+        [1.0, 1.9], [0.0, 360.0], 1.0
+    )
+    assert stored["pot_az"][0] == pytest.approx(expected_m)
+    assert stored["pot_az"][1] == pytest.approx(expected_b)
+    assert stored["metadata"]["mode"] == "auto"
+    assert "motor_cfg" in stored["metadata"]
+    assert stored["metadata"]["n_stops"] == 8
+
+    # Only the pot proxy gets the live push; the motor proxy is used only
+    # inside collect_auto (which is monkeypatched away here).
+    pot_calls = proxies[calibrate_pot.POTMON_NAME].calls
+    assert len(pot_calls) == 1
+    action, kwargs = pot_calls[0]
+    assert action == "set_calibration"
+    assert kwargs["pot_az_params"] == pytest.approx([expected_m, expected_b])
+
+
+def test_main_auto_mode_requires_motor_available(monkeypatch):
+    """--mode auto exits(1) up front if the motor isn't reachable."""
+    dummy_transport = DummyTransport()
+    _proxies, proxy_factory = _make_named_fake_proxy_factory(
+        unavailable={calibrate_pot.MOTOR_NAME}
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "auto"])
+
+    with pytest.raises(SystemExit) as exc:
+        calibrate_pot.main()
+    assert exc.value.code == 1
+    assert PotCalStore(dummy_transport).get() is None
+
+
+def test_main_auto_mode_rejects_nonpositive_n_stops(monkeypatch):
+    dummy_transport = DummyTransport()
+    _proxies, proxy_factory = _make_named_fake_proxy_factory()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr(
+        sys, "argv", ["calibrate-pot", "--mode", "auto", "--n-stops", "0"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        calibrate_pot.main()
+    assert exc.value.code == 1
+
+
+def test_main_auto_mode_rejects_spacing_within_settle_tolerance(monkeypatch):
+    """Stops closer than 2x the settle tolerance would false-settle at the
+    previous stop (the stationary pre-move position already matches the
+    target within tolerance), silently corrupting the calibration."""
+    dummy_transport = DummyTransport()
+    _proxies, proxy_factory = _make_named_fake_proxy_factory()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # 90 stops -> 4.0 deg spacing == 2 * SETTLE_TOL_DEG: not strictly
+    # greater, so it must be rejected (89 -> ~4.04 deg is the max).
+    monkeypatch.setattr(
+        sys, "argv", ["calibrate-pot", "--mode", "auto", "--n-stops", "90"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        calibrate_pot.main()
+    assert exc.value.code == 1
+    assert PotCalStore(dummy_transport).get() is None
 
 
 # ---------------------------------------------------------------------------
@@ -575,23 +983,73 @@ def test_expected_slope_mag_installed_pot():
 
 
 def test_slope_out_of_range_in_window():
-    # Expected ~409 deg/V; factor 1.5 -> in-range ~273..614 deg/V.
-    assert calibrate_pot.slope_out_of_range(409.0, 3.75) is False
-    assert calibrate_pot.slope_out_of_range(300.0, 3.75) is False
-    assert calibrate_pot.slope_out_of_range(600.0, 3.75) is False
+    # Expected 320 deg/V (field-measured); factor 1.5 -> ~213..480 deg/V.
+    assert calibrate_pot.slope_out_of_range(320.0, 320.0) is False
+    assert calibrate_pot.slope_out_of_range(409.0, 320.0) is False
+    assert calibrate_pot.slope_out_of_range(250.0, 320.0) is False
     # Sign is irrelevant — magnitude only.
-    assert calibrate_pot.slope_out_of_range(-409.0, 3.75) is False
+    assert calibrate_pot.slope_out_of_range(-320.0, 320.0) is False
 
 
 def test_slope_out_of_range_flags_gross_errors():
     # An order-of-magnitude typo in either direction is flagged.
-    assert calibrate_pot.slope_out_of_range(40.9, 3.75) is True
-    assert calibrate_pot.slope_out_of_range(4090.0, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(32.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(3200.0, 320.0) is True
     # Just outside the 1.5x window on each side.
-    assert calibrate_pot.slope_out_of_range(200.0, 3.75) is True
-    assert calibrate_pot.slope_out_of_range(700.0, 3.75) is True
-    # A zero slope is never sane.
-    assert calibrate_pot.slope_out_of_range(0.0, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(200.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(500.0, 320.0) is True
+    # A zero slope is never sane, nor is a non-positive expectation.
+    assert calibrate_pot.slope_out_of_range(0.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(320.0, 0.0) is True
+
+
+def test_main_manual_sanity_centered_on_empirical_slope(monkeypatch):
+    """In-box modes check the slope against the field-measured ~320 deg/V.
+
+    500 deg/V sat comfortably inside the old physically-derived window
+    (409 * 1.5 = 614) but is >1.5x off the measured slope, so it must
+    escalate the save — a bare 'y' discards."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(500.0, -400.0))
+
+    calibrate_pot.main()
+
+    assert PotCalStore(dummy_transport).get() is None
+    assert fake_proxy.calls == []
+
+
+def test_main_bench_mode_keeps_physical_expectation(monkeypatch, capsys):
+    """Bench modes keep the physical turns*360/vref expectation.
+
+    A 500 deg/V fit is in range for a 3.75-turn pot on the bench (where
+    the wiper genuinely spans the full range) even though it would fail
+    the in-box empirical window."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # minmax fit: 0..1350 deg over 0.3..3.0 V -> slope = 1350/2.7 = 500
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_minmax",
+        lambda *a, **k: ([0.3, 3.0], [0.0, 1350.0]),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "minmax"])
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "off the expected" not in out.lower()
+    assert PotCalStore(dummy_transport).get() is not None
 
 
 # ---------------------------------------------------------------------------

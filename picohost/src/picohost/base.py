@@ -1075,6 +1075,20 @@ class PicoLidar(PicoDevice):
             )
 
 
+#: ADC reference voltage for the pot wiper. Mirrors firmware POTMON_VREF
+#: (src/potmon.h); the wiper spans ~0..POT_VREF, so the ADC rails
+#: approximate the pot's electrical ends.
+POT_VREF = 3.3
+#: Margin (V) from an ADC rail below which ``pot_az_near_rail`` publishes
+#: True. A railed pot still reports a steady, plausible voltage, so this
+#: flag is the stream-level tell that the absolute azimuth reference is
+#: compromised (e.g. accumulated motor slip walking a scan toward a
+#: rail). Deliberately wider than calibrate-pot's hard abort margin
+#: (RAIL_GUARD_V there): the flag is an ops early warning, the abort is
+#: "the data is already clipped".
+POT_NEAR_RAIL_V = 0.2
+
+
 class PicoPotentiometer(PicoDevice):
     """Potentiometer monitoring device with voltage-to-angle calibration."""
 
@@ -1135,19 +1149,28 @@ class PicoPotentiometer(PicoDevice):
             self.redis_handler = self._pot_redis_handler
 
     def _pot_redis_handler(self, data):
-        """Add per-component cal scalars and angle before uploading to Redis.
+        """Add per-component cal scalars, angle, and rail flag before upload.
 
         Augments the raw voltage payload with the calibration slope and
         intercept (flattened into scalar fields per the
-        :func:`redis_handler` scalar-only contract) and the derived
-        angle. All added fields are ``None`` when the corresponding pot
-        is uncalibrated, so the published shape is stable regardless of
-        calibration state.
+        :func:`redis_handler` scalar-only contract), the derived angle,
+        and a ``<key>_near_rail`` bool (voltage within
+        :data:`POT_NEAR_RAIL_V` of an ADC rail — wiper at risk of
+        clipping, absolute reference no longer trustworthy). All added
+        fields are ``None`` when their input is missing (no calibration,
+        or no voltage for the rail flag), so the published shape is
+        stable regardless of state.
         """
         data = data.copy()
         for key in ("pot_az",):
             cal = self._cal[key]
             v = data.get(f"{key}_voltage")
+            if v is not None:
+                data[f"{key}_near_rail"] = bool(
+                    v <= POT_NEAR_RAIL_V or v >= POT_VREF - POT_NEAR_RAIL_V
+                )
+            else:
+                data[f"{key}_near_rail"] = None
             if cal is not None:
                 m, b = cal
                 data[f"{key}_cal_slope"] = float(m)

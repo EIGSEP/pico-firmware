@@ -231,7 +231,7 @@ The boundary between `picohost` and the sister `eigsep_observing` repo is drawn 
 
 **Rule of thumb:** if a script coordinates more than one Pico, it belongs in `eigsep_observing`. Science operations (e.g., a motor scan with intermittent VNA observations) always live in `eigsep_observing` and should log their execution runtime to Redis.
 
-**Infrastructure utilities** that *happen* to talk to Redis — `calibrate_pot`, `flash_picos`, `PicoManager` itself — are part of the Pico stack and belong in `picohost`. The test is "is this about the Pico stack?" vs. "is this about doing science?".
+**Infrastructure utilities** that *happen* to talk to Redis — `calibrate_pot`, `flash_picos`, `PicoManager` itself — are part of the Pico stack and belong in `picohost`. The test is "is this about the Pico stack?" vs. "is this about doing science?". Calibration utilities in this category (`calibrate_pot`, `calibrate_imu`) may command the motor via `PicoProxy` for calibration purposes — e.g. `calibrate_pot --mode auto` drives its own azimuth sweep instead of relying on an operator at the keyboard. That does mean these scripts coordinate two Picos (mover + sensor), but the coordination exists to calibrate the Pico stack, not to do science, so the exception still applies.
 
 ## CI / Release
 
