@@ -1089,8 +1089,25 @@ class TestRFSwitchEmulator:
     def test_status_fields(self):
         emu = RFSwitchEmulator(settle_ms=0)
         status = emu.get_status()
-        expected_keys = {"sensor_name", "status", "app_id", "sw_state"}
+        expected_keys = {
+            "sensor_name",
+            "status",
+            "app_id",
+            "sw_state",
+            "volt_therm0",
+            "volt_therm1",
+            "volt_therm2",
+        }
         assert set(status.keys()) == expected_keys
+
+    def test_therm_volts_settable(self):
+        """Tests can inject per-channel voltages (mirrors real ADC reads)."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.volt_therm = [0.5, 1.0, 3.0]
+        status = emu.get_status()
+        assert status["volt_therm0"] == 0.5
+        assert status["volt_therm1"] == 1.0
+        assert status["volt_therm2"] == 3.0
 
     def test_boot_starts_in_transition(self):
         """Default settle_ms > 0: boot reports UNKNOWN until settle."""
@@ -1246,6 +1263,8 @@ class TestRFSwitchStatusTypes:
         assert isinstance(status["status"], str)
         assert isinstance(status["app_id"], int)
         assert isinstance(status["sw_state"], int)
+        for i in range(3):
+            assert isinstance(status[f"volt_therm{i}"], float)
 
 
 # ---------------------------------------------------------------------------
