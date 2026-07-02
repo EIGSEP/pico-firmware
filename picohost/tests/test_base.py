@@ -436,7 +436,7 @@ class TestRFSwitchThermistorFanout:
                     "sensor_name": "rfswitch",
                     "sw_state": switch.PATHS["RFANT"],
                     "volt_therm0": 0.0,  # v <= 0 (dead/short) -> None
-                    "volt_therm1": 3.4,  # >= 3.3 ADC ceiling (saturated) -> None
+                    "volt_therm1": 3.4,  # saturated (>= 3.3 ADC) -> None
                     "volt_therm2": 2.5,  # valid -> 25 C
                 },
             )
