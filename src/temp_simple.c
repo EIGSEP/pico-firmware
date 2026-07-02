@@ -7,18 +7,24 @@
 
 static bool adc_ready = false;
 
-static bool adc_input_from_gpio(uint gpio_pin, uint *adc_input) {
+bool adc_channel_init(uint gpio_pin, uint *adc_input) {
     if (gpio_pin < 26 || gpio_pin > 29) {
         return false;
     }
     *adc_input = gpio_pin - 26;
+
+    if (!adc_ready) {
+        adc_init();
+        adc_ready = true;
+    }
+    adc_gpio_init(gpio_pin);
     return true;
 }
 
-static float temp_sensor_read_voltage(const TempSensor *sensor) {
+float adc_read_avg_voltage(uint adc_input) {
     uint32_t total = 0;
 
-    adc_select_input(sensor->adc_input);
+    adc_select_input(adc_input);
     (void)adc_read();  // discard first sample after mux switch
 
     for (uint i = 0; i < THERMISTOR_ADC_SAMPLES; i++) {
@@ -72,17 +78,10 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin) {
     sensor->adc_configured = false;
     sensor->read_error = false;
 
-    if (!adc_input_from_gpio(gpio_pin, &sensor->adc_input)) {
+    if (!adc_channel_init(gpio_pin, &sensor->adc_input)) {
         sensor->read_error = true;
         return;
     }
-
-    if (!adc_ready) {
-        adc_init();
-        adc_ready = true;
-    }
-
-    adc_gpio_init(gpio_pin);
     sensor->adc_configured = true;
 }
 
@@ -92,7 +91,7 @@ bool temp_sensor_read(TempSensor *sensor) {
         return false;
     }
 
-    float voltage = temp_sensor_read_voltage(sensor);
+    float voltage = adc_read_avg_voltage(sensor->adc_input);
     float resistance = 0.0f;
     float temperature = 0.0f;
     if (!temp_sensor_voltage_to_temperature(voltage, &resistance, &temperature)) {
