@@ -5,6 +5,7 @@ Provides common functionality for serial communication with Pico devices.
 
 import json
 import logging
+import math
 import threading
 import time
 from typing import Dict, Any, Optional, Callable
@@ -455,6 +456,45 @@ class PicoRFSwitch(PicoDevice):
     SW_STATE_UNKNOWN = -1
     SW_STATE_UNKNOWN_NAME = "UNKNOWN"
 
+    # --- PCB thermistor conversion (host-side) --------------------------
+    # Three 10k NTC thermistors on the RF switch PCB (ADC0-2). The C
+    # firmware reports the raw ADC-pin voltage (counts * 3.3/4095,
+    # referenced to the 3.3V ADC rail). The divider is powered from 5.0V
+    # with a 10k pullup and the thermistor to GND, so
+    #   v = SUPPLY * R / (PULLUP + R)  =>  R = PULLUP * v / (SUPPLY - v).
+    # Datasheet Beta model R = R0*exp(B*(1/T - 1/T0)), hardcoded like
+    # tempctrl's Steinhart-Hart constants: 10k NTC, R0 = 10k @ 25C,
+    # B = 3380 (25-50C). Nominal ~+/-1-2C; refine with a measured cal
+    # later without changing the stream shape.
+    THERM_SUPPLY_VOLTS = 5.0  # divider pullup rail (NOT the 3.3V ADC ref)
+    THERM_PULLUP_OHMS = 10_000.0
+    THERM_R0_OHMS = 10_000.0  # at 25 C
+    THERM_T0_KELVIN = 298.15
+    THERM_B = 3380.0
+    THERM_NUM = 3
+
+    @classmethod
+    def _therm_temp_c(cls, v):
+        """Convert one thermistor ADC-pin voltage (volts) to degrees C.
+
+        Returns None when ``v`` is None, non-finite, or outside
+        ``(0, THERM_SUPPLY_VOLTS)`` (open / shorted / ADC-clipped
+        channel) — mirrors potmon's None-when-invalid derived field.
+        """
+        if (
+            v is None
+            or not math.isfinite(v)
+            or v <= 0.0
+            or v >= cls.THERM_SUPPLY_VOLTS
+        ):
+            return None
+        r = cls.THERM_PULLUP_OHMS * v / (cls.THERM_SUPPLY_VOLTS - v)
+        inv_t = (
+            1.0 / cls.THERM_T0_KELVIN
+            + math.log(r / cls.THERM_R0_OHMS) / cls.THERM_B
+        )
+        return 1.0 / inv_t - 273.15
+
     # Path name -> EEPROM address. Legacy keys (pre-PCB naming: VNA* =
     # VNA chain, RF* = LNA/receiver chain, ANT = feed) keep their
     # science meaning at the new addresses; AMB/SP* paths are new with
@@ -490,12 +530,15 @@ class PicoRFSwitch(PicoDevice):
             self.redis_handler = self._rfswitch_redis_handler
 
     def _rfswitch_redis_handler(self, data):
-        """Add the human-readable switch name before uploading to Redis.
+        """Add sw_state_name and fan the PCB thermistors into their own stream.
 
-        Firmware reports ``sw_state`` as an EEPROM path address, or
-        :attr:`SW_STATE_UNKNOWN` (-1) while the physical switch is
-        settling after a command. Downstream consumers see a named
-        state (``"VNAO"``, ``"RFANT"``, ...) alongside the raw integer:
+        Firmware reports ``sw_state`` as an EEPROM path address (or
+        :attr:`SW_STATE_UNKNOWN` while settling) plus the three raw PCB
+        thermistor voltages ``volt_therm0/1/2`` on the same status line.
+        The switch-state entry stays categorical (thermistor keys
+        removed); the thermistors are re-published on a separate
+        ``rfswitch_therm`` stream carrying raw volts + host-derived degrees
+        C — the same two-publish fan-out as PicoLidar -> system_current.
 
         * ``SW_STATE_UNKNOWN`` maps to ``"UNKNOWN"`` — switch is mid-transition.
         * A known state integer maps to its path name.
@@ -509,7 +552,16 @@ class PicoRFSwitch(PicoDevice):
             data["sw_state_name"] = self.SW_STATE_UNKNOWN_NAME
         else:
             data["sw_state_name"] = self._name_by_state.get(sw_state)
+        volts = [
+            data.pop(f"volt_therm{i}", None) for i in range(self.THERM_NUM)
+        ]
         self._base_redis_handler(data)
+        if any(v is not None for v in volts):
+            therm = {"sensor_name": "rfswitch_therm", "status": "update"}
+            for i, v in enumerate(volts):
+                therm[f"volt_therm{i}"] = v
+                therm[f"temp_therm{i}"] = self._therm_temp_c(v)
+            self._base_redis_handler(therm)
 
     def switch(self, state: str) -> None:
         """
