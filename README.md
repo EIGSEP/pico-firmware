@@ -215,15 +215,25 @@ ACS724 OUT ──[ R1 = 3.3 kΩ ]──┬── GP26 (ADC0)
 
 ### RF Switch Wiring (APP_RFSWITCH)
 
-The RF switch PCB holds the signal-path lookup table in two AT28BV64B EEPROMs driving three ADGM1004 switches plus the noise-diode bias. The firmware's only job is to present a 5-bit address on the EEPROMs' select lines; the byte burned at that address drives the switch control inputs.
+The RF switch PCB holds the signal-path lookup table in two AT28BV64B EEPROMs driving three ADGM1004 switches plus the noise-diode bias. The firmware's only job is to present a 5-bit address on the EEPROMs' select lines; the byte burned at that address drives the switch control inputs. The PCB also carries three thermistors read by the Pico ADCs.
+
+**This table is the harness spec**: the pin mapping was defined in firmware first (`rfswitch_addr_pins` in `src/rfswitch.c`), and the physical wiring must be built to match it.
 
 | Signal | GPIO | JSON Key |
 |--------|------|----------|
-| EEPROM select A0–A4 (LSB→MSB) | 8–12 | `sw_state` (path address, 0–15) |
+| EEPROM select A0 (LSB) | 8 | `sw_state` bit 0 |
+| EEPROM select A1 | 10 | `sw_state` bit 1 |
+| EEPROM select A2 | 12 | `sw_state` bit 2 |
+| EEPROM select A3 | 14 | `sw_state` bit 3 |
+| EEPROM select A4 (MSB) | 15 | `sw_state` bit 4 |
+| Thermistor 0 | 26 (ADC0) | `volt_therm0` |
+| Thermistor 1 | 27 (ADC1) | `volt_therm1` |
+| Thermistor 2 | 28 (ADC2) | `volt_therm2` |
 
 - Addresses ≥ 16 are unused on the chips and rejected by the firmware. Path name → address mapping lives in `PicoRFSwitch.PATHS` (picohost) and the `rf_path_t` enum in `src/rfswitch.h`.
 - **Table source of truth**: the [eeprom_api](https://github.com/EIGSEP/eeprom_api) repo — `program_paths/program_paths.c` defines and burns the table; the seated chips are the physical ground truth (`test_paths.uf2` read-back verifies them).
 - **Burned-table version**: eeprom_api commit `8681ed8`. Update this hash whenever the chips are reburned and re-verified.
+- **Thermistors**: firmware reports the raw averaged ADC pin voltage (`volt_therm<i>`, volts). The divider resistor value and Steinhart-Hart coefficients are not yet measured; once they are, voltage → temperature conversion happens host-side (no firmware change needed).
 
 ## 5. Install Python Host Library (Optional)
 
