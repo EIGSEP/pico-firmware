@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.12.0](https://github.com/EIGSEP/pico-firmware/compare/v3.11.0...v3.12.0) (2026-07-02)
+
+
+### Features
+
+* **calibrate-pot:** default to azimuth mode ([6ba5603](https://github.com/EIGSEP/pico-firmware/commit/6ba5603add264b1f3931954ca5b4bd124da229b2))
+
 ## [3.11.0](https://github.com/EIGSEP/pico-firmware/compare/v3.10.0...v3.11.0) (2026-07-01)
 
 
