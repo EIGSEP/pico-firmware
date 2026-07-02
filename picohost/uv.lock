@@ -371,7 +371,7 @@ wheels = [
 
 [[package]]
 name = "picohost"
-version = "3.10.0"
+version = "3.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "eigsep-redis" },
