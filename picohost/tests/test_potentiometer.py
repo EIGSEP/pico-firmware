@@ -167,8 +167,37 @@ class TestPotRedisHandler:
             "pot_az_cal_slope",
             "pot_az_cal_intercept",
             "pot_az_angle",
+            "pot_az_near_rail",
         }
         assert expected_added.issubset(before)
+        pot.disconnect()
+
+    def test_near_rail_flag_false_mid_range(self):
+        """The emulator's ~1.5 V baseline is far from both rails."""
+        pot = _make_pot()
+        published = self._capture(pot)
+        assert published["pot_az_near_rail"] is False
+        pot.disconnect()
+
+    def test_near_rail_flag_true_near_either_rail(self):
+        """A wiper within the margin of 0 V or vref publishes True.
+
+        A railed pot reports a steady, plausible voltage, so this flag
+        is the only stream-level tell that the absolute azimuth
+        reference is compromised (e.g. accumulated motor slip during a
+        multi-day scan)."""
+        pot = _make_pot()
+        captured = {}
+        pot._base_redis_handler = lambda d: captured.update(d)
+        for v in (0.05, 3.25):
+            captured.clear()
+            pot._pot_redis_handler({"pot_az_voltage": v})
+            assert captured["pot_az_near_rail"] is True, f"{v} V"
+        # Missing voltage keeps the stable-shape contract: field present,
+        # value None.
+        captured.clear()
+        pot._pot_redis_handler({})
+        assert captured["pot_az_near_rail"] is None
         pot.disconnect()
 
 
