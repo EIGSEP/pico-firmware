@@ -185,7 +185,7 @@ def test_build_parser_accepts_new_modes_and_motor_cfg():
     assert p.parse_args(["--mode", "rezero"]).mode == "rezero"
 
     d = p.parse_args([])
-    assert d.mode == "minmax"  # unchanged default
+    assert d.mode == "azimuth"  # in-box calibration is the common case
     assert d.step_angle_deg == pytest.approx(1.8)
     assert d.gear_teeth == 113
     assert d.microstep == 1

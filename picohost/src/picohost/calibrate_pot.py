@@ -19,10 +19,11 @@ healthy. The script never touches the serial port itself, so it can
 be invoked alongside the manager.
 
 Five modes:
-  --mode minmax   : bench, collect at min and max (2-point fit, default)
+  --mode minmax   : bench, collect at min and max (2-point fit)
   --mode turns    : bench, collect at every full turn (least-squares)
   --mode azimuth  : in-box, operator drives the motor; sweep over the
                     operating turn, slope fit, zero pinned to motor-home
+                    (default)
   --mode rezero   : in-box, re-pin the zero using the stored slope (fast;
                     needs only motor access)
   --mode manual   : recovery, write a hand-supplied --slope/--intercept
@@ -454,14 +455,14 @@ def build_parser():
         "--mode",
         type=str,
         choices=["minmax", "turns", "azimuth", "rezero", "manual"],
-        default="minmax",
+        default="azimuth",
         help=(
             "Calibration mode. Bench: 'minmax' (2-point), 'turns' "
             "(per-turn least-squares). In-box (motor-driven): 'azimuth' "
             "(sweep + zero pinned to motor-home), 'rezero' (re-pin zero "
             "with the stored slope). Recovery: 'manual' (write a "
             "hand-supplied --slope/--intercept directly, no sweep). "
-            "Default: minmax."
+            "Default: azimuth."
         ),
     )
     parser.add_argument(
