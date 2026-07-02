@@ -482,6 +482,17 @@ class TestRFSwitchProtocol:
         emu = RFSwitchEmulator(settle_ms=0)
         assert emu.get_status()["sensor_name"] == "rfswitch"
 
+    def test_thermistor_voltages_in_status(self):
+        """rfswitch_status() reports raw ADC volts for the three PCB
+        thermistors (volt_therm<i> on ADC input i); conversion to
+        temperature is host-side (constants unmeasured)."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        status = emu.get_status()
+        for i in range(3):
+            volts = status[f"volt_therm{i}"]
+            assert isinstance(volts, float)
+            assert 0.0 <= volts <= 3.3
+
     def test_initial_state_zero(self):
         """rfswitch_init() sets sw_state = 0 once settled."""
         emu = RFSwitchEmulator(settle_ms=0)
@@ -489,15 +500,24 @@ class TestRFSwitchProtocol:
 
     def test_set_state(self):
         emu = RFSwitchEmulator(settle_ms=0)
-        emu.server({"sw_state": 42})
-        assert emu.get_status()["sw_state"] == 42
+        emu.server({"sw_state": 10})
+        assert emu.get_status()["sw_state"] == 10
 
-    def test_8bit_bitmask_range(self):
-        """rfswitch_op() iterates bits 0-7."""
+    def test_path_address_range(self):
+        """rfswitch_server() accepts every burned path address (0-15)."""
         emu = RFSwitchEmulator(settle_ms=0)
-        for val in (0, 1, 128, 255):
+        for val in range(RFSwitchEmulator.NUM_PATHS):
             emu.server({"sw_state": val})
             assert emu.get_status()["sw_state"] == val
+
+    def test_unburned_addresses_rejected(self):
+        """Addresses >= NUM_PATHS hold 0xFF on the EEPROMs (all switch
+        inputs closed + noise diode on) and must never reach the bus."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        emu.server({"sw_state": 3})
+        for val in (16, 31, 42, 255):
+            emu.server({"sw_state": val})
+            assert emu.get_status()["sw_state"] == 3
 
     def test_transition_sentinel_during_settle(self):
         """sw_state reports SW_STATE_UNKNOWN (-1) while settling."""

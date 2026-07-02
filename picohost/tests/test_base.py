@@ -8,6 +8,7 @@ DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 import json
 import pytest
 from conftest import wait_for_condition, wait_for_settle
+from picohost.emulators import RFSwitchEmulator
 from picohost.testing import (
     DummyPicoDevice,
     DummyPicoMotor,
@@ -206,7 +207,7 @@ class TestPicoRFSwitch:
         """switch('VNAO') sends the correct sw_state to the emulator."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         cadence = switch.EMULATOR_CADENCE_MS
-        expected_state = switch.rbin(switch.path_str["VNAO"])
+        expected_state = switch.paths["VNAO"]
         switch.switch("VNAO")
         wait_for_condition(
             lambda: switch.last_status.get("sw_state") == expected_state,
@@ -229,20 +230,25 @@ class TestPicoRFSwitch:
             switch.switch("INVALID")
         switch.disconnect()
 
-    def test_rbin_lsb_first(self):
-        """rbin() interprets the first character as LSB."""
-        assert DummyPicoRFSwitch.rbin("10000000") == 1
-        assert DummyPicoRFSwitch.rbin("01000000") == 2
-        assert DummyPicoRFSwitch.rbin("11000000") == 3
-
     def test_paths_dict_values(self):
-        """paths property converts path_str to integer values correctly."""
+        """paths property maps names to the burned EEPROM addresses."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         paths = switch.paths
-        assert paths["VNAO"] == 1  # "10000000" LSB-first = 1
-        assert paths["RFANT"] == 0  # "00000000" = 0
-        assert paths["VNAS"] == 3  # "11000000" LSB-first = 3
+        assert paths["RFANT"] == 0x00  # LNA -> Feed, fail-safe default
+        assert paths["VNAO"] == 0x02  # VNA -> Cal Open
+        assert paths["VNAS"] == 0x03  # VNA -> Cal Short
+        assert paths["RFSP2"] == 0x0F  # last burned address
         switch.disconnect()
+
+    def test_paths_within_firmware_range(self):
+        """All path addresses fit the firmware's accepted range (0-15)."""
+        for addr in DummyPicoRFSwitch.PATHS.values():
+            assert 0 <= addr < RFSwitchEmulator.NUM_PATHS
+
+    def test_paths_addresses_unique(self):
+        """Each path name maps to a distinct EEPROM address."""
+        addrs = list(DummyPicoRFSwitch.PATHS.values())
+        assert len(addrs) == len(set(addrs))
 
 
 class TestRFSwitchRedisHandler:
@@ -250,7 +256,7 @@ class TestRFSwitchRedisHandler:
 
     The published payload (what the base handler receives) must include a
     human-readable name for every known ``sw_state`` integer, and ``None``
-    for integers not in :attr:`PicoRFSwitch.path_str` (mid-switch, manual
+    for integers not in :attr:`PicoRFSwitch.PATHS` (mid-switch, manual
     override, firmware bug). The published shape stays stable either way,
     and every added field must satisfy the scalar-only contract documented
     on :func:`picohost.base.redis_handler`.
@@ -267,7 +273,7 @@ class TestRFSwitchRedisHandler:
         return captured
 
     def test_known_state_maps_to_name(self):
-        """Every entry in path_str round-trips via sw_state_name."""
+        """Every entry in PATHS round-trips via sw_state_name."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         try:
             for name, sw_state in switch.paths.items():
@@ -281,7 +287,7 @@ class TestRFSwitchRedisHandler:
             switch.disconnect()
 
     def test_unknown_state_publishes_none_name(self):
-        """Integers not in path_str get sw_state_name = None."""
+        """Integers not in PATHS get sw_state_name = None."""
         switch = DummyPicoRFSwitch("/dev/dummy")
         try:
             unknown = max(switch.paths.values()) + 1

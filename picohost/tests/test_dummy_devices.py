@@ -271,20 +271,13 @@ class TestDummyPicoMotor:
 class TestDummyPicoRFSwitch:
     """Test DummyPicoRFSwitch with the RFSwitchEmulator."""
 
-    def test_rbin_converts_lsb_first(self):
-        """rbin() interprets the first character as the LSB."""
-        assert DummyPicoRFSwitch.rbin("10000000") == 1
-        assert DummyPicoRFSwitch.rbin("01000000") == 2
-        assert DummyPicoRFSwitch.rbin("11000000") == 3
-        assert DummyPicoRFSwitch.rbin("00100000") == 4
-
     def test_paths_property_returns_integer_values(self):
-        """paths converts path_str binary strings to integer switch states."""
+        """paths maps path names to burned EEPROM addresses."""
         switch = DummyPicoRFSwitch(port="/dev/ttyUSB0")
         paths = switch.paths
         assert isinstance(paths, dict)
-        assert paths["VNAO"] == 1  # "10000000" reversed = 1
-        assert paths["RFANT"] == 0  # "00000000" = 0
+        assert paths["VNAO"] == 0x02  # VNA -> Cal Open
+        assert paths["RFANT"] == 0x00  # LNA -> Feed, fail-safe default
         switch.disconnect()
 
     def test_switch_valid_state_updates_emulator(self):
