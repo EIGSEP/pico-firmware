@@ -457,16 +457,28 @@ class PicoRFSwitch(PicoDevice):
     SW_STATE_UNKNOWN_NAME = "UNKNOWN"
 
     # --- PCB thermistor conversion (host-side) --------------------------
-    # Three 10k NTC thermistors on the RF switch PCB (ADC0-2). The C
-    # firmware reports the raw ADC-pin voltage (counts * 3.3/4095,
-    # referenced to the 3.3V ADC rail). The divider is powered from 5.0V
-    # with a 10k pullup and the thermistor to GND, so
-    #   v = SUPPLY * R / (PULLUP + R)  =>  R = PULLUP * v / (SUPPLY - v).
+    # Three 10k NTC thermistors on the RF switch PCB (ADC0-2). Wiring:
+    #   5.0V --[10k pullup]-- ADC pin --[NTC]-- GND
+    # so v_pin = SUPPLY * R / (PULLUP + R)  =>  R = PULLUP * v / (SUPPLY - v).
+    # The external circuit runs on 5.0V only (no 3.3V rail in the harness).
+    # Two DIFFERENT voltages are in play, do not conflate them:
+    #   * THERM_SUPPLY_VOLTS (5.0) is the divider pullup rail.
+    #   * THERM_ADC_MAX_VOLTS (3.3) is the RP2040's internal ADC full-scale
+    #     reference: the C firmware reports v as counts * 3.3/4095, so the
+    #     reported voltage is capped at 3.3V regardless of the 5V divider.
+    # Because the divider is a 5V pullup but the ADC only spans 0-3.3V, the
+    # pin exceeds the ADC ceiling below ~8.5C (R ~ 19.4k): readings there
+    # SATURATE (clip at 3.3V, true voltage unknown, up to 5V) and are
+    # reported as None -- a clipped value is not a trustworthy temperature.
+    # (Hardware note: a 5V pullup on a non-5V-tolerant RP2040 ADC pin
+    # over-drives the input below ~8.5C, and to 5V if a thermistor opens;
+    # a clamp or a 3.3V pullup is the fix. Out of scope for this conversion.)
     # Datasheet Beta model R = R0*exp(B*(1/T - 1/T0)), hardcoded like
     # tempctrl's Steinhart-Hart constants: 10k NTC, R0 = 10k @ 25C,
     # B = 3380 (25-50C). Nominal ~+/-1-2C; refine with a measured cal
     # later without changing the stream shape.
-    THERM_SUPPLY_VOLTS = 5.0  # divider pullup rail (NOT the 3.3V ADC ref)
+    THERM_SUPPLY_VOLTS = 5.0  # divider pullup rail (the 5V external circuit)
+    THERM_ADC_MAX_VOLTS = 3.3  # RP2040 ADC full-scale ref; >= this saturates
     THERM_PULLUP_OHMS = 10_000.0
     THERM_R0_OHMS = 10_000.0  # at 25 C
     THERM_T0_KELVIN = 298.15
@@ -477,15 +489,17 @@ class PicoRFSwitch(PicoDevice):
     def _therm_temp_c(cls, v):
         """Convert one thermistor ADC-pin voltage (volts) to degrees C.
 
-        Returns None when ``v`` is None, non-finite, or outside
-        ``(0, THERM_SUPPLY_VOLTS)`` (open / shorted / ADC-clipped
-        channel) — mirrors potmon's None-when-invalid derived field.
+        Returns None when ``v`` is None, non-finite, ``<= 0`` (dead /
+        shorted channel), or ``>= THERM_ADC_MAX_VOLTS`` (ADC saturated:
+        the 5V divider drives the pin above the 3.3V ADC reference below
+        ~8.5C, so the true voltage is unknown and the reading untrustworthy)
+        -- mirrors potmon's None-when-invalid derived field.
         """
         if (
             v is None
             or not math.isfinite(v)
             or v <= 0.0
-            or v >= cls.THERM_SUPPLY_VOLTS
+            or v >= cls.THERM_ADC_MAX_VOLTS
         ):
             return None
         r = cls.THERM_PULLUP_OHMS * v / (cls.THERM_SUPPLY_VOLTS - v)

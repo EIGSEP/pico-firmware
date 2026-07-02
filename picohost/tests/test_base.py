@@ -435,8 +435,8 @@ class TestRFSwitchThermistorFanout:
                 {
                     "sensor_name": "rfswitch",
                     "sw_state": switch.PATHS["RFANT"],
-                    "volt_therm0": 0.0,  # v <= 0  -> None
-                    "volt_therm1": 5.0,  # v >= SUPPLY -> None
+                    "volt_therm0": 0.0,  # v <= 0 (dead/short) -> None
+                    "volt_therm1": 3.4,  # >= 3.3 ADC ceiling (saturated) -> None
                     "volt_therm2": 2.5,  # valid -> 25 C
                 },
             )
@@ -461,11 +461,16 @@ class TestRFSwitchThermistorFanout:
             switch.disconnect()
 
     def test_therm_temp_c_known_points(self):
-        # 2.5 V -> R=10k -> exactly 25 C; monotonic: lower V (hotter) -> higher C
+        # 2.5 V -> R=10k -> exactly 25 C; lower V (hotter) -> higher C.
         assert PicoRFSwitch._therm_temp_c(2.5) == pytest.approx(25.0, abs=0.05)
         assert PicoRFSwitch._therm_temp_c(1.169) == pytest.approx(
             60.0, abs=1.0
         )
+        # Just below the 3.3 V ADC ceiling is still a valid ~8.7 C reading;
+        # at/above it the ADC has saturated (true voltage unknown) -> None.
+        assert PicoRFSwitch._therm_temp_c(3.29) == pytest.approx(8.7, abs=0.3)
+        assert PicoRFSwitch._therm_temp_c(3.3) is None
+        assert PicoRFSwitch._therm_temp_c(3.4) is None
         assert PicoRFSwitch._therm_temp_c(0.0) is None
         assert PicoRFSwitch._therm_temp_c(5.0) is None
         assert PicoRFSwitch._therm_temp_c(None) is None
