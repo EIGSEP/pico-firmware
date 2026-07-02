@@ -757,9 +757,9 @@ def main():
         sys.exit(1)
 
     # Auto mode additionally commands the motor itself, so it hard-requires
-    # the motor's heartbeat too (azimuth mode only reads the motor stream,
-    # which the pot-availability check above doesn't cover either, but that
-    # mode is operator-driven so a stalled read just blocks on input()).
+    # the motor's heartbeat too. (Azimuth mode also reads the motor stream,
+    # and will raise within SAMPLE_TIMEOUT_S if the motor isn't publishing
+    # once the operator presses Enter.)
     motor_proxy = None
     if args.mode == "auto":
         motor_proxy = PicoProxy(MOTOR_NAME, transport, source="calibrate-pot")
