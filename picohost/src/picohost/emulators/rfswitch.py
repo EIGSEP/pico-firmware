@@ -25,12 +25,16 @@ class RFSwitchEmulator(PicoEmulator):
     settle, no boot transition). Tests that do not care about the
     transition path use this to keep behavior as-if settled.
 
-    Status also carries volt_therm0/1/2, the raw averaged ADC voltages of the three PCB thermistors (conversion to temperature happens host-side).
+    Status also carries volt_therm0/1/2, the raw averaged ADC voltages
+    of the three PCB thermistors (conversion to temperature happens
+    host-side).
     """
 
     SW_STATE_UNKNOWN = -1
     # Mirrors RFSWITCH_NUM_PATHS in src/rfswitch.h.
     NUM_PATHS = 16
+    # Mirrors RFSWITCH_NUM_THERM in src/rfswitch.h.
+    NUM_THERM = 3
     DEFAULT_SETTLE_MS = 20
     # Mid-range placeholder for the three PCB thermistor channels
     # (ADC0-2). Firmware reports raw averaged pin volts; conversion to
@@ -45,7 +49,7 @@ class RFSwitchEmulator(PicoEmulator):
         super().__init__(app_id=app_id, **kwargs)
 
     def init(self):
-        self.volt_therm = [self.DEFAULT_THERM_VOLTS] * 3
+        self.volt_therm = [self.DEFAULT_THERM_VOLTS] * self.NUM_THERM
         self.commanded_state = 0
         self.reported_state = 0
         if self.settle_ms > 0:
