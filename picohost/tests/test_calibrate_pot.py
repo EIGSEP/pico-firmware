@@ -147,26 +147,30 @@ def test_collect_azimuth_warns_when_not_homed(monkeypatch, capsys):
 def test_collect_auto_commands_expected_targets_and_reads_actual_az(
     monkeypatch,
 ):
-    # n_stops=2 -> 180 deg spacing: commanded targets 180, 360, then home (0).
-    # Actual settled reads are offset from the commanded target (within the
-    # settle tolerance) to prove angles come from the stream, not the target.
+    # The sweep must cover the production operating window (-180..+180
+    # deg around home), not 0..360: n_stops=2 -> 180 deg spacing gives
+    # commanded targets -180, 0, +180, then home (0). Actual settled
+    # reads are offset from the commanded target (within the settle
+    # tolerance) to prove angles come from the stream, not the target.
     monkeypatch.setattr(
         calibrate_pot,
         "read_motor_az_deg",
         _seq(
             [
                 1.0,  # home read
-                181.0,
-                181.0,  # settle at stop 1 (target 180)
-                361.0,
-                361.0,  # settle at stop 2 (target 360)
+                -179.0,
+                -179.0,  # settle at stop 1 (target -180)
                 0.5,
-                0.5,  # settle back at home (target 0)
+                0.5,  # settle at stop 2 (target 0)
+                179.5,
+                179.5,  # settle at stop 3 (target +180)
+                0.2,
+                0.2,  # settle back at home (target 0)
             ]
         ),
     )
     monkeypatch.setattr(
-        calibrate_pot, "collect_samples", _seq([1.0, 1.5, 2.0])
+        calibrate_pot, "collect_samples", _seq([1.0, 1.4, 1.5, 1.6])
     )
 
     proxy = FakePicoProxy()
@@ -175,13 +179,18 @@ def test_collect_auto_commands_expected_targets_and_reads_actual_az(
     )
 
     assert v0 == pytest.approx(1.0)
-    assert voltages == [1.0, 1.5, 2.0]
-    # Recorded angles are the actual stream reads (181, 361), not the
-    # commanded targets (180, 360).
-    assert angles == [0.0, 181.0, 361.0]
+    assert voltages == [1.0, 1.4, 1.5, 1.6]
+    # Recorded angles are the actual stream reads (-179, 0.5, 179.5),
+    # not the commanded targets (-180, 0, 180).
+    assert angles == [0.0, -179.0, 0.5, 179.5]
 
     move_calls = [c for c in proxy.calls if c[0] == "az_target_deg"]
-    assert [c[1]["target_deg"] for c in move_calls] == [180.0, 360.0, 0.0]
+    assert [c[1]["target_deg"] for c in move_calls] == [
+        -180.0,
+        0.0,
+        180.0,
+        0.0,
+    ]
     # Moves must be non-blocking -- the manager's command thread cannot
     # afford to wait on a multi-minute move.
     for _action, kwargs in move_calls:
@@ -195,12 +204,15 @@ def test_collect_auto_commands_expected_targets_and_reads_actual_az(
 
 
 def test_collect_auto_warns_when_not_homed(monkeypatch, capsys):
+    # n_stops=1 -> targets -180, +180, then home (0).
     monkeypatch.setattr(
         calibrate_pot,
         "read_motor_az_deg",
-        _seq([10.0, 360.5, 360.5, 0.2, 0.2]),
+        _seq([10.0, -180.2, -180.2, 179.8, 179.8, 0.2, 0.2]),
     )
-    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0, 2.0]))
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([1.5, 1.0, 2.0])
+    )
 
     proxy = FakePicoProxy()
     calibrate_pot.collect_auto(
@@ -273,6 +285,133 @@ def test_collect_auto_fails_fast_when_motor_drops_mid_sweep(monkeypatch):
     # No move was dispatched; cleanup still ran.
     assert "az_target_deg" not in [c[0] for c in proxy.calls]
     assert proxy.calls[-1][0] == "release"
+
+
+# ---------------------------------------------------------------------------
+# rail guards: near the ADC rails the wiper clips and the pot silently
+# stops being an absolute azimuth reference, so in-box sampling and the
+# auto sweep must abort rather than record clipped voltages.
+# ---------------------------------------------------------------------------
+
+
+def test_check_off_rails_bounds():
+    # Mid-range passes silently.
+    calibrate_pot._check_off_rails(1.65, where="test")
+    # Within the guard margin of either rail raises.
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._check_off_rails(0.05, where="test")
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._check_off_rails(3.25, where="test")
+
+
+def test_sample_stop_aborts_on_railed_voltage(monkeypatch):
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([0.05]))
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._sample_stop(DummyTransport(), 10, 45.0)
+
+
+def test_collect_auto_halts_on_railed_sample(monkeypatch):
+    # Home samples fine; the first sweep stop reads a clipped voltage.
+    # The sweep must halt the motor and release the claim, not keep
+    # collecting a fit from clipped data.
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq([0.0, -179.5, -179.5]),
+    )
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([1.0, 3.28]))
+
+    proxy = FakePicoProxy()
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=2
+        )
+
+    assert [c[0] for c in proxy.calls[-2:]] == ["halt", "release"]
+
+
+def test_collect_auto_preflight_aborts_before_moving_when_home_near_rail(
+    monkeypatch,
+):
+    # v0=0.4 V: at the field-measured slope (~320 deg/V) the -180 deg
+    # half of the sweep needs ~0.56 V of travel, which would cross the
+    # 0 V rail. The preflight must abort before any move is commanded.
+    monkeypatch.setattr(calibrate_pot, "read_motor_az_deg", _seq([0.0]))
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([0.4]))
+
+    proxy = FakePicoProxy()
+    with pytest.raises(RuntimeError, match="headroom"):
+        calibrate_pot.collect_auto(
+            DummyTransport(), proxy, n_samples=10, n_stops=8
+        )
+
+    assert "az_target_deg" not in [c[0] for c in proxy.calls]
+    assert proxy.calls[-1][0] == "release"
+
+
+def test_collect_auto_preflight_uses_stored_slope(monkeypatch):
+    # A stored steep slope (1000 deg/V -> 0.18 V per 180 deg) makes the
+    # same 0.4 V home viable; the empirical fallback alone would abort.
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [1000.0, -400.0]})
+    monkeypatch.setattr(
+        calibrate_pot,
+        "read_motor_az_deg",
+        _seq([0.0, -179.8, -179.8, 179.9, 179.9, 0.1, 0.1]),
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "collect_samples", _seq([0.4, 0.3, 0.55])
+    )
+
+    proxy = FakePicoProxy()
+    voltages, angles, v0 = calibrate_pot.collect_auto(
+        t, proxy, n_samples=10, n_stops=1
+    )
+
+    assert v0 == pytest.approx(0.4)
+    move_calls = [c for c in proxy.calls if c[0] == "az_target_deg"]
+    assert [c[1]["target_deg"] for c in move_calls] == [-180.0, 180.0, 0.0]
+
+
+def test_wait_for_settle_aborts_when_pot_rails_mid_move(monkeypatch):
+    # The motor is settling happily on target, but the pot hit a rail
+    # mid-move: the settle poll must abort (upstream halts the motor)
+    # rather than report a clean arrival.
+    t = DummyTransport()
+    t.r.xadd(
+        calibrate_pot.POTMON_STREAM,
+        {"value": json.dumps({"pot_az_voltage": 0.05})},
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", lambda *a, **k: 180.0
+    )
+
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot._wait_for_settle(t, 180.0, timeout_s=1.0)
+
+
+def test_wait_for_settle_passes_with_healthy_pot(monkeypatch):
+    t = DummyTransport()
+    t.r.xadd(
+        calibrate_pot.POTMON_STREAM,
+        {"value": json.dumps({"pot_az_voltage": 1.5})},
+    )
+    monkeypatch.setattr(
+        calibrate_pot, "read_motor_az_deg", lambda *a, **k: 180.0
+    )
+
+    az = calibrate_pot._wait_for_settle(t, 180.0, timeout_s=1.0)
+    assert az == pytest.approx(180.0)
+
+
+def test_rezero_aborts_on_railed_home(monkeypatch):
+    # Re-pinning zero to a clipped voltage would poison the intercept.
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [320.0, -50.0]})
+    monkeypatch.setattr(calibrate_pot, "collect_samples", _seq([3.25]))
+    monkeypatch.setattr("builtins.input", _seq([""]))
+    with pytest.raises(RuntimeError, match="rail"):
+        calibrate_pot.rezero(t, n_samples=10)
 
 
 def test_rezero_reuses_stored_slope(monkeypatch):
@@ -844,23 +983,73 @@ def test_expected_slope_mag_installed_pot():
 
 
 def test_slope_out_of_range_in_window():
-    # Expected ~409 deg/V; factor 1.5 -> in-range ~273..614 deg/V.
-    assert calibrate_pot.slope_out_of_range(409.0, 3.75) is False
-    assert calibrate_pot.slope_out_of_range(300.0, 3.75) is False
-    assert calibrate_pot.slope_out_of_range(600.0, 3.75) is False
+    # Expected 320 deg/V (field-measured); factor 1.5 -> ~213..480 deg/V.
+    assert calibrate_pot.slope_out_of_range(320.0, 320.0) is False
+    assert calibrate_pot.slope_out_of_range(409.0, 320.0) is False
+    assert calibrate_pot.slope_out_of_range(250.0, 320.0) is False
     # Sign is irrelevant — magnitude only.
-    assert calibrate_pot.slope_out_of_range(-409.0, 3.75) is False
+    assert calibrate_pot.slope_out_of_range(-320.0, 320.0) is False
 
 
 def test_slope_out_of_range_flags_gross_errors():
     # An order-of-magnitude typo in either direction is flagged.
-    assert calibrate_pot.slope_out_of_range(40.9, 3.75) is True
-    assert calibrate_pot.slope_out_of_range(4090.0, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(32.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(3200.0, 320.0) is True
     # Just outside the 1.5x window on each side.
-    assert calibrate_pot.slope_out_of_range(200.0, 3.75) is True
-    assert calibrate_pot.slope_out_of_range(700.0, 3.75) is True
-    # A zero slope is never sane.
-    assert calibrate_pot.slope_out_of_range(0.0, 3.75) is True
+    assert calibrate_pot.slope_out_of_range(200.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(500.0, 320.0) is True
+    # A zero slope is never sane, nor is a non-positive expectation.
+    assert calibrate_pot.slope_out_of_range(0.0, 320.0) is True
+    assert calibrate_pot.slope_out_of_range(320.0, 0.0) is True
+
+
+def test_main_manual_sanity_centered_on_empirical_slope(monkeypatch):
+    """In-box modes check the slope against the field-measured ~320 deg/V.
+
+    500 deg/V sat comfortably inside the old physically-derived window
+    (409 * 1.5 = 614) but is >1.5x off the measured slope, so it must
+    escalate the save — a bare 'y' discards."""
+    dummy_transport = DummyTransport()
+    fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", _manual_argv(500.0, -400.0))
+
+    calibrate_pot.main()
+
+    assert PotCalStore(dummy_transport).get() is None
+    assert fake_proxy.calls == []
+
+
+def test_main_bench_mode_keeps_physical_expectation(monkeypatch, capsys):
+    """Bench modes keep the physical turns*360/vref expectation.
+
+    A 500 deg/V fit is in range for a 3.75-turn pot on the bench (where
+    the wiper genuinely spans the full range) even though it would fail
+    the in-box empirical window."""
+    dummy_transport = DummyTransport()
+    _fake_proxy, proxy_factory = _make_fake_proxy()
+    monkeypatch.setattr(
+        calibrate_pot, "Transport", lambda *a, **k: dummy_transport
+    )
+    monkeypatch.setattr(calibrate_pot, "PicoProxy", proxy_factory)
+    # minmax fit: 0..1350 deg over 0.3..3.0 V -> slope = 1350/2.7 = 500
+    monkeypatch.setattr(
+        calibrate_pot,
+        "collect_minmax",
+        lambda *a, **k: ([0.3, 3.0], [0.0, 1350.0]),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+    monkeypatch.setattr(sys, "argv", ["calibrate-pot", "--mode", "minmax"])
+
+    calibrate_pot.main()
+
+    out = capsys.readouterr().out
+    assert "off the expected" not in out.lower()
+    assert PotCalStore(dummy_transport).get() is not None
 
 
 # ---------------------------------------------------------------------------

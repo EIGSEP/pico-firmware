@@ -25,9 +25,10 @@ Six modes:
                     operating turn, slope fit, zero pinned to motor-home
                     (default)
   --mode auto     : in-box, calibrate-pot drives the motor itself through
-                    the same sweep as azimuth (moves are non-blocking;
-                    settle is detected by polling stream:motor) -- no
-                    operator needed at each stop, just to home first
+                    a -180..+180 deg sweep -- the production operating
+                    window (moves are non-blocking; settle is detected by
+                    polling stream:motor) -- no operator needed at each
+                    stop, just to home first
   --mode rezero   : in-box, re-pin the zero using the stored slope (fast;
                     needs only motor access)
   --mode manual   : recovery, write a hand-supplied --slope/--intercept
@@ -36,9 +37,17 @@ Six modes:
                     are read off a recent correlator .h5. Writes Redis even
                     when the pot is down (loads on the next manager start).
 
-Every mode runs a physical slope sanity check: a 3.75-turn pot over the
-~3.3 V ADC range has a slope of ~409 deg/V, so a slope off by more than
-1.5x prints a WARNING and requires a typed 'yes' to save.
+Rail guards: near the ADC rails (0 / 3.3 V) the wiper clips and the pot
+silently stops tracking azimuth, so every in-box sample is rejected
+within RAIL_GUARD_V of a rail, --mode auto refuses to start a sweep
+whose predicted window would rail (slope from the stored cal, falling
+back to the field-measured ~320 deg/V), and the settle poll aborts --
+halting the motor -- if the pot rails mid-move.
+
+Every mode runs a slope sanity check against an expected magnitude
+(bench modes: the physical turns*360/Vref, ~409 deg/V for the installed
+3.75-turn pot; in-box modes: the field-measured ~320 deg/V). A slope off
+by more than 1.5x prints a WARNING and requires a typed 'yes' to save.
 
 Usage:
     calibrate-pot --mode azimuth
@@ -59,6 +68,7 @@ from datetime import datetime, timezone
 import numpy as np
 from eigsep_redis import Transport
 
+from .base import POT_VREF
 from .buses import PotCalStore
 from .motor import GEAR_TEETH, MICROSTEP, STEP_ANGLE_DEG, steps_to_deg
 from .proxy import PicoProxy
@@ -74,8 +84,28 @@ MOTOR_STREAM = f"stream:{MOTOR_NAME}"
 # short enough to fail fast when the manager isn't actually publishing.
 SAMPLE_TIMEOUT_S = 5.0
 # Pot wiper spans ~0..Vref, so the ADC rails approximate the pot's
-# electrical ends. Mirrors firmware POTMON_VREF (src/potmon.h).
-ADC_VREF = 3.3
+# electrical ends. Single-sourced from picohost.base (which mirrors
+# firmware POTMON_VREF, src/potmon.h).
+ADC_VREF = POT_VREF
+# Field-measured slope of the installed az drive (~320 deg/V as of
+# 2026-07), noticeably below the physical turns*360/Vref ~409 deg/V a
+# full-span 3.75-turn pot would give. Used as the slope expectation for
+# in-box modes and as the preflight fallback when no calibration is
+# stored — the physical value would under-predict the voltage a sweep
+# consumes and could green-light a sweep that rails. Bench modes keep
+# the physical derivation (the bench sweep spans the pot's full travel
+# by construction).
+EMPIRICAL_SLOPE_DEG_PER_V = 320.0
+# Hard abort margin to the ADC rails: an in-box sampled (or mid-move
+# observed) pot voltage this close to 0/Vref is treated as clipped —
+# it still looks plausible but no longer tracks azimuth. Narrower than
+# picohost.base.POT_NEAR_RAIL_V (the ops early-warning stream flag).
+RAIL_GUARD_V = 0.1
+# --mode auto sweeps the production operating window: ±180 deg around
+# motor-home. Keeping the swept window equal to the operating window
+# means the post-fit headroom report certifies exactly the range a
+# production scan will visit.
+SWEEP_HALF_RANGE_DEG = 180.0
 # Warn if the operating window leaves less than this much travel (in az
 # degrees) before a rail/electrical end (~0.2 turn).
 HEADROOM_WARN_DEG = 72.0
@@ -104,13 +134,14 @@ SETTLE_TIMEOUT_S = 180.0
 # azimuth by more than this (deg) anywhere in the swept window, relative
 # to the calibration already stored in Redis.
 WILDLY_DIFFERENT_WARN_DEG = 30.0
-# Physical sanity bound on the slope, independent of the stored cal. A
-# full-travel `turns`-turn pot whose wiper spans ADC_VREF has a slope of
-# turns*360/Vref deg/V (~409 for the installed 3.75-turn pot over 3.3 V).
-# Warn (and escalate the save to a typed 'yes') when the computed or
-# operator-supplied |slope| is off by more than this factor — catches
-# order-of-magnitude typos (manual mode) and gross sweep/turn-count errors.
-# 1.5x -> an in-range window of ~273..614 deg/V for the installed pot.
+# Sanity bound on the slope, independent of the stored cal. Warn (and
+# escalate the save to a typed 'yes') when the computed or
+# operator-supplied |slope| is off from the expected magnitude by more
+# than this factor — catches order-of-magnitude typos (manual mode) and
+# gross sweep/turn-count errors. The expectation is mode-dependent:
+# bench modes use the physical turns*360/Vref (~409 deg/V for the
+# installed 3.75-turn pot), in-box modes use the field-measured
+# EMPIRICAL_SLOPE_DEG_PER_V (~320 deg/V, window ~213..480 at 1.5x).
 SLOPE_SANITY_FACTOR = 1.5
 
 
@@ -175,6 +206,40 @@ def read_motor_az_deg(transport, start_id="$"):
     """Current motor az in degrees (steps converted via MOTOR_GEOMETRY)."""
     steps = read_motor_az_steps(transport, start_id=start_id)
     return steps_to_deg(steps, **MOTOR_GEOMETRY)
+
+
+def _latest_pot_voltage(transport):
+    """Most recent pot_az voltage on ``stream:potmon``, or None if empty.
+
+    Non-blocking (unlike :func:`collect_samples`): used by the mid-move
+    rail monitor in :func:`_wait_for_settle`, where a momentarily quiet
+    pot stream must not stall settle detection — pot liveness is already
+    enforced at every stop by :func:`collect_samples`.
+    """
+    entries = transport.r.xrevrange(POTMON_STREAM, count=1)
+    if not entries:
+        return None
+    _msg_id, fields = entries[0]
+    return json.loads(fields[b"value"]).get("pot_az_voltage")
+
+
+def _check_off_rails(v, where):
+    """Raise if ``v`` is within RAIL_GUARD_V of an ADC rail.
+
+    Near a rail the wiper is clipping (or about to): the voltage still
+    looks plausible but no longer tracks azimuth, so a calibration fit
+    that ingests it is silently biased. Shared by the in-box sampling
+    helpers, :func:`rezero`, and the mid-move monitor in
+    :func:`_wait_for_settle`.
+    """
+    if v <= RAIL_GUARD_V or v >= ADC_VREF - RAIL_GUARD_V:
+        raise RuntimeError(
+            f"pot_az voltage {v:.3f} V is within {RAIL_GUARD_V:.2f} V of "
+            f"an ADC rail (0..{ADC_VREF:.1f} V) {where}. The pot is at "
+            "(or past) an electrical end; aborting so clipped readings "
+            "cannot corrupt the calibration. Re-home the drive nearer "
+            "the pot's mid-travel and retry."
+        )
 
 
 def compute_linear_fit(voltages, angles):
@@ -291,13 +356,15 @@ def expected_slope_mag(turns, vref=ADC_VREF):
     return turns * 360.0 / vref
 
 
-def slope_out_of_range(m, turns, vref=ADC_VREF, factor=SLOPE_SANITY_FACTOR):
-    """True when ``|m|`` diverges from the expected slope by more than ``factor``.
+def slope_out_of_range(m, expected, factor=SLOPE_SANITY_FACTOR):
+    """True when ``|m|`` diverges from ``expected`` by more than ``factor``.
 
+    ``expected`` is the anticipated slope magnitude in deg/V — the
+    physical :func:`expected_slope_mag` for bench modes, the
+    field-measured :data:`EMPIRICAL_SLOPE_DEG_PER_V` for in-box modes.
     Magnitude-only (slope sign is a wiring-direction convention). A zero
-    slope, or a non-positive expected slope, is always out of range.
+    slope, or a non-positive expectation, is always out of range.
     """
-    expected = expected_slope_mag(turns, vref)
     if expected <= 0 or m == 0:
         return True
     ratio = max(abs(m) / expected, expected / abs(m))
@@ -388,6 +455,7 @@ def _sample_home(transport, n_samples):
     _warn_if_not_homed(az_home)
     print("  averaging samples...")
     v0 = collect_samples(transport, n_samples)
+    _check_off_rails(v0, where="at motor-home")
     print(
         f"  home: az=0.00 deg (motor reads {az_home:.2f}), pot_az={v0:.4f} V"
     )
@@ -395,9 +463,15 @@ def _sample_home(transport, n_samples):
 
 
 def _sample_stop(transport, n_samples, az, label=""):
-    """Average the pot voltage at one sweep stop and print the result."""
+    """Average the pot voltage at one sweep stop and print the result.
+
+    Raises RuntimeError (via :func:`_check_off_rails`) when the sampled
+    voltage sits within the rail guard margin — a clipped sample would
+    otherwise bias the fit with no error.
+    """
     print("  averaging samples...")
     v = collect_samples(transport, n_samples)
+    _check_off_rails(v, where=f"at az {az:.1f} deg")
     print(f"  az={az:8.2f} deg{label}: pot_az={v:.4f} V")
     return v
 
@@ -453,11 +527,21 @@ def _wait_for_settle(
     in :func:`main`): closer than that, the stationary pre-move position
     already satisfies both conditions. Returns the settled az. Raises
     ``TimeoutError`` if the motor hasn't settled within ``timeout_s``.
+
+    Each poll also checks the latest pot voltage against the rail guard
+    (checked before the settle test, so a railed pot can never be
+    reported as a clean arrival): a rail crossing *during* a move means
+    the sweep has left the pot's trustworthy range, and the resulting
+    RuntimeError makes :func:`collect_auto` halt the motor rather than
+    let it keep driving toward the electrical end.
     """
     deadline = time.monotonic() + timeout_s
     prev_az = None
     while time.monotonic() < deadline:
         az = read_motor_az_deg(transport, start_id="$")
+        v = _latest_pot_voltage(transport)
+        if v is not None:
+            _check_off_rails(v, where=f"mid-move (motor at {az:.1f} deg)")
         if (
             prev_az is not None
             and abs(az - target_deg) <= tol_deg
@@ -487,6 +571,47 @@ def _motor_command(motor_proxy, action, **kwargs):
     return motor_proxy.send_command(action, **kwargs)
 
 
+def _preflight_sweep_headroom(transport, v0):
+    """Abort before the first move if the ±180 deg sweep would rail.
+
+    Predicts the voltage at the sweep endpoints from the stored
+    calibration slope (magnitude only — the sweep is symmetric about
+    home, so the wiring-direction sign is irrelevant), falling back to
+    the field-measured :data:`EMPIRICAL_SLOPE_DEG_PER_V` when no stored
+    slope is usable. Requires :data:`RAIL_GUARD_V` of margin to both
+    rails at the predicted extremes, raising RuntimeError before any
+    move is commanded otherwise — the post-sweep headroom report only
+    tells the operator *after* the motor has already been driven
+    through the rail region.
+    """
+    stored = PotCalStore(transport).get()
+    slope = None
+    source = "stored calibration"
+    if stored and "pot_az" in stored:
+        try:
+            slope = abs(float(stored["pot_az"][0]))
+        except (TypeError, ValueError, IndexError):
+            slope = None
+    if not slope:
+        slope = EMPIRICAL_SLOPE_DEG_PER_V
+        source = "field-measured default"
+    swing_v = SWEEP_HALF_RANGE_DEG / slope
+    v_lo, v_hi = v0 - swing_v, v0 + swing_v
+    print(
+        f"  preflight: predicted sweep window {v_lo:.3f}..{v_hi:.3f} V "
+        f"(slope ~{slope:.0f} deg/V from {source})"
+    )
+    if v_lo < RAIL_GUARD_V or v_hi > ADC_VREF - RAIL_GUARD_V:
+        raise RuntimeError(
+            f"insufficient headroom for a ±{SWEEP_HALF_RANGE_DEG:.0f} deg "
+            f"sweep: home at {v0:.3f} V predicts a "
+            f"{v_lo:.3f}..{v_hi:.3f} V window, leaving less than "
+            f"{RAIL_GUARD_V:.2f} V to an ADC rail (0..{ADC_VREF:.1f} V). "
+            "Re-position the drive so home sits nearer the pot's "
+            "mid-travel, re-home, and retry."
+        )
+
+
 def collect_auto(
     transport,
     motor_proxy,
@@ -498,11 +623,18 @@ def collect_auto(
 
     Same sweep as :func:`collect_azimuth`, but instead of an operator
     driving the motor and pressing Enter at each stop, this commands the
-    motor through ``n_stops`` stops evenly spaced over one 360 deg
-    operating turn (default 8 -> 45 deg spacing). The operator is
-    assumed to have homed the motor beforehand (az~=0 at the start of
-    this call); the first sample (at the assumed-home position) defines
-    az=0 and v0, exactly as in :func:`collect_azimuth`.
+    motor through ``n_stops + 1`` stops evenly spaced over the ±180 deg
+    production operating window (default 8 -> 45 deg spacing, stops at
+    -180, -135, ..., +180), so the swept window — and therefore the
+    post-fit headroom report — covers exactly the range a production
+    scan will visit. The operator is assumed to have homed the motor
+    beforehand (az~=0 at the start of this call); the first sample (at
+    the assumed-home position) defines az=0 and v0, exactly as in
+    :func:`collect_azimuth`. Before the first move,
+    :func:`_preflight_sweep_headroom` aborts the sweep if the predicted
+    window would come within :data:`RAIL_GUARD_V` of an ADC rail, and
+    every sampled stop plus every mid-move poll is rail-checked
+    (:func:`_check_off_rails`).
 
     Moves are sent non-blocking (``wait_for_stop=False``) because the
     manager runs routed commands synchronously on its command thread and
@@ -527,15 +659,20 @@ def collect_auto(
         propagates before ``return``, so the caller cannot mistakenly
         save a fit from an interrupted sweep.
     """
-    claim_ttl = int(settle_timeout_s * (n_stops + 2))
+    # n_stops + 2 moves (n_stops + 1 sweep stops plus the return home),
+    # with one settle-budget of slack.
+    claim_ttl = int(settle_timeout_s * (n_stops + 3))
     _motor_command(motor_proxy, "claim", ttl=claim_ttl)
     try:
         v0 = _sample_home(transport, n_samples)
+        _preflight_sweep_headroom(transport, v0)
         voltages = [v0]
         angles = [0.0]
 
-        for i in range(1, n_stops + 1):
-            target = i * (360.0 / n_stops)
+        for i in range(n_stops + 1):
+            target = -SWEEP_HALF_RANGE_DEG + i * (
+                2.0 * SWEEP_HALF_RANGE_DEG / n_stops
+            )
             print(f"\nMoving to az {target:.1f} deg...")
             _motor_command(
                 motor_proxy,
@@ -593,6 +730,7 @@ def rezero(transport, n_samples):
     input("\nDrive the motor to HOME (az 0), stop there, then press Enter.")
     print("  averaging samples...")
     v0 = collect_samples(transport, n_samples)
+    _check_off_rails(v0, where="at motor-home (rezero)")
     b = -m * v0
     print(
         f"  reused slope m={m:.4f}; V0={v0:.4f} V -> new intercept b={b:.4f}"
@@ -650,11 +788,11 @@ def build_parser():
             "(per-turn least-squares). In-box (motor-driven): 'azimuth' "
             "(operator drives the motor; sweep + zero pinned to "
             "motor-home), 'auto' (calibrate-pot drives the motor itself "
-            "through the same sweep -- non-blocking moves, settle "
-            "detected by polling stream:motor), 'rezero' (re-pin zero "
-            "with the stored slope). Recovery: 'manual' (write a "
-            "hand-supplied --slope/--intercept directly, no sweep). "
-            "Default: azimuth."
+            "through a -180..+180 deg sweep -- non-blocking moves, "
+            "settle detected by polling stream:motor, rail-guarded), "
+            "'rezero' (re-pin zero with the stored slope). Recovery: "
+            "'manual' (write a hand-supplied --slope/--intercept "
+            "directly, no sweep). Default: azimuth."
         ),
     )
     parser.add_argument(
@@ -662,9 +800,10 @@ def build_parser():
         type=int,
         default=8,
         help=(
-            "Number of stops after home for --mode auto, evenly spaced "
-            "over one 360 deg turn (default: 8, i.e. 45 deg spacing). "
-            "Spacing must exceed twice the settle tolerance "
+            "Stop count parameter for --mode auto: after sampling home, "
+            "the sweep visits n-stops + 1 stops evenly spaced from -180 "
+            "to +180 deg (default: 8, i.e. 45 deg spacing). Spacing must "
+            "exceed twice the settle tolerance "
             f"({2 * SETTLE_TOL_DEG:.0f} deg), or settle detection could "
             "not tell the next stop from the previous one."
         ),
@@ -921,15 +1060,25 @@ def main():
         print(f"  stored: angle = {m_old:.4f} * V + {b_old:.4f}")
         print(f"  new:    angle = {cal[0]:.4f} * V + {cal[1]:.4f}")
 
-    # Physical sanity bound on the slope (all modes), independent of any
-    # stored cal — the main guard against a fat-fingered manual --slope.
-    slope_bad = slope_out_of_range(cal[0], args.turns)
+    # Sanity bound on the slope (all modes), independent of any stored
+    # cal — the main guard against a fat-fingered manual --slope. Bench
+    # modes sweep the pot's full travel, so the physical turns*360/Vref
+    # derivation applies; in-box modes compare against the
+    # field-measured slope of the installed drive instead (its wiper
+    # covers less than the full ADC span per az degree, so the physical
+    # value systematically overshoots).
+    if args.mode in ("minmax", "turns"):
+        expected_slope = expected_slope_mag(args.turns)
+        expected_src = f"a {args.turns:g}-turn pot over {ADC_VREF:.1f} V"
+    else:
+        expected_slope = EMPIRICAL_SLOPE_DEG_PER_V
+        expected_src = "the installed az drive (field-measured)"
+    slope_bad = slope_out_of_range(cal[0], expected_slope)
     if slope_bad:
-        expected = expected_slope_mag(args.turns)
         print(
             f"\nWARNING: slope |{cal[0]:.1f}| deg/V is more than "
-            f"{SLOPE_SANITY_FACTOR:g}x off the expected ~{expected:.0f} deg/V "
-            f"for a {args.turns:g}-turn pot over {ADC_VREF:.1f} V. "
+            f"{SLOPE_SANITY_FACTOR:g}x off the expected "
+            f"~{expected_slope:.0f} deg/V for {expected_src}. "
             "Check the wiring, --turns, or a typo in the slope."
         )
 
