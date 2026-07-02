@@ -18,12 +18,16 @@ Requires PicoManager to be running and the ``potmon`` device to be
 healthy. The script never touches the serial port itself, so it can
 be invoked alongside the manager.
 
-Five modes:
+Six modes:
   --mode minmax   : bench, collect at min and max (2-point fit)
   --mode turns    : bench, collect at every full turn (least-squares)
   --mode azimuth  : in-box, operator drives the motor; sweep over the
                     operating turn, slope fit, zero pinned to motor-home
                     (default)
+  --mode auto     : in-box, calibrate-pot drives the motor itself through
+                    the same sweep as azimuth (moves are non-blocking;
+                    settle is detected by polling stream:motor) -- no
+                    operator needed at each stop, just to home first
   --mode rezero   : in-box, re-pin the zero using the stored slope (fast;
                     needs only motor access)
   --mode manual   : recovery, write a hand-supplied --slope/--intercept
@@ -38,6 +42,7 @@ Every mode runs a physical slope sanity check: a 3.75-turn pot over the
 
 Usage:
     calibrate-pot --mode azimuth
+    calibrate-pot --mode auto
     calibrate-pot --mode rezero
     calibrate-pot --mode manual --slope 409.1 --intercept -400.0 \\
         --note "restored from corr_20260615.h5"
@@ -48,6 +53,7 @@ import json
 import logging
 import math
 import sys
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -76,6 +82,14 @@ HEADROOM_WARN_DEG = 72.0
 # Motor az should read ~0 at home; warn beyond this if the operator
 # forgot to home before pressing Enter.
 HOME_AZ_TOL_DEG = 5.0
+# --mode auto: a commanded move is considered settled once two
+# consecutive stream:motor reads agree with each other and with the
+# target within this many degrees.
+SETTLE_TOL_DEG = 2.0
+# --mode auto: overall budget to settle a single commanded move.
+# Comfortably larger than a full 360 deg turn (~2 min at the installed
+# motor's default speed).
+SETTLE_TIMEOUT_S = 180.0
 # Warn before saving if the new calibration would move the predicted
 # azimuth by more than this (deg) anywhere in the swept window, relative
 # to the calibration already stored in Redis.
@@ -122,10 +136,13 @@ def collect_samples(transport, n):
 def read_motor_az_steps(transport, start_id="$"):
     """Return the current az_pos (motor steps) from ``stream:motor``.
 
-    Read-only: calibrate-pot never commands the motor. Mirrors
-    :func:`collect_samples`' fail-fast semantics — if PicoManager isn't
-    publishing motor status within ``SAMPLE_TIMEOUT_S``, raise rather
-    than silently using a stale value.
+    Read-only itself (this call never commands the motor), but
+    ``--mode auto`` does command the motor elsewhere via
+    :func:`collect_auto` and then uses this function to poll for
+    settle. Mirrors :func:`collect_samples`' fail-fast semantics — if
+    PicoManager isn't publishing motor status within
+    ``SAMPLE_TIMEOUT_S``, raise rather than silently using a stale
+    value.
     """
     resp = transport.r.xread(
         {MOTOR_STREAM: start_id},
@@ -343,6 +360,20 @@ def collect_per_turn(transport, n_samples, turns):
     return voltages, angles
 
 
+def _warn_if_not_homed(az_home):
+    """Print the "did you home the motor?" warning if ``az_home`` is off.
+
+    Shared by :func:`collect_azimuth` (operator-driven) and
+    :func:`collect_auto` (motor-driven) so the message can't drift
+    between the two sweep modes.
+    """
+    if abs(az_home) > HOME_AZ_TOL_DEG:
+        print(
+            f"  WARNING: motor az reads {az_home:.1f} deg at 'home' "
+            "(expected ~0). Did you home the motor first?"
+        )
+
+
 def collect_azimuth(transport, n_samples, motor_cfg):
     """In-box sweep: operator drives the motor; we record (az, voltage).
 
@@ -353,11 +384,7 @@ def collect_azimuth(transport, n_samples, motor_cfg):
     """
     input("\nDrive the motor to HOME (az 0), stop there, then press Enter.")
     az_home = read_motor_az_deg(transport, **motor_cfg)
-    if abs(az_home) > HOME_AZ_TOL_DEG:
-        print(
-            f"  WARNING: motor az reads {az_home:.1f} deg at 'home' "
-            "(expected ~0). Did you home the motor first?"
-        )
+    _warn_if_not_homed(az_home)
     print("  averaging samples...")
     v0 = collect_samples(transport, n_samples)
     print(
@@ -383,6 +410,137 @@ def collect_azimuth(transport, n_samples, motor_cfg):
         print(f"  az={az:8.2f} deg: pot_az={v:.4f} V")
         voltages.append(v)
         angles.append(az)
+
+    return voltages, angles, v0
+
+
+def _wait_for_settle(
+    transport,
+    motor_cfg,
+    target_deg,
+    *,
+    tol_deg=SETTLE_TOL_DEG,
+    timeout_s=SETTLE_TIMEOUT_S,
+):
+    """Poll ``stream:motor`` until az settles at ``target_deg``.
+
+    Moves are commanded non-blocking (see :func:`collect_auto`), so the
+    caller must poll for settle itself rather than waiting on the proxy.
+    "Settled" requires two consecutive reads that agree with each other
+    and with the target within ``tol_deg`` -- a single sample could catch
+    the motor mid-move if it happens to cross the tolerance band. Returns
+    the settled az. Raises ``TimeoutError`` if the motor hasn't settled
+    within ``timeout_s``.
+    """
+    deadline = time.monotonic() + timeout_s
+    prev_az = None
+    while time.monotonic() < deadline:
+        az = read_motor_az_deg(transport, start_id="$", **motor_cfg)
+        if (
+            prev_az is not None
+            and abs(az - target_deg) <= tol_deg
+            and abs(az - prev_az) <= tol_deg
+        ):
+            return az
+        prev_az = az
+    raise TimeoutError(
+        f"Motor did not settle at {target_deg:.1f} deg (tol {tol_deg:.1f} "
+        f"deg) within {timeout_s:.0f}s (last read: {prev_az})"
+    )
+
+
+def collect_auto(
+    transport,
+    motor_proxy,
+    n_samples,
+    motor_cfg,
+    n_stops=8,
+    settle_tol_deg=SETTLE_TOL_DEG,
+    settle_timeout_s=SETTLE_TIMEOUT_S,
+):
+    """In-box sweep: calibrate-pot drives the motor itself.
+
+    Same sweep as :func:`collect_azimuth`, but instead of an operator
+    driving the motor and pressing Enter at each stop, this commands the
+    motor through ``n_stops`` stops evenly spaced over one 360 deg
+    operating turn (default 8 -> 45 deg spacing). The operator is
+    assumed to have homed the motor beforehand (az~=0 at the start of
+    this call); the first sample (at the assumed-home position) defines
+    az=0 and v0, exactly as in :func:`collect_azimuth`.
+
+    Moves are sent non-blocking (``wait_for_stop=False``) because the
+    manager runs routed commands synchronously on its command thread and
+    a full-turn move can take ~2 minutes -- blocking there would stall
+    every other command against the fleet. Settle is instead detected by
+    this function polling ``stream:motor`` (:func:`_wait_for_settle`).
+
+    The motor is soft-claimed via ``motor_proxy`` for the duration of the
+    sweep and released in a ``finally`` block (claims are advisory, not
+    enforced -- see ``manager.py``). Returns ``(voltages, angles, v0)``,
+    matching :func:`collect_azimuth`.
+
+    Raises
+    ------
+    RuntimeError, TimeoutError
+        On any command or settle failure mid-sweep. This function never
+        returns a partial result on failure -- the exception propagates
+        before ``return``, so the caller cannot mistakenly save a fit
+        from an interrupted sweep.
+    """
+    claim_ttl = int(settle_timeout_s * (n_stops + 2))
+    motor_proxy.send_command("claim", ttl=claim_ttl)
+    try:
+        az_home = read_motor_az_deg(transport, **motor_cfg)
+        _warn_if_not_homed(az_home)
+        print("  averaging samples...")
+        v0 = collect_samples(transport, n_samples)
+        print(
+            f"  home: az=0.00 deg (motor reads {az_home:.2f}), "
+            f"pot_az={v0:.4f} V"
+        )
+        voltages = [v0]
+        angles = [0.0]
+
+        for i in range(1, n_stops + 1):
+            target = i * (360.0 / n_stops)
+            print(f"\nMoving to az {target:.1f} deg...")
+            motor_proxy.send_command(
+                "az_target_deg",
+                target_deg=target,
+                wait_for_start=False,
+                wait_for_stop=False,
+            )
+            az = _wait_for_settle(
+                transport,
+                motor_cfg,
+                target,
+                tol_deg=settle_tol_deg,
+                timeout_s=settle_timeout_s,
+            )
+            print("  averaging samples...")
+            v = collect_samples(transport, n_samples)
+            print(
+                f"  az={az:8.2f} deg (target {target:.1f}): pot_az={v:.4f} V"
+            )
+            voltages.append(v)
+            angles.append(az)
+
+        print("\nReturning motor to home (az 0)...")
+        motor_proxy.send_command(
+            "az_target_deg",
+            target_deg=0.0,
+            wait_for_start=False,
+            wait_for_stop=False,
+        )
+        _wait_for_settle(
+            transport,
+            motor_cfg,
+            0.0,
+            tol_deg=settle_tol_deg,
+            timeout_s=settle_timeout_s,
+        )
+    finally:
+        motor_proxy.send_command("release")
 
     return voltages, angles, v0
 
@@ -454,15 +612,27 @@ def build_parser():
         "-m",
         "--mode",
         type=str,
-        choices=["minmax", "turns", "azimuth", "rezero", "manual"],
+        choices=["minmax", "turns", "azimuth", "auto", "rezero", "manual"],
         default="azimuth",
         help=(
             "Calibration mode. Bench: 'minmax' (2-point), 'turns' "
             "(per-turn least-squares). In-box (motor-driven): 'azimuth' "
-            "(sweep + zero pinned to motor-home), 'rezero' (re-pin zero "
+            "(operator drives the motor; sweep + zero pinned to "
+            "motor-home), 'auto' (calibrate-pot drives the motor itself "
+            "through the same sweep -- non-blocking moves, settle "
+            "detected by polling stream:motor), 'rezero' (re-pin zero "
             "with the stored slope). Recovery: 'manual' (write a "
             "hand-supplied --slope/--intercept directly, no sweep). "
             "Default: azimuth."
+        ),
+    )
+    parser.add_argument(
+        "--n-stops",
+        type=int,
+        default=8,
+        help=(
+            "Number of stops after home for --mode auto, evenly spaced "
+            "over one 360 deg turn (default: 8, i.e. 45 deg spacing)."
         ),
     )
     parser.add_argument(
@@ -532,6 +702,10 @@ def main():
         print("turns must be positive.", file=sys.stderr)
         sys.exit(1)
 
+    if args.mode == "auto" and args.n_stops <= 0:
+        print("n-stops must be positive.", file=sys.stderr)
+        sys.exit(1)
+
     if args.mode == "manual" and (
         args.slope is None or args.intercept is None
     ):
@@ -555,6 +729,21 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # Auto mode additionally commands the motor itself, so it hard-requires
+    # the motor's heartbeat too (azimuth mode only reads the motor stream,
+    # which the pot-availability check above doesn't cover either, but that
+    # mode is operator-driven so a stalled read just blocks on input()).
+    motor_proxy = None
+    if args.mode == "auto":
+        motor_proxy = PicoProxy(MOTOR_NAME, transport, source="calibrate-pot")
+        if not motor_proxy.is_available:
+            print(
+                f"{MOTOR_NAME} is not reachable via PicoManager. "
+                "Start the manager and confirm the motor Pico is enumerated.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     total_degrees = 360.0 * args.turns
 
@@ -586,10 +775,19 @@ def main():
                 transport, args.n_samples, args.turns
             )
             cal = compute_linear_fit(voltages, angles)
-        elif args.mode == "azimuth":
-            voltages, angles, v0 = collect_azimuth(
-                transport, args.n_samples, motor_cfg
-            )
+        elif args.mode in ("azimuth", "auto"):
+            if args.mode == "azimuth":
+                voltages, angles, v0 = collect_azimuth(
+                    transport, args.n_samples, motor_cfg
+                )
+            else:
+                voltages, angles, v0 = collect_auto(
+                    transport,
+                    motor_proxy,
+                    args.n_samples,
+                    motor_cfg,
+                    n_stops=args.n_stops,
+                )
             if len(voltages) < 2:
                 print(
                     "\nNeed at least one stop beyond home to fit a slope.",
@@ -610,7 +808,7 @@ def main():
         else:  # rezero
             cal, v0 = rezero(transport, args.n_samples)
             voltages, angles = [v0], [0.0]
-    except (RuntimeError, ConnectionError) as exc:
+    except (RuntimeError, ConnectionError, TimeoutError) as exc:
         print(f"Calibration sample collection failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -619,7 +817,7 @@ def main():
         sys.exit(1)
 
     if free is not None and resid is not None:
-        print("\nLinearity check (azimuth fit):")
+        print(f"\nLinearity check ({args.mode} fit):")
         print(f"  slope m = {cal[0]:.4f} deg/V")
         print(
             f"  intercept: pinned b = {cal[1]:.4f}  (free-fit b = {free[1]:.4f})"
@@ -665,11 +863,13 @@ def main():
     if args.mode in ("minmax", "turns"):
         metadata["turns"] = float(args.turns)
         metadata["total_degrees"] = total_degrees
-    if args.mode == "azimuth":
+    if args.mode in ("azimuth", "auto"):
         metadata["motor_cfg"] = motor_cfg
         metadata["free_fit_intercept"] = float(free[1])
         metadata["residual_max_deg"] = resid["max_abs_deg"]
         metadata["residual_rms_deg"] = resid["rms_deg"]
+    if args.mode == "auto":
+        metadata["n_stops"] = args.n_stops
     if args.mode == "rezero":
         metadata["slope_reused"] = True
     if args.note:
