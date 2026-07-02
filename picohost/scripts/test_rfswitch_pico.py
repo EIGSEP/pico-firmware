@@ -4,7 +4,9 @@ import picohost
 import time
 
 # Walk every burned EEPROM path, ending on the fail-safe default.
-STATES = sorted(picohost.PicoRFSwitch.PATHS, key=picohost.PicoRFSwitch.PATHS.get)
+STATES = sorted(
+    picohost.PicoRFSwitch.PATHS, key=picohost.PicoRFSwitch.PATHS.get
+)
 STATES.remove("RFANT")
 STATES.append("RFANT")
 
