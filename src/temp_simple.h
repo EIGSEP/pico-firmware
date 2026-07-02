@@ -23,6 +23,15 @@
 #define THERMISTOR_SH_B               2.2246310e-4f
 #define THERMISTOR_SH_C               1.2326590e-7f
 
+// Shared ADC sampling helpers (also used by rfswitch for its PCB
+// thermistors, which report raw volts — conversion happens host-side).
+// adc_channel_init validates the pin is ADC-capable (GPIO 26-29), maps
+// it to the ADC input index, and performs one-time ADC + pin setup.
+bool adc_channel_init(uint gpio_pin, uint *adc_input);
+// Average THERMISTOR_ADC_SAMPLES conversions (discarding the first
+// sample after the mux switch) and return the pin voltage in volts.
+float adc_read_avg_voltage(uint adc_input);
+
 // Temperature sensor structure for direct ADC connection.
 typedef struct {
     uint gpio_pin;
