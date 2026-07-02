@@ -482,6 +482,17 @@ class TestRFSwitchProtocol:
         emu = RFSwitchEmulator(settle_ms=0)
         assert emu.get_status()["sensor_name"] == "rfswitch"
 
+    def test_thermistor_voltages_in_status(self):
+        """rfswitch_status() reports raw ADC volts for the three PCB
+        thermistors (volt_therm<i> on ADC input i); conversion to
+        temperature is host-side (constants unmeasured)."""
+        emu = RFSwitchEmulator(settle_ms=0)
+        status = emu.get_status()
+        for i in range(3):
+            volts = status[f"volt_therm{i}"]
+            assert isinstance(volts, float)
+            assert 0.0 <= volts <= 3.3
+
     def test_initial_state_zero(self):
         """rfswitch_init() sets sw_state = 0 once settled."""
         emu = RFSwitchEmulator(settle_ms=0)
