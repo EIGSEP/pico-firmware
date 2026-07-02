@@ -233,7 +233,7 @@ The RF switch PCB holds the signal-path lookup table in two AT28BV64B EEPROMs dr
 - Addresses ≥ 16 are unused on the chips and rejected by the firmware. Path name → address mapping lives in `PicoRFSwitch.PATHS` (picohost) and the `rf_path_t` enum in `src/rfswitch.h`.
 - **Table source of truth**: the [eeprom_api](https://github.com/EIGSEP/eeprom_api) repo — `program_paths/program_paths.c` defines and burns the table; the seated chips are the physical ground truth (`test_paths.uf2` read-back verifies them).
 - **Burned-table version**: eeprom_api commit `8681ed8`. Update this hash whenever the chips are reburned and re-verified.
-- **Thermistors**: firmware reports the raw averaged ADC pin voltage (`volt_therm<i>`, volts). The divider resistor value and Steinhart-Hart coefficients are not yet measured; once they are, voltage → temperature conversion happens host-side (no firmware change needed).
+- **Thermistors**: firmware reports the raw averaged ADC pin voltage (`volt_therm<i>`, volts, 3.3V-referenced). Voltage→temperature is done host-side in `PicoRFSwitch._rfswitch_redis_handler`, which re-publishes the three channels on a separate `rfswitch_therm` metadata stream carrying `volt_therm<i>` plus derived `temp_therm<i>` (°C). Conversion uses a datasheet Beta model (10k NTC, R0=10k@25°C, B=3380) over a 10kΩ-pullup-to-5.0V divider; swap in measured constants when characterized (no firmware change).
 
 ## 5. Install Python Host Library (Optional)
 

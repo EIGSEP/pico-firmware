@@ -8,6 +8,7 @@ DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 import json
 import pytest
 from conftest import wait_for_condition, wait_for_settle
+from picohost.base import PicoRFSwitch
 from picohost.emulators import RFSwitchEmulator
 from picohost.testing import (
     DummyPicoDevice,
@@ -378,6 +379,96 @@ class TestRFSwitchRedisHandler:
             assert "sw_state_name" in known
         finally:
             switch.disconnect()
+
+
+class TestRFSwitchThermistorFanout:
+    """The three PCB thermistors fan out of the switch-state line into a
+    separate rfswitch_therm stream (mirrors PicoLidar -> system_current),
+    carrying raw volts + host-derived degrees C. The switch-state line
+    stays a pure categorical signal (no thermistor keys)."""
+
+    def _capture(self, switch, data):
+        published = []
+        switch._base_redis_handler = lambda d: published.append(dict(d))
+        switch._rfswitch_redis_handler(data)
+        return published
+
+    def test_fans_thermistors_into_separate_stream(self):
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            pub = self._capture(
+                switch,
+                {
+                    "sensor_name": "rfswitch",
+                    "status": "update",
+                    "app_id": 5,
+                    "sw_state": switch.PATHS["RFANT"],
+                    "volt_therm0": 2.5,
+                    "volt_therm1": 2.5,
+                    "volt_therm2": 2.5,
+                },
+            )
+            assert [p["sensor_name"] for p in pub] == [
+                "rfswitch",
+                "rfswitch_therm",
+            ]
+            # switch-state line is pure: thermistor keys stripped
+            assert "volt_therm0" not in pub[0]
+            assert pub[0]["sw_state_name"] == "RFANT"
+            therm = pub[1]
+            assert therm["status"] == "update"
+            assert (
+                "app_id" not in therm
+            )  # fanned/derived stream, cf. system_current
+            for i in range(3):
+                assert therm[f"volt_therm{i}"] == 2.5
+                # 2.5 V over the 5 V / 10k divider -> R = 10k -> 25 C
+                assert therm[f"temp_therm{i}"] == pytest.approx(25.0, abs=0.05)
+        finally:
+            switch.disconnect()
+
+    def test_out_of_range_voltage_maps_to_none_temp(self):
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            pub = self._capture(
+                switch,
+                {
+                    "sensor_name": "rfswitch",
+                    "sw_state": switch.PATHS["RFANT"],
+                    "volt_therm0": 0.0,  # v <= 0  -> None
+                    "volt_therm1": 5.0,  # v >= SUPPLY -> None
+                    "volt_therm2": 2.5,  # valid -> 25 C
+                },
+            )
+            therm = pub[1]
+            assert therm["temp_therm0"] is None
+            assert therm["temp_therm1"] is None
+            assert therm["temp_therm2"] == pytest.approx(25.0, abs=0.05)
+            # raw volts always pass through, even when temp is None
+            assert therm["volt_therm0"] == 0.0
+        finally:
+            switch.disconnect()
+
+    def test_no_thermistor_fields_publishes_only_rfswitch(self):
+        switch = DummyPicoRFSwitch("/dev/dummy")
+        try:
+            pub = self._capture(
+                switch,
+                {"sensor_name": "rfswitch", "sw_state": switch.PATHS["RFANT"]},
+            )
+            assert [p["sensor_name"] for p in pub] == ["rfswitch"]
+        finally:
+            switch.disconnect()
+
+    def test_therm_temp_c_known_points(self):
+        # 2.5 V -> R=10k -> exactly 25 C; monotonic: lower V (hotter) -> higher C
+        assert PicoRFSwitch._therm_temp_c(2.5) == pytest.approx(25.0, abs=0.05)
+        assert PicoRFSwitch._therm_temp_c(1.169) == pytest.approx(
+            60.0, abs=1.0
+        )
+        assert PicoRFSwitch._therm_temp_c(0.0) is None
+        assert PicoRFSwitch._therm_temp_c(5.0) is None
+        assert PicoRFSwitch._therm_temp_c(None) is None
 
 
 class TestMotorRedisHandler:

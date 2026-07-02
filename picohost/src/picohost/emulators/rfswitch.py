@@ -36,11 +36,11 @@ class RFSwitchEmulator(PicoEmulator):
     # Mirrors RFSWITCH_NUM_THERM in src/rfswitch.h.
     NUM_THERM = 3
     DEFAULT_SETTLE_MS = 20
-    # Mid-range placeholder for the three PCB thermistor channels
-    # (ADC0-2). Firmware reports raw averaged pin volts; conversion to
-    # temperature is host-side once divider + Steinhart-Hart constants
-    # are measured.
-    DEFAULT_THERM_VOLTS = 1.65
+    # 2.5 V over the 5.0 V / 10k-pullup divider inverts to R = 10k = R0,
+    # i.e. exactly 25 C at the emulator's default, so tests read a clean
+    # midpoint. (Was 1.65, chosen for a 3.3 V midpoint before the 5 V rail
+    # was confirmed.)
+    DEFAULT_THERM_VOLTS = 2.5
 
     def __init__(self, app_id=5, settle_ms=None, **kwargs):
         self.settle_ms = (
