@@ -10,6 +10,16 @@ from .base import PicoDevice
 
 logger = logging.getLogger(__name__)
 
+# Geometry of the installed az drive. Step angle and gear teeth are fixed
+# properties of the hardware; microstep is a physical driver switch that
+# is very unlikely to change. Single source for both PicoMotor (deg->steps
+# on the manager side) and calibrate-pot (steps->deg on the client side) —
+# the two conversions must always use the same numbers or --mode auto's
+# settle detection can never match the commanded target.
+STEP_ANGLE_DEG = 1.8
+GEAR_TEETH = 113
+MICROSTEP = 1
+
 
 def steps_to_deg(steps, *, step_angle_deg, gear_teeth, microstep):
     """Convert motor pulses to degrees (pure; no device state).
@@ -32,9 +42,9 @@ class PicoMotor(PicoDevice):
     def __init__(
         self,
         port,
-        step_angle_deg=1.8,
-        gear_teeth=113,
-        microstep=1,
+        step_angle_deg=STEP_ANGLE_DEG,
+        gear_teeth=GEAR_TEETH,
+        microstep=MICROSTEP,
         verbose=False,
         timeout=5.0,
         name=None,
