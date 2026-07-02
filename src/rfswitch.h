@@ -22,6 +22,14 @@
 // the noise diode, so commands at or above this bound are rejected.
 #define RFSWITCH_NUM_PATHS  16
 
+// Three PCB thermistors on ADC0-2: thermistor i sits on GP(26+i) =
+// ADC input i. Firmware reports the raw averaged pin voltage
+// (volt_therm<i>); the divider resistor and Steinhart-Hart
+// coefficients are not yet measured, so volts->temperature conversion
+// happens host-side once they are.
+#define RFSWITCH_NUM_THERM    3
+#define RFSWITCH_THERM0_GPIO  26
+
 // Burned path table, for reference; firmware logic only needs the
 // RFSWITCH_NUM_PATHS bound. Names mirror PicoRFSwitch.PATHS in picohost.
 typedef enum {

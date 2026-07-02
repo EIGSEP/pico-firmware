@@ -3,6 +3,7 @@
 #include "cJSON.h"
 #include <math.h>
 #include <stdlib.h>
+#include "temp_simple.h"
 
 static RFSwitch rfswitch;
 
@@ -21,6 +22,11 @@ void rfswitch_init(uint8_t app_id) {
     for (int i = 0; i < RFSWITCH_ADDR_LINES; i++) {
         gpio_init(rfswitch_addr_pins[i]);
         gpio_set_dir(rfswitch_addr_pins[i], GPIO_OUT);
+    }
+    for (uint i = 0; i < RFSWITCH_NUM_THERM; i++) {
+        uint adc_input;
+        // GP26..GP28 are always ADC-capable; adc_input == i by layout.
+        (void)adc_channel_init(RFSWITCH_THERM0_GPIO + i, &adc_input);
     }
 }
 
@@ -67,11 +73,18 @@ void rfswitch_status(uint8_t app_id) {
     int reported = rfswitch.in_transition
         ? SW_STATE_UNKNOWN
         : rfswitch.reported_state;
-    send_json(4,
+    float volt_therm[RFSWITCH_NUM_THERM];
+    for (uint i = 0; i < RFSWITCH_NUM_THERM; i++) {
+        volt_therm[i] = adc_read_avg_voltage(i);
+    }
+    send_json(7,
         KV_STR, "sensor_name", "rfswitch",
         KV_STR, "status", "update",
         KV_INT, "app_id", app_id,
-        KV_INT, "sw_state", reported
+        KV_INT, "sw_state", reported,
+        KV_FLOAT, "volt_therm0", volt_therm[0],
+        KV_FLOAT, "volt_therm1", volt_therm[1],
+        KV_FLOAT, "volt_therm2", volt_therm[2]
     );
 }
 
