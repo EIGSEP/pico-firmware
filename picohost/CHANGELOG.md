@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.0.0](https://github.com/EIGSEP/pico-firmware/compare/v3.11.0...v4.0.0) (2026-07-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **rfswitch:** sw_state is now an EEPROM path address (0-15) for the new RF switch PCB, not an 8-bit GPIO bitmask; this firmware cannot drive the old direct-GPIO switches, and raw integer commands from old callers are incompatible (named paths via PicoRFSwitch.switch() carry over unchanged).
+
+### Features
+
+* **calibrate-pot:** default to azimuth mode ([6ba5603](https://github.com/EIGSEP/pico-firmware/commit/6ba5603add264b1f3931954ca5b4bd124da229b2))
+* **calibrate-pot:** motor-driven auto mode ([#141](https://github.com/EIGSEP/pico-firmware/issues/141)) ([cfede3a](https://github.com/EIGSEP/pico-firmware/commit/cfede3a5355fb034e22705866d4d6ba941c90762))
+* **rfswitch:** drive EEPROM path addresses instead of raw GPIO bitmask ([db973ec](https://github.com/EIGSEP/pico-firmware/commit/db973ec00460c36eef4af62421f42a235bfb84e3))
+* **rfswitch:** fan PCB thermistors into rfswitch_therm stream with host-side degC ([e4119c0](https://github.com/EIGSEP/pico-firmware/commit/e4119c001a3a956b6dfe5cfadbd1353cfa13d7a2))
+
+
+### Bug Fixes
+
+* **rfswitch:** report None on ADC-saturated thermistor readings ([a934b76](https://github.com/EIGSEP/pico-firmware/commit/a934b76ad7dde58d6f640a113d6651e34c5dee02))
+
 ## [3.11.0](https://github.com/EIGSEP/pico-firmware/compare/v3.10.0...v3.11.0) (2026-07-01)
 
 
