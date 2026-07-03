@@ -50,16 +50,19 @@ static bool temp_sensor_voltage_to_temperature(float voltage,
         return false;
     }
 
-    float log_r = logf(r_thermistor);
-    float inverse_kelvin = THERMISTOR_SH_A
-        + THERMISTOR_SH_B * log_r
-        + THERMISTOR_SH_C * log_r * log_r * log_r;
+    float log_r = logf(r_thermistor / THERMISTOR_REF_OHMS);
+    float log_r_sq = log_r * log_r;
+    float inverse_kelvin = THERMISTOR_SH_A1
+        + THERMISTOR_SH_B1 * log_r
+        + THERMISTOR_SH_C1 * log_r_sq
+        + THERMISTOR_SH_D1 * log_r_sq * log_r;
     if (!isfinite(inverse_kelvin) || inverse_kelvin <= 0.0f) {
         return false;
     }
 
+    // NTCLE100E3 operating range (and the fit's validity): -40..+125 C.
     float temp_c = 1.0f / inverse_kelvin - 273.15f;
-    if (!isfinite(temp_c) || temp_c < -55.0f || temp_c > 125.0f) {
+    if (!isfinite(temp_c) || temp_c < -40.0f || temp_c > 125.0f) {
         return false;
     }
 

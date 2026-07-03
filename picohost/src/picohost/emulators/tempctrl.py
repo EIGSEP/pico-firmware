@@ -25,20 +25,48 @@ THERMISTOR_TOP_OHMS = (
     * THERMISTOR_BOARD_PULLUP_OHMS
     / (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS)
 )
-THERMISTOR_SH_A = 9.2463455e-4
-THERMISTOR_SH_B = 2.2246310e-4
-THERMISTOR_SH_C = 1.2326590e-7
+# Vishay NTCLE100E3103 NTC, 10 kOhm at 25 C, B25/85 = 3977 K (datasheet
+# document 29049, "Mat A" coefficient row). The firmware converts
+# resistance -> temperature with the datasheet's extended Steinhart-Hart
+# fit (A1..D1, mirroring temp_simple.h); the emulator generates
+# resistance from temperature with the paired forward fit
+#   R(T) = Rref * exp(A + B/T + C/T^2 + D/T^3),  T in kelvin.
+# Vishay states the two fits are interchangeable within 0.015 C over
+# the part's -40..+125 C range, so emulator-generated resistances decode
+# firmware-side to the temperature the emulator meant.
+THERMISTOR_REF_OHMS = 10000.0
+THERMISTOR_SH_A1 = 3.354016e-3
+THERMISTOR_SH_B1 = 2.569850e-4
+THERMISTOR_SH_C1 = 2.620131e-6
+THERMISTOR_SH_D1 = 6.383091e-8
+THERMISTOR_RT_A = -14.6337
+THERMISTOR_RT_B = 4791.842
+THERMISTOR_RT_C = -115334.0
+THERMISTOR_RT_D = -3.730535e6
 
 
 def _thermistor_resistance(temp_c):
-    """Invert the firmware's Steinhart-Hart fit: temperature -> ohms."""
-    inv_kelvin = 1.0 / (temp_c + 273.15)
-    y = (THERMISTOR_SH_A - inv_kelvin) / THERMISTOR_SH_C
-    z = math.sqrt(
-        (THERMISTOR_SH_B / (3.0 * THERMISTOR_SH_C)) ** 3 + (y / 2.0) ** 2
+    """Datasheet forward fit: temperature (deg C) -> ohms."""
+    kelvin = temp_c + 273.15
+    exponent = (
+        THERMISTOR_RT_A
+        + THERMISTOR_RT_B / kelvin
+        + THERMISTOR_RT_C / kelvin**2
+        + THERMISTOR_RT_D / kelvin**3
     )
-    log_r = (z - y / 2.0) ** (1.0 / 3.0) - (z + y / 2.0) ** (1.0 / 3.0)
-    return math.exp(log_r)
+    return THERMISTOR_REF_OHMS * math.exp(exponent)
+
+
+def _thermistor_temperature(resistance):
+    """Mirror the firmware's inverse fit (temp_simple.c): ohms -> deg C."""
+    log_r = math.log(resistance / THERMISTOR_REF_OHMS)
+    inv_kelvin = (
+        THERMISTOR_SH_A1
+        + THERMISTOR_SH_B1 * log_r
+        + THERMISTOR_SH_C1 * log_r**2
+        + THERMISTOR_SH_D1 * log_r**3
+    )
+    return 1.0 / inv_kelvin - 273.15
 
 
 def _thermistor_voltage(resistance):

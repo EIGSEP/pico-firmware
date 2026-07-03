@@ -996,6 +996,57 @@ class TestTempCtrlSensorSanity:
         assert emu.get_status()["LNA_T_now"] == pytest.approx(45.0)
 
 
+class TestThermistorCurve:
+    """Pin the emulator's NTC model to the Vishay NTCLE100E3 datasheet.
+
+    The tempctrl thermistor is an NTCLE100E3103 (10 kOhm at 25 C,
+    B25/85 = 3977 K). Anchors are the R_T table for the 10 kOhm part
+    (Vishay document 29049, NTCLE100E3103 column). The firmware inverts
+    resistance -> temperature with the datasheet's extended
+    Steinhart-Hart fit (A1..D1, temp_simple.h); the emulator generates
+    resistance from temperature with the paired forward fit, which the
+    datasheet states is interchangeable within 0.015 C over -40..125 C.
+    """
+
+    DATASHEET_ANCHORS_OHMS = {
+        -40.0: 332094.0,
+        -20.0: 96358.0,
+        0.0: 32554.0,
+        25.0: 10000.0,
+        40.0: 5330.0,
+        70.0: 1753.0,
+        100.0: 677.3,
+        125.0: 338.7,
+    }
+
+    def test_resistance_matches_datasheet_table(self):
+        import picohost.emulators.tempctrl as mod
+
+        for temp_c, ohms in self.DATASHEET_ANCHORS_OHMS.items():
+            assert mod._thermistor_resistance(temp_c) == pytest.approx(
+                ohms, rel=2e-3
+            )
+
+    def test_round_trip_matches_firmware_inverse(self):
+        """Forward fit -> firmware inverse must reproduce the input
+        temperature, so emulator-generated resistances decode on the
+        firmware side to the temperature the emulator meant."""
+        import picohost.emulators.tempctrl as mod
+
+        for temp_c in self.DATASHEET_ANCHORS_OHMS:
+            resistance = mod._thermistor_resistance(temp_c)
+            back = mod._thermistor_temperature(resistance)
+            assert back == pytest.approx(temp_c, abs=0.02)
+
+    def test_divider_voltage_at_25c(self):
+        """10 kOhm NTC against the 10.68k || 4.7k top resistance:
+        3.3 * 10000 / (3263.5 + 10000) = 2.4885 V at the ADC pin."""
+        import picohost.emulators.tempctrl as mod
+
+        voltage = mod._thermistor_voltage(mod._thermistor_resistance(25.0))
+        assert voltage == pytest.approx(2.4885, abs=2e-3)
+
+
 class TestImuEmulator:
     def test_initial_state(self):
         emu = ImuEmulator(app_id=3)
