@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.0](https://github.com/EIGSEP/pico-firmware/compare/v4.0.0...v4.1.0) (2026-07-03)
+
+
+### Features
+
+* **tempctrl:** split data-validity status from control latches ([7b0bb3a](https://github.com/EIGSEP/pico-firmware/commit/7b0bb3a2d58932401c059f2e00687ebdb66677be))
+
 ## [4.0.0](https://github.com/EIGSEP/pico-firmware/compare/v3.11.0...v4.0.0) (2026-07-03)
 
 
