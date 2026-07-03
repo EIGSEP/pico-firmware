@@ -7,8 +7,9 @@
 
 // ADC thermistor helper for the tempctrl app. The existing tempctrl app shape
 // is preserved; only the private TempSensor backend reads an ADC divider.
-// The ADC conversion is effectively instantaneous, so every read takes a fresh
-// sample (no sampling interval) and the PI controller runs on every op tick.
+// The ADC conversion is effectively instantaneous, so every read takes a
+// fresh sample; the caller owns the sampling cadence (tempctrl samples on a
+// fixed TEMPCTRL_SAMPLE_MS timer).
 #define THERMISTOR_ADC_MAX_COUNTS     4095.0f
 #define THERMISTOR_SUPPLY_VOLTS       3.3f
 #define THERMISTOR_FIXED_OHMS         10680.0f
@@ -49,8 +50,10 @@ void temp_sensor_init(TempSensor *sensor, uint gpio_pin);
 
 // Read a fresh temperature sample from the ADC. Returns true when a sample
 // was decoded this call (so callers gating on new data — e.g. a PI
-// controller — can skip ticks with no valid sample). Returns false only when
-// the read failed (see temp_sensor_has_error()).
+// controller — can skip ticks with no valid sample). Returns false when the
+// plausibility conversion failed (see temp_sensor_has_error()); `voltage` is
+// still updated with the measured value in that case — only `temperature`,
+// `resistance`, and `last_sample_time` hold their last-good values.
 bool temp_sensor_read(TempSensor *sensor);
 
 // Get current temperature value

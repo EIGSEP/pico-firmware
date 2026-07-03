@@ -16,6 +16,10 @@ static absolute_time_t last_cmd_time;
 static uint32_t watchdog_timeout_ms = 30000;  // default 30s, 0 = disabled
 static bool watchdog_tripped = false;
 
+// Fixed sensor-sampling timer (app-level; both channels sample on the same
+// tick). See TEMPCTRL_SAMPLE_MS in tempctrl.h for why the cadence is fixed.
+static absolute_time_t next_sensor_sample;
+
 // Forward declarations
 static void init_single_tempctrl(TempControl *, uint, uint, uint, pwm_config *, uint);
 static void tempctrl_update_sensor_drive(TempControl *);
@@ -56,11 +60,14 @@ static void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->hysteresis = 0.5;
     tempctrl->enabled = false;
     tempctrl->active = false;
-    tempctrl->internally_disabled = false;
+    // No sample taken yet, so there is no valid temperature to report;
+    // the first op tick samples before the first status message fires.
+    tempctrl->data_invalid = true;
     tempctrl->cooling_enabled = true;
     tempctrl->T_now = 0;
     tempctrl->drive = 0.0;
     tempctrl->stall_tripped = false;
+    tempctrl->runaway_tripped = false;
     tempctrl->stall_window_active = false;
     tempctrl->stall_check_T = 0.0;
     tempctrl->stall_check_time = get_absolute_time();
@@ -81,6 +88,7 @@ void tempctrl_init(uint8_t app_id) {
     init_single_tempctrl(&tempctrl_load, PELTIER_LOAD_DIR_PIN3, PELTIER_LOAD_DIR_PIN4,
             PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN);
     last_cmd_time = get_absolute_time();
+    next_sensor_sample = get_absolute_time();  // first op tick samples
 }
 
 void tempctrl_server(uint8_t app_id, const char *json_str) {
@@ -169,35 +177,45 @@ void tempctrl_status(uint8_t app_id) {
     const uint32_t time_lna = temp_sensor_get_sample_time(&tempctrl_lna.temp_sensor);
     const uint32_t time_load = temp_sensor_get_sample_time(&tempctrl_load.temp_sensor);
 
-    /* internally_disabled is recomputed every op tick from the hardware
-       read error OR a latched sensor-sanity reject (see
-       tempctrl_update_sensor_drive), so LNA_status / LOAD_status reflect the
-       most recent cycle and surface a garbage-but-valid sensor that a read
-       error alone would miss. Matches the per-cycle status contract enforced
-       by eigsep_observing._avg_sensor_values and the emulator's status
-       derivation. */
-    const char *status_lna = tempctrl_lna.internally_disabled ? "error" : "update";
-    const char *status_load = tempctrl_load.internally_disabled ? "error" : "update";
+    /* Per-channel status reports DATA VALIDITY ONLY: "error" while the most
+       recent sample cycle produced no trustworthy temperature (plausibility
+       failure or rate-guard reject — see data_invalid in tempctrl.h), in
+       which case T_now/resistance are reported as JSON null (NaN KV_FLOAT)
+       while voltage stays live for open-vs-short diagnosis. The sticky
+       control latches (sensor/stall/runaway_tripped, watchdog_tripped) gate
+       drive but never set status: a latched channel with a recovered sensor
+       keeps publishing valid science data. The picohost fan-out lifts these
+       strings to the per-stream top-level status consumed by
+       eigsep_observing._avg_sensor_values. */
+    const char *status_lna = tempctrl_lna.data_invalid ? "error" : "update";
+    const char *status_load = tempctrl_load.data_invalid ? "error" : "update";
+    const float T_lna = tempctrl_lna.data_invalid ? NAN : tempctrl_lna.T_now;
+    const float T_load = tempctrl_load.data_invalid ? NAN : tempctrl_load.T_now;
+    const float R_lna =
+        tempctrl_lna.data_invalid ? NAN : tempctrl_lna.temp_sensor.resistance;
+    const float R_load =
+        tempctrl_load.data_invalid ? NAN : tempctrl_load.temp_sensor.resistance;
 
-    /* 38 KV pairs: 4 device-wide + 17 per channel * 2 channels. send_json
+    /* 40 KV pairs: 4 device-wide + 18 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(38,
+    send_json(40,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
         KV_INT, "watchdog_timeout_ms", (int)watchdog_timeout_ms,
         KV_STR, "LNA_status", status_lna,
-        KV_FLOAT, "LNA_T_now", tempctrl_lna.T_now,
+        KV_FLOAT, "LNA_T_now", T_lna,
         KV_FLOAT, "LNA_voltage", tempctrl_lna.temp_sensor.voltage,
-        KV_FLOAT, "LNA_resistance", tempctrl_lna.temp_sensor.resistance,
+        KV_FLOAT, "LNA_resistance", R_lna,
         KV_FLOAT, "LNA_timestamp", (double)time_lna,
         KV_FLOAT, "LNA_T_target", tempctrl_lna.T_target,
         KV_FLOAT, "LNA_drive_level", tempctrl_lna.drive,
         KV_BOOL, "LNA_enabled", tempctrl_lna.enabled,
         KV_BOOL, "LNA_active", tempctrl_lna.active,
-        KV_BOOL, "LNA_int_disabled", tempctrl_lna.internally_disabled,
+        KV_BOOL, "LNA_sensor_tripped", tempctrl_lna.sensor_tripped,
         KV_BOOL, "LNA_stall_tripped", tempctrl_lna.stall_tripped,
+        KV_BOOL, "LNA_runaway_tripped", tempctrl_lna.runaway_tripped,
         KV_BOOL, "LNA_cooling_enabled", tempctrl_lna.cooling_enabled,
         KV_FLOAT, "LNA_hysteresis", tempctrl_lna.hysteresis,
         KV_FLOAT, "LNA_clamp", tempctrl_lna.clamp,
@@ -205,16 +223,17 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LNA_Ki", tempctrl_lna.Ki,
         KV_FLOAT, "LNA_integral", tempctrl_lna.integral,
         KV_STR, "LOAD_status", status_load,
-        KV_FLOAT, "LOAD_T_now", tempctrl_load.T_now,
+        KV_FLOAT, "LOAD_T_now", T_load,
         KV_FLOAT, "LOAD_voltage", tempctrl_load.temp_sensor.voltage,
-        KV_FLOAT, "LOAD_resistance", tempctrl_load.temp_sensor.resistance,
+        KV_FLOAT, "LOAD_resistance", R_load,
         KV_FLOAT, "LOAD_timestamp", (double)time_load,
         KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
         KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
         KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
         KV_BOOL, "LOAD_active", tempctrl_load.active,
-        KV_BOOL, "LOAD_int_disabled", tempctrl_load.internally_disabled,
+        KV_BOOL, "LOAD_sensor_tripped", tempctrl_load.sensor_tripped,
         KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
+        KV_BOOL, "LOAD_runaway_tripped", tempctrl_load.runaway_tripped,
         KV_BOOL, "LOAD_cooling_enabled", tempctrl_load.cooling_enabled,
         KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
         KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp,
@@ -225,18 +244,29 @@ void tempctrl_status(uint8_t app_id) {
 }
 
 void tempctrl_update_sensor_drive(TempControl *tempctrl) {
-    // Read a fresh sample. The ADC samples on every read, so `fresh` is
-    // true on every op tick a sensor value was decoded (false only on a
-    // read error) — the PI controller runs on each fresh tick.
-    bool fresh = temp_sensor_read(&tempctrl->temp_sensor);
-    bool hw_error = temp_sensor_has_error(&tempctrl->temp_sensor);
+    // Sample the thermistor. Called on the fixed TEMPCTRL_SAMPLE_MS timer
+    // (not every op pass), so the rate guard's dt is ~one sample period.
+    // `plausible` is false when the voltage->temperature conversion failed
+    // (railed divider: open/short thermistor); the measured voltage is
+    // still stored for open-vs-short diagnosis in status.
+    bool plausible = temp_sensor_read(&tempctrl->temp_sensor);
+    bool rejected = false;
 
-    // Sensor sanity guard: only consider a fresh, hardware-valid sample.
-    // Reject one whose implied rate of change is physically impossible
-    // (a failing thermistor returning garbage) and hold the last good
-    // T_now; latch the channel after TEMPCTRL_MAX_REJECTS consecutive
-    // rejects. rate_ref_ms advances on every fresh sample so the rate
-    // denominator stays ~one sample; T_now is the value reference.
+    if (!plausible) {
+        // No trustworthy sample this cycle. Drop the rate anchor: it is
+        // only valid across continuous good data, so recovery after an
+        // outage must re-seed (two-to-anchor) rather than judge a
+        // legitimate temperature drift against a stale reference, which
+        // would false-latch the channel on healthy data.
+        tempctrl->rate_ref_valid = false;
+        tempctrl->seed_pending = false;
+    } else {
+    // Sensor sanity guard: reject a plausible-looking sample whose implied
+    // rate of change is physically impossible (multiplexed-ADC crosstalk
+    // garbage) and hold the last good T_now; latch the channel after
+    // TEMPCTRL_MAX_REJECTS consecutive rejects. rate_ref_ms advances on
+    // every plausible sample so the rate denominator stays ~one sample;
+    // T_now is the value reference.
     //
     // Before the reference is anchored there is nothing to rate-check
     // against, so the first sample is only a candidate (held in T_now,
@@ -245,7 +275,9 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // fails confirmation is replaced and counts toward the same latch
     // ceiling, so a sensor that can never produce two consistent readings
     // still latches instead of seeding control from a lone transient.
-    if (fresh && !hw_error) {
+    // Candidate samples are reported as valid data — they passed the
+    // plausibility check — while control stays gated until the anchor
+    // confirms.
         float raw = temp_sensor_get_temp(&tempctrl->temp_sensor);
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         if (!tempctrl->rate_ref_valid) {
@@ -276,6 +308,7 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
             if (dt > 0.0f &&
                 fabsf(raw - tempctrl->T_now) / dt > TEMPCTRL_MAX_RATE_C_PER_S) {
                 // Reject: hold T_now, count toward the latch ceiling.
+                rejected = true;
                 if (tempctrl->sensor_rejects < TEMPCTRL_MAX_REJECTS) {
                     tempctrl->sensor_rejects++;
                 }
@@ -287,26 +320,35 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         tempctrl->rate_ref_ms = now_ms;
     }
 
-    // hw_error self-clears when the bus read recovers; the rate-sanity latch
-    // is sticky: once sensor_rejects reaches the ceiling, sensor_tripped stays
-    // set until the host acks with *_enable=true (see tempctrl_apply_enable).
-    // A later plausible sample resets sensor_rejects but must not re-enable a
-    // channel whose sensor just produced a burst of garbage.
+    // The rate-sanity latch is sticky: once sensor_rejects reaches the
+    // ceiling, sensor_tripped stays set until the host acks with
+    // *_enable=true (see tempctrl_apply_enable). A later plausible sample
+    // resets sensor_rejects but must not re-enable a channel whose sensor
+    // just produced a burst of garbage.
     if (tempctrl->sensor_rejects >= TEMPCTRL_MAX_REJECTS) {
         tempctrl->sensor_tripped = true;
     }
-    tempctrl->internally_disabled = hw_error || tempctrl->sensor_tripped;
+    // Data validity for this cycle only (feeds the per-channel status
+    // string and the null T_now/resistance reporting). A latched channel
+    // whose samples are plausible and rate-consistent again reports valid
+    // data — only drive stays gated.
+    tempctrl->data_invalid = !plausible || rejected;
 
     // rate_ref_valid gates control as well as the guard: until the reference
     // is anchored T_now is only a candidate, so the channel stays idle (the
     // not-allowed branch holds drive at 0) rather than driving on an
-    // unconfirmed reading. Costs at most one extra sample after enable.
-    if (tempctrl_drive_allowed(tempctrl) && tempctrl->rate_ref_valid) {
-        if (fresh) {
+    // unconfirmed reading. A plausibility-failed cycle also gates — the
+    // sensor may be gone entirely, so drive must not keep running on a
+    // frozen T_now.
+    if (tempctrl_drive_allowed(tempctrl) && tempctrl->rate_ref_valid
+            && plausible) {
+        if (!rejected) {
             tempctrl_pi_drive(tempctrl);
+            tempctrl_check_stall(tempctrl);
         }
-        tempctrl_check_stall(tempctrl);
-        /* else: drive unchanged, PWM hardware holds previous level */
+        /* Lone reject: the sample was discarded, so there is nothing new
+           to act on. Hold the previous drive (PWM hardware keeps it) and
+           the stall window; the next accepted sample resumes control. */
     } else {
         tempctrl_reset_controller_state(tempctrl);
         tempctrl_apply_drive(tempctrl);
@@ -331,6 +373,14 @@ void tempctrl_op(uint8_t app_id) {
             watchdog_tripped = true;
         }
     }
+
+    // Sampling, the rate guard, and the PI step run on the fixed
+    // TEMPCTRL_SAMPLE_MS timer; between ticks op is a no-op (beyond the
+    // watchdog check above) and the PWM hardware holds the drive level.
+    if (!time_reached(next_sensor_sample)) {
+        return;
+    }
+    next_sensor_sample = make_timeout_time_ms(TEMPCTRL_SAMPLE_MS);
 
     tempctrl_update_sensor_drive(&tempctrl_lna);
     tempctrl_update_sensor_drive(&tempctrl_load);
@@ -470,7 +520,7 @@ static void tempctrl_check_stall(TempControl *tempctrl) {
     if (delta * tempctrl->stall_check_drive < 0.0f) {
         tempctrl->runaway_strikes++;
         if (tempctrl->runaway_strikes >= TEMPCTRL_RUNAWAY_STRIKES) {
-            tempctrl->stall_tripped = true;
+            tempctrl->runaway_tripped = true;
             tempctrl->active = false;
             tempctrl->drive = 0.0;
             tempctrl_apply_drive(tempctrl);
@@ -497,6 +547,7 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
     // (`enabled=true` with a trip flag set).
     if (new_enabled) {
         tempctrl->stall_tripped = false;
+        tempctrl->runaway_tripped = false;
         tempctrl->stall_window_active = false;
         tempctrl->runaway_strikes = 0;
         tempctrl->sensor_rejects = 0;
@@ -510,7 +561,8 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
 
 static bool tempctrl_drive_allowed(const TempControl *tempctrl) {
     return tempctrl->enabled
-        && !tempctrl->internally_disabled
+        && !tempctrl->sensor_tripped
         && !tempctrl->stall_tripped
+        && !tempctrl->runaway_tripped
         && !watchdog_tripped;
 }

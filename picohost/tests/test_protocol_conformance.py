@@ -249,7 +249,8 @@ class TestTempCtrlProtocol:
         assert abs(emu.lna.drive) <= 0.3 + 1e-9
 
     def test_sensor_error_disables_drive(self):
-        """tempctrl.c: if internally_disabled, drive = 0 and integrator clears."""
+        """tempctrl.c: a plausibility-failed cycle gates drive to 0 and
+        clears the integrator (the sensor may be gone entirely)."""
         emu = TempCtrlEmulator()
         emu.server(
             {"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1}
@@ -339,11 +340,18 @@ class TestTempCtrlProtocol:
         assert 0.0 < emu.lna.drive < 0.2
 
     def test_sensor_error_status_field(self):
-        """tempctrl.c line 93-94: error status on sensor failure."""
+        """tempctrl.c: per-channel status reports data validity — a
+        plausibility failure errors the channel and nulls the derived
+        values while the raw voltage stays reported."""
         emu = TempCtrlEmulator()
+        emu.op()  # LOAD samples once so its data is valid
         emu.inject_sensor_error("LNA")
+        emu.op()
         status = emu.get_status()
         assert status["LNA_status"] == "error"
+        assert status["LNA_T_now"] is None
+        assert status["LNA_resistance"] is None
+        assert isinstance(status["LNA_voltage"], float)
         assert status["LOAD_status"] == "update"
 
 

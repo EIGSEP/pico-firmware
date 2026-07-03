@@ -24,6 +24,16 @@
 // PWM configuration
 #define PWM_WRAP            1000
 
+// Sensor sampling cadence. tempctrl_op() runs on every main-loop pass, but
+// sampling, the rate guard, and the PI step only execute when this timer
+// elapses. A fixed cadence is what calibrates the rate guard: its rejection
+// step is TEMPCTRL_MAX_RATE_C_PER_S * (TEMPCTRL_SAMPLE_MS/1000) and its
+// latch evidence is TEMPCTRL_MAX_REJECTS consecutive sample periods. With
+// unthrottled per-loop sampling those quantities depended on loop speed
+// (sub-ms idle, ms-scale during serial drains), making the guard bypassed
+// or hair-triggered depending on host traffic.
+#define TEMPCTRL_SAMPLE_MS         200
+
 // Stall detection: if the channel is actively driving (drive!=0) but T_now
 // fails to move by at least TEMPCTRL_STALL_MIN_DELTA over a
 // TEMPCTRL_STALL_WINDOW_MS window, the sensor or Peltier is stuck and we
@@ -48,14 +58,16 @@
 #define TEMPCTRL_RUNAWAY_STRIKES   2
 
 // Sensor sanity guard: a thermistor/ADC path can return electrically valid
-// but physically impossible values (for example, cycling 0/40/90 C while the
-// true temp is ~20 C). Reject any fresh sample whose implied rate of change
-// exceeds TEMPCTRL_MAX_RATE_C_PER_S (well above any real thermal slew — a
-// healthy half-power Peltier moves a few C/min, ~0.1 C/s); hold the last good
-// T_now instead. After
-// TEMPCTRL_MAX_REJECTS consecutive rejects the sensor is treated as failed
-// (internally_disabled), which gates drive and surfaces LNA/LOAD_status as
-// "error". A lone glitch is absorbed without disabling control.
+// but physically impossible values (multiplexed-ADC channel crosstalk is the
+// observed failure mode on this hardware). Reject any fresh sample whose
+// implied rate of change exceeds TEMPCTRL_MAX_RATE_C_PER_S (well above any
+// real thermal slew — a healthy half-power Peltier moves a few C/min,
+// ~0.1 C/s); hold the last good T_now instead. At the fixed 200 ms sample
+// cadence this rejects steps larger than ~1 C. After TEMPCTRL_MAX_REJECTS
+// consecutive rejects (~600 ms of sustained garbage) the channel latches
+// sensor_tripped, which gates drive until the host acks with *_enable=true.
+// A lone glitch is absorbed: one rejected sample reports one "error" status
+// cycle, then control continues.
 #define TEMPCTRL_MAX_RATE_C_PER_S  5.0f
 #define TEMPCTRL_MAX_REJECTS       3
 
@@ -81,7 +93,12 @@ typedef struct {
     // host distinguishes "asked off" from "blocked by trip" by reading
     // enabled together with the trip flags.
     bool enabled;
-    bool internally_disabled;  // sensor read error (auto-derived each cycle)
+    // Per-cycle data validity (NOT a latch): true when this sample cycle
+    // produced no trustworthy temperature — plausibility conversion failed
+    // (railed divider) or the rate guard rejected the sample. Drives the
+    // per-channel status string ("error") and the null T_now/resistance
+    // reporting; clears by itself on the next good sample.
+    bool data_invalid;
     // Asymmetric clamp: when false, the PI controller saturates at
     // [0, +clamp] instead of [-clamp, +clamp], forbidding cooling drive.
     // Default true preserves the original symmetric behavior. Deployments
@@ -90,10 +107,16 @@ typedef struct {
     // cooling-mode thermal-runaway failure mode.
     bool cooling_enabled;
     // Stall guard: sticky fault tripped when an active drive fails to move
-    // T_now, OR moves it the wrong direction for TEMPCTRL_RUNAWAY_STRIKES
-    // consecutive windows (the runaway signature). Cleared by an explicit
-    // *_enable=true command from the host (mirrors the watchdog ack pattern).
+    // T_now over a full window. Runaway guard: sticky fault tripped when
+    // T_now moves the wrong direction for TEMPCTRL_RUNAWAY_STRIKES
+    // consecutive windows (mis-wired Peltier, lost hot-side dissipation,
+    // swapped sensors) — kept as a separate flag because the field
+    // diagnoses differ: a stall is "drive did nothing" (safe to retry), a
+    // runaway is "drive made it worse" (check wiring before re-enabling).
+    // Both cleared by an explicit *_enable=true command from the host
+    // (mirrors the watchdog ack pattern).
     bool stall_tripped;
+    bool runaway_tripped;
     bool stall_window_active;
     float stall_check_T;
     float stall_check_drive;
@@ -116,8 +139,13 @@ typedef struct {
     // consecutive samples agree within the rate budget. seed_pending marks that
     // a first (candidate) sample has been taken and is awaiting confirmation;
     // the candidate value lives in T_now and its timestamp in rate_ref_ms (both
-    // unused for control while unanchored). This stops a single transient (e.g.
-    // the 85 C power-on default after a brownout) from poisoning the anchor.
+    // unused for control while unanchored). Rationale: the guard judges every
+    // future sample against its anchor, so a lone garbage sample must never
+    // BECOME the anchor — it would make healthy samples look like impossible
+    // jumps and false-latch the channel. The anchor is also only valid across
+    // continuous good data: any plausibility-failed cycle drops it back to
+    // unseeded, so recovery after a sensor outage re-anchors instead of
+    // judging a legitimate temperature drift against a stale reference.
     bool rate_ref_valid;
     bool seed_pending;
     uint32_t rate_ref_ms;
