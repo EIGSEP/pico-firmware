@@ -92,6 +92,11 @@ bool temp_sensor_read(TempSensor *sensor) {
     }
 
     float voltage = adc_read_avg_voltage(sensor->adc_input);
+    // Store the measured voltage unconditionally: when the plausibility
+    // conversion below fails, the railed/implausible voltage is exactly
+    // the field diagnostic (≈supply → open thermistor, ≈0 → short), so
+    // it must reach status output instead of freezing at last-good.
+    sensor->voltage = voltage;
     float resistance = 0.0f;
     float temperature = 0.0f;
     if (!temp_sensor_voltage_to_temperature(voltage, &resistance, &temperature)) {
@@ -99,7 +104,6 @@ bool temp_sensor_read(TempSensor *sensor) {
         return false;
     }
 
-    sensor->voltage = voltage;
     sensor->resistance = resistance;
     sensor->temperature = temperature;
     sensor->last_sample_time = to_ms_since_boot(get_absolute_time());

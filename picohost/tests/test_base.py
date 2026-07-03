@@ -1016,25 +1016,30 @@ class TestPicoPeltierRedisHandler:
         "LNA_drive_level": 0.42,
         "LNA_enabled": True,
         "LNA_active": True,
-        "LNA_int_disabled": False,
+        "LNA_sensor_tripped": False,
         "LNA_stall_tripped": False,
+        "LNA_runaway_tripped": False,
         "LNA_cooling_enabled": True,
         "LNA_hysteresis": 0.5,
         "LNA_clamp": 0.8,
         "LNA_Kp": 0.2,
         "LNA_Ki": 0.01,
         "LNA_integral": 1.25,
+        # LOAD models an invalid-data cycle (railed divider): status error,
+        # null T_now/resistance, voltage live at the rail for open-vs-short
+        # diagnosis. Trip flags stay False — data validity is not a latch.
         "LOAD_status": "error",
         "LOAD_T_now": None,
-        "LOAD_voltage": 0.0,
-        "LOAD_resistance": 0.0,
+        "LOAD_voltage": 3.3,
+        "LOAD_resistance": None,
         "LOAD_timestamp": 750.0,
         "LOAD_T_target": 25.0,
         "LOAD_drive_level": 0.0,
         "LOAD_enabled": True,
         "LOAD_active": False,
-        "LOAD_int_disabled": True,
+        "LOAD_sensor_tripped": False,
         "LOAD_stall_tripped": False,
+        "LOAD_runaway_tripped": False,
         "LOAD_cooling_enabled": False,
         "LOAD_hysteresis": 0.5,
         "LOAD_clamp": 0.8,
@@ -1057,8 +1062,9 @@ class TestPicoPeltierRedisHandler:
         "drive_level",
         "enabled",
         "active",
-        "int_disabled",
+        "sensor_tripped",
         "stall_tripped",
+        "runaway_tripped",
         "cooling_enabled",
         "hysteresis",
         "clamp",
@@ -1103,10 +1109,13 @@ class TestPicoPeltierRedisHandler:
             assert lna["resistance"] == pytest.approx(37200.0)
             assert lna["drive_level"] == pytest.approx(0.42)
             assert lna["active"] is True
-            assert lna["int_disabled"] is False
+            assert lna["sensor_tripped"] is False
+            assert lna["runaway_tripped"] is False
             assert load["T_now"] is None
+            assert load["resistance"] is None
+            assert load["voltage"] == pytest.approx(3.3)
             assert load["active"] is False
-            assert load["int_disabled"] is True
+            assert load["sensor_tripped"] is False
         finally:
             peltier.disconnect()
 

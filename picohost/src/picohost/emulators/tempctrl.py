@@ -4,14 +4,15 @@ import time
 from .base import PicoEmulator, _safe_int
 
 
-# Mirror the firmware's PI cadence. The ADC samples on every read, so the
-# firmware decodes a fresh sample and runs tempctrl_pi_drive on every op tick
-# (op() runs every ~50 ms); there is no sampling-interval gate.
-# dt argument to tempctrl_pi_drive — matches the firmware's
-# (now_ms - last_sample_ms) elapsed time between op ticks.
-DT_PER_SAMPLE_S = 0.05
-# Thermal effect per op tick at unit drive. The drive value set by PI is
-# held between op ticks (mirrors continuous PWM), so the per-op rate is
+# Mirror the firmware's fixed sampling cadence: sampling, the rate guard,
+# and the PI step run on the TEMPCTRL_SAMPLE_MS = 200 ms timer inside
+# tempctrl_op() (between timer ticks op is a no-op and PWM holds the drive).
+# One emulator op() call models one sample tick. dt argument to
+# tempctrl_pi_drive matches the firmware's (now_ms - last_sample_ms)
+# elapsed time between sample ticks.
+DT_PER_SAMPLE_S = 0.2
+# Thermal effect per sample tick at unit drive. The drive value set by PI
+# is held between ticks (mirrors continuous PWM), so the per-tick rate is
 # what determines convergence speed.
 THERMAL_DRIFT_PER_OP = 0.05
 
@@ -85,14 +86,23 @@ class TempControlState:
         self.hysteresis = 0.5
         self.enabled = False
         self.active = False
-        self.internally_disabled = False
+        # Per-cycle data validity (NOT a latch, mirrors data_invalid in
+        # tempctrl.h): True when the most recent sample cycle produced no
+        # trustworthy temperature — plausibility failure or rate-guard
+        # reject. Drives the per-channel status string and the null
+        # T_now/resistance reporting. True at boot: no sample taken yet.
+        self.data_invalid = True
         # Asymmetric clamp guard (see tempctrl.h). True preserves the
         # original symmetric drive range; False forbids drive<0 so the
         # PI loop saturates at [0, +clamp] instead of [-clamp, +clamp].
         self.cooling_enabled = True
         self.timestamp = 0.0
         # Stall guard mirror (see tempctrl_check_stall in tempctrl.c).
+        # stall_tripped = drive did nothing for a full window;
+        # runaway_tripped = T moved against the drive for consecutive
+        # windows. Separate flags because the field diagnoses differ.
         self.stall_tripped = False
+        self.runaway_tripped = False
         self.stall_window_active = False
         self.stall_check_T = 0.0
         self.stall_check_drive = 0.0
@@ -100,10 +110,11 @@ class TempControlState:
         # Test hook: when True, skip the thermal-drift update even with the
         # drive engaged, so the stall guard can be exercised deterministically.
         self.thermal_frozen = False
-        # Mirrors temp_sensor_has_error()'s underlying state. op() re-reads
-        # this into internally_disabled every tick, so a recovered read fault
-        # self-clears (matches firmware tempctrl_update_sensor_drive). The
-        # rate-sanity latch (sensor_tripped) is sticky by contrast.
+        # Mirrors temp_sensor_has_error()'s underlying state (plausibility
+        # failure: railed divider). Self-clears into data_invalid on every
+        # tick, so a recovered read fault recovers status (matches firmware
+        # tempctrl_update_sensor_drive). The rate-sanity latch
+        # (sensor_tripped) is sticky by contrast.
         self._sensor_error = False
         # Runaway guard mirror (see tempctrl_check_stall in tempctrl.c):
         # consecutive wrong-direction windows.
@@ -135,9 +146,10 @@ class TempControlState:
         Each is consumed on a subsequent op tick and run through
         the rate-of-change guard, mirroring a thermistor/ADC path that
         returns garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
-        rejected (``T_now`` holds, ``sensor_rejects`` increments); after
-        ``MAX_REJECTS`` consecutive rejects the channel latches
-        ``internally_disabled``.
+        rejected (``T_now`` holds, ``sensor_rejects`` increments, the cycle
+        reports ``data_invalid``); after ``MAX_REJECTS`` consecutive rejects
+        the channel latches the sticky ``sensor_tripped``, which gates drive
+        until the host acks with ``*_enable=true``.
         """
         self._glitch_queue.extend([float(value)] * count)
 
@@ -255,10 +267,11 @@ class TempCtrlEmulator(PicoEmulator):
                 # like it does on firmware (instead of being truthy).
                 new_enabled = bool(_safe_int(cmd[key], 0))
                 # *_enable=true is the host's ack of sticky trips: it clears
-                # this channel's stall flag and the app-wide watchdog flag.
+                # this channel's trip flags and the app-wide watchdog flag.
                 # `enabled` is host intent only; firmware never mutates it.
                 if new_enabled:
                     tc.stall_tripped = False
+                    tc.runaway_tripped = False
                     tc.stall_window_active = False
                     tc.runaway_strikes = 0
                     tc.sensor_rejects = 0
@@ -311,44 +324,59 @@ class TempCtrlEmulator(PicoEmulator):
             self.watchdog_timeout_ms = 0 if val < 0 else val
 
     def inject_sensor_error(self, channel, error=True):
-        """Simulate a sensor failure on channel "LNA" or "LOAD".
+        """Simulate a plausibility failure on channel "LNA" or "LOAD".
 
-        Sets both the underlying sensor-error state and the current
-        ``internally_disabled`` flag so callers that introspect status
-        without first running op() see the change immediately. op() then
-        keeps ``internally_disabled`` in sync with the sensor state on
-        every tick (mirroring firmware's unconditional re-read).
+        Models a railed divider (open/short thermistor): the conversion
+        fails, so the cycle reports invalid data. Sets both the underlying
+        sensor-error state and the current ``data_invalid`` flag so callers
+        that introspect status without first running op() see the change
+        immediately. op() then keeps ``data_invalid`` in sync with the
+        sensor state on every tick (mirroring firmware's per-cycle
+        recompute), so a recovered fault self-clears.
         """
         tc = self.lna if channel == "LNA" else self.load
         tc._sensor_error = error
-        tc.internally_disabled = error
+        tc.data_invalid = error
 
     def _drive_allowed(self, tc):
         return (
             tc.enabled
-            and not tc.internally_disabled
+            and not tc.sensor_tripped
             and not tc.stall_tripped
+            and not tc.runaway_tripped
             and not self.watchdog_tripped
         )
 
     def _read_sensor(self, tc):
         """Mirror the sensor read + rate-of-change sanity guard in
-        tempctrl_update_sensor_drive. Returns True when a sample was decoded
-        and False on a read error (mirrors temp_sensor_read()). ``raw`` is
-        the bogus queued reading when a glitch is pending, else the
-        thermal-model ``T_now`` (a normal reading, which equals the current
-        ``T_now`` and so always passes). dt is one op tick
-        (``DT_PER_SAMPLE_S``) because the firmware advances its rate
-        reference on every fresh sample.
+        tempctrl_update_sensor_drive. Returns ``(plausible, rejected)``:
+        ``plausible`` is False when the voltage->temperature conversion
+        failed (mirrors temp_sensor_read()); ``rejected`` is True when an
+        anchored rate check discarded the sample. ``raw`` is the bogus
+        queued reading when a glitch is pending, else the thermal-model
+        ``T_now`` (a normal reading, which equals the current ``T_now`` and
+        so always passes). dt is one sample tick (``DT_PER_SAMPLE_S``)
+        because the firmware advances its rate reference on every plausible
+        sample.
 
         Two-to-anchor: until rate_ref_valid is set, the first sample is only a
         candidate (held in T_now) and the reference anchors only when a second
         sample confirms it within the rate budget. An unconfirmed candidate is
         replaced and counts toward the latch, so a sensor that never produces
-        two consistent readings still latches.
+        two consistent readings still latches. A plausibility-failed cycle
+        drops the anchor entirely (mirrors firmware): it is only valid across
+        continuous good data, so recovery after an outage re-seeds instead of
+        judging a legitimate drift against a stale reference.
         """
         if tc._sensor_error:
-            return False
+            # Railed divider: the measured voltage is still stored (open
+            # thermistor pulls the node to supply), temperature/resistance
+            # hold last-good — mirrors temp_sensor_read() storing voltage
+            # before the conversion check.
+            tc.voltage = THERMISTOR_SUPPLY_VOLTS
+            tc.rate_ref_valid = False
+            tc.seed_pending = False
+            return False, False
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
         _set_thermistor_diagnostics(tc, raw)
         if not tc.rate_ref_valid:
@@ -357,7 +385,7 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.T_now = raw
                 tc.seed_pending = True
                 tc.sensor_rejects = 0
-                return True
+                return True, False
             rate = abs(raw - tc.T_now) / DT_PER_SAMPLE_S
             if rate > MAX_RATE_C_PER_S:
                 # Candidate unconfirmed: replace it, count toward the latch.
@@ -370,44 +398,47 @@ class TempCtrlEmulator(PicoEmulator):
                 tc.rate_ref_valid = True
                 tc.seed_pending = False
                 tc.sensor_rejects = 0
-            return True
+            return True, False
         rate = abs(raw - tc.T_now) / DT_PER_SAMPLE_S
         if rate > MAX_RATE_C_PER_S:
             # Reject: hold the last good T_now, count toward the latch.
             if tc.sensor_rejects < MAX_REJECTS:
                 tc.sensor_rejects += 1
-        else:
-            tc.T_now = raw
-            tc.sensor_rejects = 0
-        return True
+            return True, True
+        tc.T_now = raw
+        tc.sensor_rejects = 0
+        return True, False
 
     def _update_channel(self, tc):
-        # The ADC samples on every read, so every op tick decodes a fresh
-        # sample (mirrors firmware: read + rate guard, then control on the
-        # filtered T_now). `fresh` is the read's success, false only on a
-        # sensor read error — mirroring temp_sensor_read() returning false.
-        fresh = self._read_sensor(tc)
-        if fresh:
+        # One sample tick (mirrors firmware: read + rate guard on the fixed
+        # TEMPCTRL_SAMPLE_MS timer, then control on the filtered T_now).
+        plausible, rejected = self._read_sensor(tc)
+        if plausible:
             # Mirror firmware: tempctrl_status sends
             # temp_sensor_get_sample_time(), updated on each decode.
             tc.timestamp = self._ms_since_boot()
 
-        # internally_disabled is the hardware read error OR the latched
-        # sensor-sanity trip. The read error self-clears when the sensor
-        # recovers; the rate-sanity latch is sticky once sensor_rejects hits
-        # MAX_REJECTS and only the enable ack clears it (matches firmware
+        # The rate-sanity latch is sticky once sensor_rejects hits
+        # MAX_REJECTS; only the enable ack clears it (matches firmware
         # tempctrl_update_sensor_drive / tempctrl_apply_enable).
         if tc.sensor_rejects >= MAX_REJECTS:
             tc.sensor_tripped = True
-        tc.internally_disabled = tc._sensor_error or tc.sensor_tripped
+        # Data validity for this cycle only: feeds status and the null
+        # T_now/resistance reporting. A latched channel with plausible,
+        # rate-consistent samples reports valid data — only drive gates.
+        tc.data_invalid = not plausible or rejected
 
         # rate_ref_valid gates control too: until the reference anchors T_now
         # is only a candidate, so the channel stays idle (drive held at 0)
-        # rather than driving on an unconfirmed reading (matches firmware).
-        if self._drive_allowed(tc) and tc.rate_ref_valid:
-            if fresh:
+        # rather than driving on an unconfirmed reading. A
+        # plausibility-failed cycle also gates — the sensor may be gone
+        # entirely (matches firmware).
+        if self._drive_allowed(tc) and tc.rate_ref_valid and plausible:
+            if not rejected:
                 tempctrl_pi_drive(tc)
-            self._check_stall(tc)
+                self._check_stall(tc)
+            # Lone reject: nothing new to act on — hold the previous drive
+            # (PWM keeps it) and the stall window (matches firmware).
         else:
             _reset_controller_state(tc)
             tc.stall_window_active = False
@@ -451,11 +482,13 @@ class TempCtrlEmulator(PicoEmulator):
             return
         # Moved the wrong direction for the drive → runaway signature.
         # Trip only after RUNAWAY_STRIKES consecutive wrong-direction
-        # windows (tolerates the startup/soak transient).
+        # windows (tolerates the startup/soak transient). Separate flag
+        # from stall_tripped: "drive made it worse" is a different field
+        # diagnosis than "drive did nothing".
         if delta * tc.stall_check_drive < 0.0:
             tc.runaway_strikes += 1
             if tc.runaway_strikes >= RUNAWAY_STRIKES:
-                tc.stall_tripped = True
+                tc.runaway_tripped = True
                 tc.active = False
                 tc.drive = 0.0
                 tc.stall_window_active = False
@@ -481,24 +514,32 @@ class TempCtrlEmulator(PicoEmulator):
         self._update_channel(self.load)
 
     def get_status(self):
-        lna_status = "error" if self.lna.internally_disabled else "update"
-        load_status = "error" if self.load.internally_disabled else "update"
+        # Per-channel status reports DATA VALIDITY ONLY; the sticky control
+        # latches (sensor/stall/runaway_tripped) gate drive but never set
+        # status. Invalid cycles report T_now/resistance as None (the
+        # firmware sends NaN KV_FLOATs, which cJSON prints as JSON null)
+        # while voltage stays live for open-vs-short diagnosis.
+        lna_status = "error" if self.lna.data_invalid else "update"
+        load_status = "error" if self.load.data_invalid else "update"
         return {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
             "watchdog_tripped": self.watchdog_tripped,
             "watchdog_timeout_ms": self.watchdog_timeout_ms,
             "LNA_status": lna_status,
-            "LNA_T_now": self.lna.T_now,
+            "LNA_T_now": None if self.lna.data_invalid else self.lna.T_now,
             "LNA_voltage": self.lna.voltage,
-            "LNA_resistance": self.lna.resistance,
+            "LNA_resistance": (
+                None if self.lna.data_invalid else self.lna.resistance
+            ),
             "LNA_timestamp": self.lna.timestamp,
             "LNA_T_target": self.lna.T_target,
             "LNA_drive_level": self.lna.drive,
             "LNA_enabled": self.lna.enabled,
             "LNA_active": self.lna.active,
-            "LNA_int_disabled": self.lna.internally_disabled,
+            "LNA_sensor_tripped": self.lna.sensor_tripped,
             "LNA_stall_tripped": self.lna.stall_tripped,
+            "LNA_runaway_tripped": self.lna.runaway_tripped,
             "LNA_cooling_enabled": self.lna.cooling_enabled,
             "LNA_hysteresis": self.lna.hysteresis,
             "LNA_clamp": self.lna.clamp,
@@ -506,16 +547,19 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_Ki": self.lna.Ki,
             "LNA_integral": self.lna.integral,
             "LOAD_status": load_status,
-            "LOAD_T_now": self.load.T_now,
+            "LOAD_T_now": None if self.load.data_invalid else self.load.T_now,
             "LOAD_voltage": self.load.voltage,
-            "LOAD_resistance": self.load.resistance,
+            "LOAD_resistance": (
+                None if self.load.data_invalid else self.load.resistance
+            ),
             "LOAD_timestamp": self.load.timestamp,
             "LOAD_T_target": self.load.T_target,
             "LOAD_drive_level": self.load.drive,
             "LOAD_enabled": self.load.enabled,
             "LOAD_active": self.load.active,
-            "LOAD_int_disabled": self.load.internally_disabled,
+            "LOAD_sensor_tripped": self.load.sensor_tripped,
             "LOAD_stall_tripped": self.load.stall_tripped,
+            "LOAD_runaway_tripped": self.load.runaway_tripped,
             "LOAD_cooling_enabled": self.load.cooling_enabled,
             "LOAD_hysteresis": self.load.hysteresis,
             "LOAD_clamp": self.load.clamp,

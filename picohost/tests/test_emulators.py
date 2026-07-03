@@ -18,10 +18,10 @@ from picohost.emulators import (
 
 
 def _run_to_pi_tick(emu):
-    """Advance the emulator by one PI tick on both channels.
+    """Advance the emulator by one sample tick on both channels.
 
-    The ADC samples on every read, so the firmware decodes a fresh sample
-    and runs tempctrl_pi_drive on every op tick — one op() is one PI tick.
+    Firmware samples, rate-checks, and runs tempctrl_pi_drive on the fixed
+    TEMPCTRL_SAMPLE_MS timer — one emulator op() models one sample tick.
     """
     emu.op()
 
@@ -228,6 +228,14 @@ class TestTempCtrlEmulator:
 
     def test_status_fields(self):
         emu = TempCtrlEmulator()
+        # Before the first sample tick both channels report invalid data
+        # (mirrors firmware: data_invalid is true at boot, and op() runs
+        # before the first status message can fire).
+        boot = emu.get_status()
+        assert boot["LNA_status"] == "error"
+        assert boot["LNA_T_now"] is None
+        assert boot["LNA_resistance"] is None
+        emu.op()
         status = emu.get_status()
         expected_keys = {
             "sensor_name",
@@ -243,8 +251,9 @@ class TestTempCtrlEmulator:
             "LNA_drive_level",
             "LNA_enabled",
             "LNA_active",
-            "LNA_int_disabled",
+            "LNA_sensor_tripped",
             "LNA_stall_tripped",
+            "LNA_runaway_tripped",
             "LNA_cooling_enabled",
             "LNA_hysteresis",
             "LNA_clamp",
@@ -260,8 +269,9 @@ class TestTempCtrlEmulator:
             "LOAD_drive_level",
             "LOAD_enabled",
             "LOAD_active",
-            "LOAD_int_disabled",
+            "LOAD_sensor_tripped",
             "LOAD_stall_tripped",
+            "LOAD_runaway_tripped",
             "LOAD_cooling_enabled",
             "LOAD_hysteresis",
             "LOAD_clamp",
@@ -270,6 +280,7 @@ class TestTempCtrlEmulator:
             "LOAD_integral",
         }
         assert set(status.keys()) == expected_keys
+        assert status["LNA_status"] == "update"
         assert 0.0 < status["LNA_voltage"] < 3.3
         assert 0.0 < status["LOAD_voltage"] < 3.3
         assert status["LNA_resistance"] > 0.0
@@ -675,9 +686,11 @@ class TestTempCtrlCoolingGuard:
 
 class TestTempCtrlRunawayGuard:
     """Driving one direction while T_now moves the opposite direction trips
-    the channel (via stall_tripped) after RUNAWAY_STRIKES consecutive
-    wrong-direction windows — the thermal-runaway signature the no-movement
-    stall guard cannot catch (the temperature *is* moving).
+    the channel (via runaway_tripped — a separate flag from stall_tripped,
+    because "drive made it worse" is a different field diagnosis than
+    "drive did nothing") after RUNAWAY_STRIKES consecutive wrong-direction
+    windows — the thermal-runaway signature the no-movement stall guard
+    cannot catch (the temperature *is* moving).
     """
 
     def _force_window_elapsed(self, tc):
@@ -709,11 +722,13 @@ class TestTempCtrlRunawayGuard:
         # All but the last wrong-direction window only accumulate strikes.
         for i in range(mod.RUNAWAY_STRIKES - 1):
             self._wrong_way_window(emu)
-            assert emu.lna.stall_tripped is False
+            assert emu.lna.runaway_tripped is False
             assert emu.lna.runaway_strikes == i + 1
-        # The strike that reaches the threshold trips the channel.
+        # The strike that reaches the threshold trips the channel — on the
+        # runaway flag; the no-movement stall flag stays clear.
         self._wrong_way_window(emu)
-        assert emu.lna.stall_tripped is True
+        assert emu.lna.runaway_tripped is True
+        assert emu.lna.stall_tripped is False
         assert emu.lna.drive == 0.0
         # Host intent preserved; trip flag is the runtime gate.
         assert emu.lna.enabled is True
@@ -728,7 +743,7 @@ class TestTempCtrlRunawayGuard:
         emu.lna.T_now -= 1.0
         emu.op()
         assert emu.lna.runaway_strikes == 0
-        assert emu.lna.stall_tripped is False
+        assert emu.lna.runaway_tripped is False
 
     def test_runaway_trips_when_heating_drive_cools(self):
         """Symmetric: heating drive (>0) while T_now falls also trips."""
@@ -744,7 +759,8 @@ class TestTempCtrlRunawayGuard:
             self._force_window_elapsed(emu.lna)
             emu.lna.T_now -= 1.0  # heating drive but cooling → wrong way
             emu.op()
-        assert emu.lna.stall_tripped is True
+        assert emu.lna.runaway_tripped is True
+        assert emu.lna.stall_tripped is False
         assert emu.lna.drive == 0.0
 
     def test_target_crossing_does_not_count_wrong_direction(self):
@@ -756,7 +772,7 @@ class TestTempCtrlRunawayGuard:
         _run_to_pi_tick(emu)
         assert emu.lna.drive > 0.0
         assert emu.lna.runaway_strikes == 0
-        assert emu.lna.stall_tripped is False
+        assert emu.lna.runaway_tripped is False
 
     def test_enable_true_clears_runaway_trip(self):
         import picohost.emulators.tempctrl as mod
@@ -765,16 +781,18 @@ class TestTempCtrlRunawayGuard:
         self._setup_cooling(emu)
         for _ in range(mod.RUNAWAY_STRIKES):
             self._wrong_way_window(emu)
-        assert emu.lna.stall_tripped is True
+        assert emu.lna.runaway_tripped is True
         emu.server({"LNA_enable": True})
-        assert emu.lna.stall_tripped is False
+        assert emu.lna.runaway_tripped is False
         assert emu.lna.runaway_strikes == 0
 
 
 class TestTempCtrlSensorSanity:
     """A fresh sample implying a physically impossible rate of change is
-    rejected (T_now holds); MAX_REJECTS consecutive rejects latch the
-    channel as a sensor fault (internally_disabled → status "error").
+    rejected (T_now holds, the cycle reports invalid data); MAX_REJECTS
+    consecutive rejects latch the sticky sensor_tripped, which gates drive
+    until the host acks. Recovered data reports "update" again — the latch
+    never masks a healthy stream (the corr record keeps the readings).
     """
 
     def _seed(self, emu):
@@ -795,9 +813,19 @@ class TestTempCtrlSensorSanity:
         emu.lna.inject_sensor_glitch(90.0)
         _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == 1
-        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_tripped is False
+        # The rejected cycle reports invalid data: no trustworthy sample
+        # was produced, so status errors and the values null for one cycle.
+        assert emu.lna.data_invalid is True
+        status = emu.get_status()
+        assert status["LNA_status"] == "error"
+        assert status["LNA_T_now"] is None
         # Bogus value was not adopted — T_now holds the last good reading.
         assert emu.lna.T_now == 25.0
+        # The next good sample clears it without any host action.
+        _run_to_pi_tick(emu)
+        assert emu.lna.data_invalid is False
+        assert emu.get_status()["LNA_status"] == "update"
 
     def test_consecutive_glitches_latch_sensor_fault(self):
         import picohost.emulators.tempctrl as mod
@@ -808,8 +836,10 @@ class TestTempCtrlSensorSanity:
         for _ in range(mod.MAX_REJECTS):
             _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == mod.MAX_REJECTS
-        assert emu.lna.internally_disabled is True
+        assert emu.lna.sensor_tripped is True
+        # The latching cycle itself was a reject → invalid data this cycle.
         assert emu.get_status()["LNA_status"] == "error"
+        assert emu.get_status()["LNA_T_now"] is None
         # Never adopted a garbage value while latching.
         assert emu.lna.T_now == 25.0
 
@@ -820,12 +850,12 @@ class TestTempCtrlSensorSanity:
         _run_to_pi_tick(emu)
         _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == 2
-        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_tripped is False
         # A plausible reading (empty glitch queue → reads true T_now) clears
         # the reject counter.
         _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == 0
-        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_tripped is False
 
     def test_enable_true_clears_sensor_rejects_and_rate_reference(self):
         import picohost.emulators.tempctrl as mod
@@ -856,17 +886,24 @@ class TestTempCtrlSensorSanity:
         emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS)
         for _ in range(mod.MAX_REJECTS):
             _run_to_pi_tick(emu)
-        assert emu.lna.internally_disabled is True
+        assert emu.lna.sensor_tripped is True
         # Glitch queue is now empty, so subsequent fresh ticks read the true
-        # T_now and pass the rate guard — yet the latch must hold.
+        # T_now and pass the rate guard — the latch must hold, but the DATA
+        # recovers: status returns to "update" with real values while only
+        # drive stays gated. This is the redesign's headline behavior: a
+        # latched-but-healthy channel keeps publishing science data.
         for _ in range(3):
             _run_to_pi_tick(emu)
-        assert emu.lna.internally_disabled is True
-        assert emu.get_status()["LNA_status"] == "error"
+        assert emu.lna.sensor_tripped is True
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(25.0)
+        assert status["LNA_sensor_tripped"] is True
+        assert emu.lna.drive == 0.0
         # Only the host ack clears the latch and re-seeds the reference.
         emu.server({"LNA_enable": True})
         _run_to_pi_tick(emu)
-        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_tripped is False
 
     def test_seed_requires_two_samples(self):
         emu = TempCtrlEmulator()
@@ -895,7 +932,7 @@ class TestTempCtrlSensorSanity:
         for _ in range(3):
             _run_to_pi_tick(emu)
         assert emu.lna.rate_ref_valid is True
-        assert emu.lna.internally_disabled is False
+        assert emu.lna.sensor_tripped is False
         assert emu.lna.sensor_rejects == 0
         assert emu.lna.T_now == pytest.approx(25.0)
 
@@ -913,8 +950,11 @@ class TestTempCtrlSensorSanity:
             _run_to_pi_tick(emu)
         assert emu.lna.rate_ref_valid is False
         assert emu.lna.sensor_rejects == mod.MAX_REJECTS
-        assert emu.lna.internally_disabled is True
-        assert emu.get_status()["LNA_status"] == "error"
+        assert emu.lna.sensor_tripped is True
+        # Unconfirmed candidates passed the plausibility check, so the data
+        # stream stays "update" — the sticky latch is the fault signal here.
+        assert emu.get_status()["LNA_sensor_tripped"] is True
+        assert emu.get_status()["LNA_status"] == "update"
 
     def test_no_drive_until_anchored(self):
         emu = TempCtrlEmulator()
@@ -931,6 +971,29 @@ class TestTempCtrlSensorSanity:
         _run_to_pi_tick(emu)
         assert emu.lna.rate_ref_valid is True
         assert emu.lna.drive != 0.0
+
+    def test_outage_recovery_reseeds_anchor(self):
+        """A plausibility-failed stretch drops the rate anchor: recovery
+        re-seeds (two-to-anchor) instead of judging the post-outage reading
+        against a stale reference. A legitimate temperature drift across a
+        sensor outage must not rack up rejects and false-latch the channel.
+        """
+        emu = TempCtrlEmulator()
+        self._seed(emu)  # anchored at 25.0
+        emu.inject_sensor_error("LNA")
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is False
+        # The enclosure drifts far beyond the per-sample rate budget while
+        # the sensor is out; the recovered sensor reads the new temperature.
+        emu.lna.T_now = 45.0
+        emu.inject_sensor_error("LNA", error=False)
+        _run_to_pi_tick(emu)  # candidate at 45.0
+        _run_to_pi_tick(emu)  # confirmation anchors — no rejects
+        assert emu.lna.rate_ref_valid is True
+        assert emu.lna.sensor_rejects == 0
+        assert emu.lna.sensor_tripped is False
+        assert emu.get_status()["LNA_status"] == "update"
+        assert emu.get_status()["LNA_T_now"] == pytest.approx(45.0)
 
 
 class TestImuEmulator:
@@ -1226,7 +1289,8 @@ class TestTempCtrlStatusTypes:
             assert isinstance(status[f"{prefix}_drive_level"], float)
             assert isinstance(status[f"{prefix}_enabled"], bool)
             assert isinstance(status[f"{prefix}_active"], bool)
-            assert isinstance(status[f"{prefix}_int_disabled"], bool)
+            assert isinstance(status[f"{prefix}_sensor_tripped"], bool)
+            assert isinstance(status[f"{prefix}_runaway_tripped"], bool)
             assert isinstance(status[f"{prefix}_hysteresis"], float)
             assert isinstance(status[f"{prefix}_clamp"], float)
 

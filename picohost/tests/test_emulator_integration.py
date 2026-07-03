@@ -47,8 +47,9 @@ TEMPCTRL_FIELDS = {
     "LNA_drive_level",
     "LNA_enabled",
     "LNA_active",
-    "LNA_int_disabled",
+    "LNA_sensor_tripped",
     "LNA_stall_tripped",
+    "LNA_runaway_tripped",
     "LNA_cooling_enabled",
     "LNA_hysteresis",
     "LNA_clamp",
@@ -64,8 +65,9 @@ TEMPCTRL_FIELDS = {
     "LOAD_drive_level",
     "LOAD_enabled",
     "LOAD_active",
-    "LOAD_int_disabled",
+    "LOAD_sensor_tripped",
     "LOAD_stall_tripped",
+    "LOAD_runaway_tripped",
     "LOAD_cooling_enabled",
     "LOAD_hysteresis",
     "LOAD_clamp",
@@ -314,10 +316,12 @@ class TestPeltierIntegrationTypes:
         for key in (
             "LNA_enabled",
             "LNA_active",
-            "LNA_int_disabled",
+            "LNA_sensor_tripped",
+            "LNA_runaway_tripped",
             "LOAD_enabled",
             "LOAD_active",
-            "LOAD_int_disabled",
+            "LOAD_sensor_tripped",
+            "LOAD_runaway_tripped",
         ):
             assert isinstance(s[key], bool), (
                 f"{key} should be bool, got {type(s[key])}"
