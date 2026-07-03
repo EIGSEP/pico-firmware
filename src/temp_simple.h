@@ -18,11 +18,16 @@
     ((THERMISTOR_FIXED_OHMS * THERMISTOR_BOARD_PULLUP_OHMS) / \
      (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS))
 
-// Steinhart-Hart coefficients for resistance in ohms:
-// 95339.0 ohms at 0 C, 16212.0 ohms at 40 C, 5387.4 ohms at 70 C.
-#define THERMISTOR_SH_A               9.2463455e-4f
-#define THERMISTOR_SH_B               2.2246310e-4f
-#define THERMISTOR_SH_C               1.2326590e-7f
+// Vishay NTCLE100E3103 NTC, 10 kOhm at 25 C, B25/85 = 3977 K.
+// Extended Steinhart-Hart fit from the datasheet (document 29049,
+// "Mat A" coefficient row), specified for -40..+125 C:
+//   1/T = A1 + B1 ln(R/Rref) + C1 ln^2(R/Rref) + D1 ln^3(R/Rref)
+// with T in kelvin and Rref the 25 C resistance.
+#define THERMISTOR_REF_OHMS           10000.0f
+#define THERMISTOR_SH_A1              3.354016e-3f
+#define THERMISTOR_SH_B1              2.569850e-4f
+#define THERMISTOR_SH_C1              2.620131e-6f
+#define THERMISTOR_SH_D1              6.383091e-8f
 
 // Shared ADC sampling helpers (also used by rfswitch for its PCB
 // thermistors, which report raw volts — conversion happens host-side).

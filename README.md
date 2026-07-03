@@ -164,7 +164,7 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
-Two independent Peltier control channels, each with an ADC thermistor divider and an H-bridge motor driver. The divider is wired `3.3V -> 10.68k fixed resistor -> ADC pin -> thermistor -> GND`, with the carrier board adding a 4.7k pull-up from each ADC node to 3.3V.
+Two independent Peltier control channels, each with an ADC thermistor divider and an H-bridge motor driver. The divider is wired `3.3V -> 10.68k fixed resistor -> ADC pin -> thermistor -> GND`, with the carrier board adding a 4.7k pull-up from each ADC node to 3.3V. The thermistor is a Vishay NTCLE100E3103 (10k NTC, B25/85 = 3977K); firmware converts resistance to temperature with the datasheet's 4-coefficient extended Steinhart-Hart fit (`temp_simple.h`), valid over the part's -40..+125 °C range.
 
 | Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
 |---------|-----------------|----------|---------------|---------------|-----|
