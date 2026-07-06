@@ -235,8 +235,8 @@ def tempctrl_pi_drive(tc, dt=DT_PER_SAMPLE_S):
 
 
 # Mirrors TEMPCTRL_STALL_WINDOW_MS / TEMPCTRL_STALL_MIN_DELTA in tempctrl.h.
-STALL_WINDOW_MS = 60000
-STALL_MIN_DELTA = 0.5
+STALL_WINDOW_MS = 120000
+STALL_MIN_DELTA = 0.3
 
 # Mirrors TEMPCTRL_RUNAWAY_STRIKES / TEMPCTRL_MAX_RATE_C_PER_S /
 # TEMPCTRL_MAX_REJECTS in tempctrl.h. See the firmware comments for the
