@@ -40,8 +40,8 @@
 // trip the channel. A healthy half-power Peltier moves the load several
 // C/min, so a healthy run rolls the window forward long before reaching
 // the trip threshold.
-#define TEMPCTRL_STALL_WINDOW_MS   60000
-#define TEMPCTRL_STALL_MIN_DELTA   0.5f
+#define TEMPCTRL_STALL_WINDOW_MS   120000
+#define TEMPCTRL_STALL_MIN_DELTA   0.3f
 
 // Runaway guard: a channel that is actively driving but whose temperature
 // moves the *opposite* direction of the drive (cooling drive while T rises,
