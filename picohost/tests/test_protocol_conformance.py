@@ -20,6 +20,7 @@ from picohost.emulators import (
     PotMonEmulator,
     RFSwitchEmulator,
 )
+from picohost.emulators.tempctrl import MAX_REJECTS
 
 # ---------------------------------------------------------------------------
 # Base protocol tests (apply to all apps)
@@ -353,6 +354,83 @@ class TestTempCtrlProtocol:
         assert status["LNA_resistance"] is None
         assert isinstance(status["LNA_voltage"], float)
         assert status["LOAD_status"] == "update"
+
+    def test_installed_default_true_and_in_status(self):
+        """init_single_tempctrl() defaults installed=true; tempctrl_status
+        reports LNA_installed / LOAD_installed on every tick."""
+        emu = TempCtrlEmulator()
+        assert emu.lna.installed is True
+        assert emu.load.installed is True
+        status = emu.get_status()
+        assert status["LNA_installed"] is True
+        assert status["LOAD_installed"] is True
+
+    def test_installed_parse_via_int(self):
+        """tempctrl.c: item_json->valueint ? true : false — a JSON string
+        like "false" has valueint 0, so it uninstalls (cJSON parity)."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_installed": 0})
+        assert emu.lna.installed is False
+        emu.server({"LNA_installed": 1})
+        assert emu.lna.installed is True
+        emu.server({"LNA_installed": "false"})
+        assert emu.lna.installed is False
+        assert emu.load.installed is True
+
+    def test_uninstalled_channel_skips_sampling_and_drive(self):
+        """tempctrl_update_sensor_drive: an uninstalled channel returns
+        before temp_sensor_read — its ADC input is never mux-selected
+        (the potmon crosstalk lesson) — and never drives: data_invalid
+        every cycle, controller state reset, drive forced to 0."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
+        for _ in range(2):  # two-to-anchor, then control engages
+            emu.op()
+        assert emu.lna.drive != 0.0
+        emu.server({"LNA_installed": 0})
+        emu.op()
+        assert emu.lna.drive == 0.0
+        assert emu.lna.data_invalid is True
+        status = emu.get_status()
+        assert status["LNA_status"] == "error"
+        assert status["LNA_T_now"] is None
+        # LOAD is untouched — still sampling normally.
+        assert status["LOAD_status"] == "update"
+
+    def test_uninstalled_drops_anchor_reinstall_reseeds(self):
+        """Uninstalling drops the rate anchor (it is only valid across
+        continuous good data); re-install re-seeds two-to-anchor before
+        control resumes, mirroring recovery from a plausibility outage."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
+        for _ in range(2):
+            emu.op()
+        assert emu.lna.rate_ref_valid is True
+        emu.server({"LNA_installed": 0})
+        emu.op()
+        assert emu.lna.rate_ref_valid is False
+        emu.server({"LNA_installed": 1})
+        emu.op()  # candidate seed only — control still gated
+        assert emu.lna.drive == 0.0
+        emu.op()  # anchor confirmed — control resumes
+        assert emu.lna.drive != 0.0
+
+    def test_uninstall_preserves_latches_enable_ack_clears(self):
+        """Uninstalling is not a trip ack: sticky latches survive it and
+        clear only via *_enable=true (tempctrl_apply_enable)."""
+        emu = TempCtrlEmulator()
+        emu.server({"LNA_enable": True})
+        for _ in range(2):
+            emu.op()
+        emu.lna.inject_sensor_glitch(1000.0, count=MAX_REJECTS)
+        for _ in range(MAX_REJECTS):
+            emu.op()
+        assert emu.lna.sensor_tripped is True
+        emu.server({"LNA_installed": 0})
+        emu.op()
+        assert emu.lna.sensor_tripped is True
+        emu.server({"LNA_enable": True})
+        assert emu.lna.sensor_tripped is False
 
 
 # ---------------------------------------------------------------------------

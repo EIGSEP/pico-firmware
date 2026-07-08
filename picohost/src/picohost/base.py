@@ -654,6 +654,7 @@ class PicoPeltier(PicoDevice):
         self._keepalive_thread = None
         self._keepalive_interval = keepalive_interval
         self._last_watchdog_timeout_ms = None
+        self._last_installed = {}
         self._last_clamp = {}
         self._last_cooling = {}
         self._last_gains = {}
@@ -710,6 +711,18 @@ class PicoPeltier(PicoDevice):
         watchdog_tripped = data.get("watchdog_tripped")
         watchdog_timeout_ms = data.get("watchdog_timeout_ms")
         for prefix, stream in self._PELTIER_STREAMS:
+            # Descoped hardware publishes nothing: a channel marked not
+            # installed is absent downstream (no corr-file column, no
+            # staleness warnings) instead of streaming status="error"
+            # forever off its dead thermistor divider. Fail-safe
+            # polarity: only an explicit False suppresses — a payload
+            # missing the flag (pre-installed-flag firmware) publishes
+            # both, so a firmware field-drop bug can never silently
+            # masquerade as "uninstalled". The flag itself is never
+            # copied into the stream (not in _PELTIER_CHANNEL_FIELDS),
+            # so the published per-channel shape is unchanged.
+            if data.get(f"{prefix}_installed") is False:
+                continue
             out = {
                 "sensor_name": stream,
                 "app_id": app_id,
@@ -766,18 +779,23 @@ class PicoPeltier(PicoDevice):
         (hard watchdog, brownout, picotool re-flash via BOOTSEL) drops
         USB CDC, so reader-thread reconnect coincides with the firmware
         coming up at defaults. Replay whatever the host most recently
-        pushed in a safe order: watchdog → clamp → cooling_enabled →
-        gains → temperature → enable. cooling_enabled lands between
-        clamp and gains so the asymmetric-clamp safety setting is in
-        place before any drive can result from the next setpoint. Gains
-        land before temperature so the channel is fully tuned the
-        instant it goes active. Keepalive starts last so the firmware
-        watchdog is configured before we start pinging it.
+        pushed in a safe order: watchdog → installed → clamp →
+        cooling_enabled → gains → temperature → enable. installed lands
+        right after the watchdog so a descoped channel is gated (no
+        sampling, no drive) before any drive-producing config arrives —
+        the firmware reboots to installed=true defaults. cooling_enabled
+        lands between clamp and gains so the asymmetric-clamp safety
+        setting is in place before any drive can result from the next
+        setpoint. Gains land before temperature so the channel is fully
+        tuned the instant it goes active. Keepalive starts last so the
+        firmware watchdog is configured before we start pinging it.
         """
         if self._last_watchdog_timeout_ms is not None:
             self.send_command(
                 {"watchdog_timeout_ms": self._last_watchdog_timeout_ms}
             )
+        if self._last_installed:
+            self.send_command(dict(self._last_installed))
         if self._last_clamp:
             self.send_command(dict(self._last_clamp))
         if self._last_cooling:
@@ -812,6 +830,33 @@ class PicoPeltier(PicoDevice):
         timeout_ms = int(timeout_ms)
         self.send_command({"watchdog_timeout_ms": timeout_ms})
         self._last_watchdog_timeout_ms = timeout_ms
+
+    def set_installed(self, LNA=None, LOAD=None):
+        """Mark a channel's hardware module present/absent.
+
+        ``False`` descopes the channel: firmware never samples its
+        thermistor (the ADC input is never mux-selected, so it cannot
+        crosstalk into the other channel) and never drives it, and the
+        redis fan-out suppresses its stream entirely — clean absence
+        downstream instead of a permanent ``status="error"`` stream
+        from a disconnected divider. Distinct from :meth:`set_enable`
+        (drive intent for present hardware). Not a trip ack: sticky
+        latches survive uninstall and clear only via ``set_enable``.
+        Firmware default after reboot is ``True`` (both installed);
+        cached for replay on reconnect.
+        """
+        cmd = {}
+        if LNA is not None:
+            if not isinstance(LNA, bool):
+                raise TypeError("LNA must be a bool or None")
+            cmd["LNA_installed"] = LNA
+        if LOAD is not None:
+            if not isinstance(LOAD, bool):
+                raise TypeError("LOAD must be a bool or None")
+            cmd["LOAD_installed"] = LOAD
+        if cmd:
+            self.send_command(cmd)
+            self._last_installed.update(cmd)
 
     def set_temperature(
         self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5
