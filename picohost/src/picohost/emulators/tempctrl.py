@@ -114,6 +114,13 @@ class TempControlState:
         self.hysteresis = 0.5
         self.enabled = False
         self.active = False
+        # Module physically present (host config knob, mirrors `installed`
+        # in tempctrl.h). Distinct from `enabled` (drive intent) and
+        # `cooling_enabled` (drive-polarity guard): an uninstalled channel
+        # is never sampled — its ADC input is never mux-selected — and
+        # never driven. Default true so a rebooted pico behaves exactly
+        # as before the flag existed until the host replays config.
+        self.installed = True
         # Per-cycle data validity (NOT a latch, mirrors data_invalid in
         # tempctrl.h): True when the most recent sample cycle produced no
         # trustworthy temperature — plausibility failure or rate-guard
@@ -288,6 +295,14 @@ class TempCtrlEmulator(PicoEmulator):
             if key in cmd:
                 tc.T_target = _coerce_float(cmd[key])
 
+            key = f"{prefix}_installed"
+            if key in cmd:
+                # Mirror firmware bool parse (item_json->valueint ? true
+                # : false). Pure presence flag — NOT a trip ack: sticky
+                # latches survive an uninstall/re-install cycle and clear
+                # only via *_enable=true (see the enable parse below).
+                tc.installed = bool(_safe_int(cmd[key], 0))
+
             key = f"{prefix}_enable"
             if key in cmd:
                 # cJSON's valueint is 0 for non-numeric types — mirror that
@@ -438,6 +453,22 @@ class TempCtrlEmulator(PicoEmulator):
         return True, False
 
     def _update_channel(self, tc):
+        # Channel hardware not present: return before the sensor read so
+        # the ADC input is never mux-selected (the potmon crosstalk
+        # lesson — a dead divider must not share the mux with a live
+        # one) and force drive off. data_invalid every cycle; the rate
+        # anchor drops so a later re-install re-seeds two-to-anchor.
+        # Mirrors the !installed early return in
+        # tempctrl_update_sensor_drive (tempctrl.c).
+        if not tc.installed:
+            tc.data_invalid = True
+            tc.rate_ref_valid = False
+            tc.seed_pending = False
+            _reset_controller_state(tc)
+            tc.stall_window_active = False
+            tc.runaway_strikes = 0
+            return
+
         # One sample tick (mirrors firmware: read + rate guard on the fixed
         # TEMPCTRL_SAMPLE_MS timer, then control on the filtered T_now).
         plausible, rejected = self._read_sensor(tc)
@@ -563,6 +594,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_timestamp": self.lna.timestamp,
             "LNA_T_target": self.lna.T_target,
             "LNA_drive_level": self.lna.drive,
+            "LNA_installed": self.lna.installed,
             "LNA_enabled": self.lna.enabled,
             "LNA_active": self.lna.active,
             "LNA_sensor_tripped": self.lna.sensor_tripped,
@@ -583,6 +615,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_timestamp": self.load.timestamp,
             "LOAD_T_target": self.load.T_target,
             "LOAD_drive_level": self.load.drive,
+            "LOAD_installed": self.load.installed,
             "LOAD_enabled": self.load.enabled,
             "LOAD_active": self.load.active,
             "LOAD_sensor_tripped": self.load.sensor_tripped,

@@ -93,6 +93,17 @@ typedef struct {
     // host distinguishes "asked off" from "blocked by trip" by reading
     // enabled together with the trip flags.
     bool enabled;
+    // Module physically present (host config knob via LNA_installed /
+    // LOAD_installed; firmware never mutates it). Distinct from `enabled`
+    // (drive intent for present hardware) and `cooling_enabled` (drive-
+    // polarity guard): an uninstalled channel is never sampled — its ADC
+    // input is never mux-selected, so a dead divider cannot crosstalk
+    // into the live channel — and never driven, and the picohost fan-out
+    // suppresses its Redis stream entirely. Default true, so a reboot
+    // behaves exactly as before this flag existed until the host replays
+    // config. Not a trip ack: sticky latches survive uninstall and clear
+    // only via *_enable=true.
+    bool installed;
     // Per-cycle data validity (NOT a latch): true when this sample cycle
     // produced no trustworthy temperature — plausibility conversion failed
     // (railed divider) or the rate guard rejected the sample. Drives the

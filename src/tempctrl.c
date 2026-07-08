@@ -59,6 +59,7 @@ static void init_single_tempctrl(TempControl *tempctrl,
     tempctrl->clamp = 0.2;  // Maximum drive level; low default keeps Peltier current manageable
     tempctrl->hysteresis = 0.5;
     tempctrl->enabled = false;
+    tempctrl->installed = true;
     tempctrl->active = false;
     // No sample taken yet, so there is no valid temperature to report;
     // the first op tick samples before the first status message fires.
@@ -109,6 +110,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     // Parse channel selection (default to both)
     item_json = cJSON_GetObjectItem(root, "LNA_temp_target");
     tempctrl_lna.T_target = item_json ? item_json->valuedouble : tempctrl_lna.T_target;
+    item_json = cJSON_GetObjectItem(root, "LNA_installed");
+    if (item_json) tempctrl_lna.installed = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "LNA_enable");
     if (item_json) tempctrl_apply_enable(&tempctrl_lna, item_json->valueint ? true : false);
     item_json = cJSON_GetObjectItem(root, "LNA_hysteresis");
@@ -138,6 +141,8 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     if (item_json) tempctrl_lna.cooling_enabled = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
     tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
+    item_json = cJSON_GetObjectItem(root, "LOAD_installed");
+    if (item_json) tempctrl_load.installed = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "LOAD_enable");
     if (item_json) tempctrl_apply_enable(&tempctrl_load, item_json->valueint ? true : false);
     item_json = cJSON_GetObjectItem(root, "LOAD_hysteresis");
@@ -196,10 +201,10 @@ void tempctrl_status(uint8_t app_id) {
     const float R_load =
         tempctrl_load.data_invalid ? NAN : tempctrl_load.temp_sensor.resistance;
 
-    /* 40 KV pairs: 4 device-wide + 18 per channel * 2 channels. send_json
+    /* 42 KV pairs: 4 device-wide + 19 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(40,
+    send_json(42,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -211,6 +216,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LNA_timestamp", (double)time_lna,
         KV_FLOAT, "LNA_T_target", tempctrl_lna.T_target,
         KV_FLOAT, "LNA_drive_level", tempctrl_lna.drive,
+        KV_BOOL, "LNA_installed", tempctrl_lna.installed,
         KV_BOOL, "LNA_enabled", tempctrl_lna.enabled,
         KV_BOOL, "LNA_active", tempctrl_lna.active,
         KV_BOOL, "LNA_sensor_tripped", tempctrl_lna.sensor_tripped,
@@ -229,6 +235,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LOAD_timestamp", (double)time_load,
         KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
         KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
+        KV_BOOL, "LOAD_installed", tempctrl_load.installed,
         KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
         KV_BOOL, "LOAD_active", tempctrl_load.active,
         KV_BOOL, "LOAD_sensor_tripped", tempctrl_load.sensor_tripped,
@@ -244,6 +251,23 @@ void tempctrl_status(uint8_t app_id) {
 }
 
 void tempctrl_update_sensor_drive(TempControl *tempctrl) {
+    // Channel hardware not present: return before temp_sensor_read so the
+    // ADC mux never selects the dead divider (multiplexed-ADC crosstalk —
+    // see the rate-guard comment below) and force drive off. data_invalid
+    // every cycle keeps the reported values null; the rate anchor drops so
+    // a later re-install re-seeds two-to-anchor, exactly like recovery
+    // from a sensor outage.
+    if (!tempctrl->installed) {
+        tempctrl->data_invalid = true;
+        tempctrl->rate_ref_valid = false;
+        tempctrl->seed_pending = false;
+        tempctrl_reset_controller_state(tempctrl);
+        tempctrl_apply_drive(tempctrl);
+        tempctrl->stall_window_active = false;
+        tempctrl->runaway_strikes = 0;
+        return;
+    }
+
     // Sample the thermistor. Called on the fixed TEMPCTRL_SAMPLE_MS timer
     // (not every op pass), so the rate guard's dt is ~one sample period.
     // `plausible` is false when the voltage->temperature conversion failed
@@ -560,7 +584,11 @@ static void tempctrl_apply_enable(TempControl *tempctrl, bool new_enabled) {
 }
 
 static bool tempctrl_drive_allowed(const TempControl *tempctrl) {
-    return tempctrl->enabled
+    // installed is defense in depth here: the !installed early return in
+    // tempctrl_update_sensor_drive already forces drive off before the
+    // control path runs.
+    return tempctrl->installed
+        && tempctrl->enabled
         && !tempctrl->sensor_tripped
         && !tempctrl->stall_tripped
         && !tempctrl->runaway_tripped

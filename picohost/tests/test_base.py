@@ -734,6 +734,48 @@ class TestPicoPeltier:
         finally:
             peltier.disconnect()
 
+    def test_set_installed_round_trip(self):
+        """set_installed() updates the emulator installed flags in status."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        cadence = peltier.EMULATOR_CADENCE_MS
+        peltier.set_installed(LNA=False)
+        wait_for_condition(
+            lambda: peltier.last_status.get("LNA_installed") is False,
+            cadence_ms=cadence,
+        )
+        assert peltier.last_status.get("LOAD_installed") is True
+        peltier.disconnect()
+
+    def test_set_installed_type_check(self):
+        """Non-bool raises TypeError, matching set_cooling_enabled."""
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            with pytest.raises(TypeError):
+                peltier.set_installed(LNA=1)
+            with pytest.raises(TypeError):
+                peltier.set_installed(LOAD="false")
+        finally:
+            peltier.disconnect()
+
+    def test_set_installed_partial_no_command(self):
+        """set_installed() with both args None must not touch the wire
+        or the replay cache — matches set_cooling_enabled."""
+        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        try:
+            sent = []
+            original = peltier.send_command
+
+            def spy(cmd):
+                sent.append(dict(cmd))
+                return original(cmd)
+
+            peltier.send_command = spy  # type: ignore[method-assign]
+            peltier.set_installed()
+            assert sent == []
+            assert peltier._last_installed == {}
+        finally:
+            peltier.disconnect()
+
     def test_reset_integral_not_cached_for_replay(self):
         """One-shot command; firmware reset clears the integral implicitly."""
         peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
@@ -768,6 +810,7 @@ class TestPicoPeltierReconnectReplay:
         peltier = DummyPicoPeltier("/dev/dummy")
         try:
             assert peltier._last_watchdog_timeout_ms is None
+            assert peltier._last_installed == {}
             assert peltier._last_clamp == {}
             assert peltier._last_cooling == {}
             assert peltier._last_gains == {}
@@ -780,12 +823,17 @@ class TestPicoPeltierReconnectReplay:
         peltier = DummyPicoPeltier("/dev/dummy")
         try:
             peltier.set_watchdog_timeout(15000)
+            peltier.set_installed(LNA=False, LOAD=True)
             peltier.set_clamp(LNA=0.5, LOAD=0.6)
             peltier.set_cooling_enabled(LNA=False, LOAD=True)
             peltier.set_gains(LNA_Kp=0.3, LNA_Ki=0.02, LOAD_Kp=0.25)
             peltier.set_temperature(T_LNA=25.0, LNA_hyst=0.3)
             peltier.set_enable(LNA=True, LOAD=False)
             assert peltier._last_watchdog_timeout_ms == 15000
+            assert peltier._last_installed == {
+                "LNA_installed": False,
+                "LOAD_installed": True,
+            }
             assert peltier._last_clamp == {
                 "LNA_clamp": 0.5,
                 "LOAD_clamp": 0.6,
@@ -837,18 +885,24 @@ class TestPicoPeltierReconnectReplay:
             peltier.disconnect()
 
     def test_on_reconnect_replays_in_safe_order(self):
-        """watchdog → clamp → cooling_enabled → gains → temperature → enable.
+        """watchdog → installed → clamp → cooling_enabled → gains →
+        temperature → enable.
 
-        cooling_enabled lands between clamp and gains so the asymmetric-
-        clamp safety setting is in place before any drive can result
-        from the next setpoint. Gains land before temperature so the
-        channel is fully tuned the instant it goes active. Disables
-        keepalive so the spy only sees replay traffic — the background
-        ``{}`` keepalive is tested independently.
+        installed lands right after the watchdog so an uninstalled
+        channel is gated (no sampling, no drive) before any
+        drive-producing config arrives — firmware reboots to
+        installed=true defaults. cooling_enabled lands between clamp
+        and gains so the asymmetric-clamp safety setting is in place
+        before any drive can result from the next setpoint. Gains land
+        before temperature so the channel is fully tuned the instant it
+        goes active. Disables keepalive so the spy only sees replay
+        traffic — the background ``{}`` keepalive is tested
+        independently.
         """
         peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
         try:
             peltier.set_watchdog_timeout(15000)
+            peltier.set_installed(LNA=False, LOAD=True)
             peltier.set_clamp(LNA=0.5, LOAD=0.6)
             peltier.set_cooling_enabled(LNA=False, LOAD=True)
             peltier.set_gains(LNA_Kp=0.25, LNA_Ki=0.01)
@@ -869,6 +923,7 @@ class TestPicoPeltierReconnectReplay:
 
             assert sent == [
                 {"watchdog_timeout_ms": 15000},
+                {"LNA_installed": False, "LOAD_installed": True},
                 {"LNA_clamp": 0.5, "LOAD_clamp": 0.6},
                 {
                     "LNA_cooling_enabled": False,
@@ -1007,6 +1062,10 @@ class TestPicoPeltierRedisHandler:
         "app_id": 1,
         "watchdog_tripped": False,
         "watchdog_timeout_ms": 30000,
+        # Device-payload presence flags (never copied into the published
+        # streams; an explicit False suppresses that channel's stream).
+        "LNA_installed": True,
+        "LOAD_installed": True,
         "LNA_status": "update",
         "LNA_T_now": 25.4,
         "LNA_voltage": 2.51,
@@ -1148,6 +1207,51 @@ class TestPicoPeltierRedisHandler:
                     assert isinstance(v, self._SCALAR_TYPES), (
                         f"field {k!r} has non-scalar type {type(v).__name__}"
                     )
+        finally:
+            peltier.disconnect()
+
+    def test_uninstalled_channel_stream_suppressed(self):
+        """A channel whose {prefix}_installed is False publishes nothing:
+        the descoped-hardware contract is clean stream absence downstream
+        (no column in corr files, no staleness warnings), not a
+        permanently-errored stream."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            data = dict(self._SAMPLE)
+            data["LNA_installed"] = False
+            published = self._capture_all(peltier, data)
+            assert [p["sensor_name"] for p in published] == ["tempctrl_load"]
+        finally:
+            peltier.disconnect()
+
+    def test_missing_installed_flags_publish_both(self):
+        """Fail-safe polarity: only an explicit False suppresses a
+        stream. A payload without the flags (pre-installed-flag
+        firmware) publishes both, so a firmware field-drop bug can
+        never silently look like 'uninstalled'."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            data = {
+                k: v
+                for k, v in self._SAMPLE.items()
+                if k not in ("LNA_installed", "LOAD_installed")
+            }
+            published = self._capture_all(peltier, data)
+            assert [p["sensor_name"] for p in published] == [
+                "tempctrl_lna",
+                "tempctrl_load",
+            ]
+        finally:
+            peltier.disconnect()
+
+    def test_installed_flag_not_in_published_streams(self):
+        """installed is a device-payload flag, not a stream field — the
+        published per-channel shape is unchanged (consumer schemas and
+        golden fixtures stay untouched)."""
+        peltier = DummyPicoPeltier("/dev/dummy")
+        try:
+            for entry in self._capture_all(peltier, self._SAMPLE):
+                assert "installed" not in entry
         finally:
             peltier.disconnect()
 
