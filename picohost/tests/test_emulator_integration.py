@@ -45,6 +45,7 @@ TEMPCTRL_FIELDS = {
     "LNA_timestamp",
     "LNA_T_target",
     "LNA_drive_level",
+    "LNA_installed",
     "LNA_enabled",
     "LNA_active",
     "LNA_sensor_tripped",
@@ -63,6 +64,7 @@ TEMPCTRL_FIELDS = {
     "LOAD_timestamp",
     "LOAD_T_target",
     "LOAD_drive_level",
+    "LOAD_installed",
     "LOAD_enabled",
     "LOAD_active",
     "LOAD_sensor_tripped",
@@ -314,10 +316,12 @@ class TestPeltierIntegrationTypes:
         assert isinstance(s["app_id"], int)
         # Booleans
         for key in (
+            "LNA_installed",
             "LNA_enabled",
             "LNA_active",
             "LNA_sensor_tripped",
             "LNA_runaway_tripped",
+            "LOAD_installed",
             "LOAD_enabled",
             "LOAD_active",
             "LOAD_sensor_tripped",
