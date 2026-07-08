@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.2.0](https://github.com/EIGSEP/pico-firmware/compare/v4.1.0...v4.2.0) (2026-07-08)
+
+
+### Features
+
+* **tempctrl:** per-channel installed flag descopes absent hardware ([2d3e707](https://github.com/EIGSEP/pico-firmware/commit/2d3e7071ab92d3541a2ef6e46acf32a1a2d99dec))
+* **tempctrl:** swap thermistor curve to Vishay NTCLE100E3 10k NTC ([ba30131](https://github.com/EIGSEP/pico-firmware/commit/ba30131f7420aa2467840f0a5db3fe6ff0bc1762))
+
+
+### Bug Fixes
+
+* **tempctrl:** sync emulator stall constants to firmware ([2979311](https://github.com/EIGSEP/pico-firmware/commit/29793112e070ace1d7a00c7e0be5e1a5fbef0104))
+
 ## [4.1.0](https://github.com/EIGSEP/pico-firmware/compare/v4.0.0...v4.1.0) (2026-07-03)
 
 
