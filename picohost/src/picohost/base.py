@@ -1232,6 +1232,11 @@ class PicoPotentiometer(PicoDevice):
     # cal/angle fields are explicitly float()-cast in the handler.
     _REDIS_FLOAT_FIELDS = ("pot_az_voltage",)
 
+    # Pin levels driven on the potmon pico's SP1 failsafe-termination
+    # GPIO (POTMON_GPIO_SP1_TERM in src/potmon.h). LOW/0 = SHORT is the
+    # failsafe: a rebooted or dead pico leaves the long cable shorted.
+    SP1_TERMINATIONS = {"SHORT": 0, "OPEN": 1}
+
     def __init__(
         self,
         port,
@@ -1289,17 +1294,18 @@ class PicoPotentiometer(PicoDevice):
             self.redis_handler = self._pot_redis_handler
 
     def _pot_redis_handler(self, data):
-        """Add per-component cal scalars, angle, and rail flag before upload.
+        """Add per-component cal scalars, angle, rail flag, and SP1 name.
 
         Augments the raw voltage payload with the calibration slope and
         intercept (flattened into scalar fields per the
         :func:`redis_handler` scalar-only contract), the derived angle,
-        and a ``<key>_near_rail`` bool (voltage within
-        :data:`POT_NEAR_RAIL_V` of an ADC rail — wiper at risk of
-        clipping, absolute reference no longer trustworthy). All added
-        fields are ``None`` when their input is missing (no calibration,
-        or no voltage for the rail flag), so the published shape is
-        stable regardless of state.
+        a ``<key>_near_rail`` bool (voltage within :data:`POT_NEAR_RAIL_V`
+        of an ADC rail — wiper at risk of clipping, absolute reference no
+        longer trustworthy), and ``sp1_term_name`` (the string name of the
+        SP1 failsafe termination state, ``"SHORT"``/``"OPEN"`` or ``None``
+        when missing/unmapped). All added fields are ``None`` when their
+        input is missing, so the published shape is stable regardless of
+        state.
         """
         data = data.copy()
         for key in ("pot_az",):
@@ -1323,6 +1329,11 @@ class PicoPotentiometer(PicoDevice):
                 data[f"{key}_cal_slope"] = None
                 data[f"{key}_cal_intercept"] = None
                 data[f"{key}_angle"] = None
+        # SP1 failsafe termination: map the raw pin level to its name
+        # ("SHORT"/"OPEN"); None when the firmware didn't report it or
+        # the level is unmapped. Raw sp1_term is kept alongside.
+        name_by_level = {v: k for k, v in self.SP1_TERMINATIONS.items()}
+        data["sp1_term_name"] = name_by_level.get(data.get("sp1_term"))
         self._base_redis_handler(data)
 
     def set_calibration(self, pot_az_params=None):
@@ -1335,6 +1346,37 @@ class PicoPotentiometer(PicoDevice):
         """
         if pot_az_params is not None:
             self._cal["pot_az"] = tuple(pot_az_params)
+
+    def set_sp1_termination(self, state):
+        """Drive the SP1 failsafe termination switch.
+
+        The call returns as soon as the command has been delivered to
+        the firmware; the firmware echoes the actual pin level as
+        ``sp1_term`` in its status stream, so callers that need
+        closed-loop confirmation poll Redis for ``sp1_term_name``.
+
+        Parameters
+        ----------
+        state : str
+            ``"SHORT"`` (pin LOW — the failsafe) or ``"OPEN"``
+            (pin HI). See :attr:`SP1_TERMINATIONS`.
+
+        Raises
+        ------
+        ValueError
+            If ``state`` is not a valid termination name.
+        ConnectionError
+            If the device is not connected or the write failed.
+        """
+        try:
+            level = self.SP1_TERMINATIONS[state]
+        except (KeyError, TypeError) as e:
+            raise ValueError(
+                f"Invalid SP1 termination '{state}'. Valid: "
+                f"{list(self.SP1_TERMINATIONS)}"
+            ) from e
+        self.send_command({"sp1_term": level})
+        self.logger.info(f"SP1 termination set to {state}.")
 
     def load_calibration(self, path):
         """Load calibration from a JSON file.
