@@ -62,7 +62,6 @@ import json
 import logging
 import math
 import sys
-import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -70,18 +69,28 @@ from eigsep_redis import Transport
 
 from .base import POT_VREF
 from .buses import PotCalStore
-from .motor import GEAR_TEETH, MICROSTEP, STEP_ANGLE_DEG, steps_to_deg
+from .motor_sweep import (
+    MOTOR_GEOMETRY,
+    MOTOR_NAME,
+    MOTOR_STREAM,  # noqa: F401 -- re-exported for tests
+    SETTLE_TIMEOUT_S,
+    SETTLE_TOL_DEG,
+    motor_command as _motor_command,
+    read_motor_pos_deg,
+    read_motor_pos_steps,
+    wait_for_settle,
+)
 from .proxy import PicoProxy
 
 logger = logging.getLogger(__name__)
 
 POTMON_NAME = "potmon"
 POTMON_STREAM = f"stream:{POTMON_NAME}"
-MOTOR_NAME = "motor"
-MOTOR_STREAM = f"stream:{MOTOR_NAME}"
 # Producer cadence is 200 ms (STATUS_CADENCE_MS), so a 5 s budget per
 # entry is ~25x — long enough to ride out a single reconnect blip but
 # short enough to fail fast when the manager isn't actually publishing.
+# (Pot-specific: kept local rather than importing motor_sweep's own
+# same-valued constant, since the two govern different streams.)
 SAMPLE_TIMEOUT_S = 5.0
 # Pot wiper spans ~0..Vref, so the ADC rails approximate the pot's
 # electrical ends. Single-sourced from picohost.base (which mirrors
@@ -112,24 +121,13 @@ HEADROOM_WARN_DEG = 72.0
 # Motor az should read ~0 at home; warn beyond this if the operator
 # forgot to home before pressing Enter.
 HOME_AZ_TOL_DEG = 5.0
-# Geometry of the installed az drive, from picohost.motor — the same
-# constants PicoMotor uses for deg->steps on the manager side. Fixed
-# hardware properties, deliberately not CLI-tunable: a client-side
-# override here would desync the two conversions and make --mode auto's
-# settle detection unreachable. Recorded in the cal metadata.
-MOTOR_GEOMETRY = {
-    "step_angle_deg": STEP_ANGLE_DEG,
-    "gear_teeth": GEAR_TEETH,
-    "microstep": MICROSTEP,
-}
-# --mode auto: a commanded move is considered settled once two
-# consecutive stream:motor reads agree with each other and with the
-# target within this many degrees.
-SETTLE_TOL_DEG = 2.0
-# --mode auto: overall budget to settle a single commanded move.
-# Comfortably larger than a full 360 deg turn (~2 min at the installed
-# motor's default speed).
-SETTLE_TIMEOUT_S = 180.0
+# Geometry of the installed az drive, MOTOR_GEOMETRY/SETTLE_TOL_DEG/
+# SETTLE_TIMEOUT_S imported from picohost.motor_sweep — the same
+# constants PicoMotor uses for deg->steps on the manager side and that
+# --mode auto's settle polling uses. Fixed hardware properties,
+# deliberately not CLI-tunable: a client-side override here would
+# desync the two conversions and make --mode auto's settle detection
+# unreachable. Recorded in the cal metadata.
 # Warn before saving if the new calibration would move the predicted
 # azimuth by more than this (deg) anywhere in the swept window, relative
 # to the calibration already stored in Redis.
@@ -183,29 +181,19 @@ def read_motor_az_steps(transport, start_id="$"):
     settle. Mirrors :func:`collect_samples`' fail-fast semantics — if
     PicoManager isn't publishing motor status within
     ``SAMPLE_TIMEOUT_S``, raise rather than silently using a stale
-    value.
+    value. Thin az-axis wrapper around
+    :func:`picohost.motor_sweep.read_motor_pos_steps`.
     """
-    resp = transport.r.xread(
-        {MOTOR_STREAM: start_id},
-        block=int(SAMPLE_TIMEOUT_S * 1000),
-        count=1,
-    )
-    if not resp:
-        raise RuntimeError(
-            f"No entries on {MOTOR_STREAM} within {SAMPLE_TIMEOUT_S}s. "
-            "Is PicoManager publishing motor status? (motor app running "
-            "and driven via motor_manual)"
-        )
-    _stream, messages = resp[0]
-    _msg_id, fields = messages[0]
-    value = json.loads(fields[b"value"])
-    return float(value["az_pos"])
+    return read_motor_pos_steps(transport, "az", start_id=start_id)
 
 
 def read_motor_az_deg(transport, start_id="$"):
-    """Current motor az in degrees (steps converted via MOTOR_GEOMETRY)."""
-    steps = read_motor_az_steps(transport, start_id=start_id)
-    return steps_to_deg(steps, **MOTOR_GEOMETRY)
+    """Current motor az in degrees (steps converted via MOTOR_GEOMETRY).
+
+    Thin az-axis wrapper around
+    :func:`picohost.motor_sweep.read_motor_pos_deg`.
+    """
+    return read_motor_pos_deg(transport, "az", start_id=start_id)
 
 
 def _latest_pot_voltage(transport):
@@ -508,6 +496,21 @@ def collect_azimuth(transport, n_samples):
     return voltages, angles, v0
 
 
+def _rail_mid_move_check(transport, pos_deg):
+    """Mid-move rail guard passed to :func:`picohost.motor_sweep.wait_for_settle`.
+
+    Checks the latest pot voltage against the rail guard (checked
+    before the settle test, so a railed pot can never be reported as a
+    clean arrival): a rail crossing *during* a move means the sweep has
+    left the pot's trustworthy range, and the resulting RuntimeError
+    makes :func:`collect_auto` halt the motor rather than let it keep
+    driving toward the electrical end.
+    """
+    v = _latest_pot_voltage(transport)
+    if v is not None:
+        _check_off_rails(v, where=f"mid-move (motor at {pos_deg:.1f} deg)")
+
+
 def _wait_for_settle(
     transport,
     target_deg,
@@ -528,47 +531,25 @@ def _wait_for_settle(
     already satisfies both conditions. Returns the settled az. Raises
     ``TimeoutError`` if the motor hasn't settled within ``timeout_s``.
 
-    Each poll also checks the latest pot voltage against the rail guard
-    (checked before the settle test, so a railed pot can never be
-    reported as a clean arrival): a rail crossing *during* a move means
-    the sweep has left the pot's trustworthy range, and the resulting
-    RuntimeError makes :func:`collect_auto` halt the motor rather than
-    let it keep driving toward the electrical end.
+    Thin az-axis wrapper around
+    :func:`picohost.motor_sweep.wait_for_settle`, passing
+    :func:`_rail_mid_move_check` as the mid-move check and this
+    module's own :func:`read_motor_az_deg` as the position reader (via
+    ``read_pos_deg``) rather than ``motor_sweep``'s default -- so
+    existing tests that monkeypatch ``calibrate_pot.read_motor_az_deg``
+    keep intercepting the settle poll unchanged.
     """
-    deadline = time.monotonic() + timeout_s
-    prev_az = None
-    while time.monotonic() < deadline:
-        az = read_motor_az_deg(transport, start_id="$")
-        v = _latest_pot_voltage(transport)
-        if v is not None:
-            _check_off_rails(v, where=f"mid-move (motor at {az:.1f} deg)")
-        if (
-            prev_az is not None
-            and abs(az - target_deg) <= tol_deg
-            and abs(az - prev_az) <= tol_deg
-        ):
-            return az
-        prev_az = az
-    raise TimeoutError(
-        f"Motor did not settle at {target_deg:.1f} deg (tol {tol_deg:.1f} "
-        f"deg) within {timeout_s:.0f}s (last read: {prev_az})"
+    return wait_for_settle(
+        transport,
+        "az",
+        target_deg,
+        tol_deg=tol_deg,
+        timeout_s=timeout_s,
+        mid_move_check=_rail_mid_move_check,
+        read_pos_deg=lambda tr, _axis, start_id="$": read_motor_az_deg(
+            tr, start_id=start_id
+        ),
     )
-
-
-def _motor_command(motor_proxy, action, **kwargs):
-    """Send a motor command, failing fast if the motor went away.
-
-    ``PicoProxy.send_command`` silently no-ops (returns ``None``) when
-    the device heartbeat is down. For a sweep that would otherwise wait
-    out a ~3 min settle timeout on a move that was never dispatched,
-    that must be an immediate, clearly-attributed error instead.
-    """
-    if not motor_proxy.is_available:
-        raise RuntimeError(
-            f"{MOTOR_NAME} became unreachable (heartbeat down); "
-            f"'{action}' not sent."
-        )
-    return motor_proxy.send_command(action, **kwargs)
 
 
 def _preflight_sweep_headroom(transport, v0):
