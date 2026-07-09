@@ -481,6 +481,18 @@ class TempCtrlEmulator(PicoEmulator):
         # MAX_REJECTS; only the enable ack clears it (matches firmware
         # tempctrl_update_sensor_drive / tempctrl_apply_enable).
         if tc.sensor_rejects >= MAX_REJECTS:
+            if not tc.sensor_tripped:
+                # Latch transition: drive is gated from here on, so the
+                # frozen rate reference no longer serves control. Drop
+                # it so the channel re-seeds two-to-anchor from the
+                # sensor's actual level and reporting recovers on its
+                # own. Without this, a trip whose sensor settles at a
+                # shifted level (a gated channel relaxes toward
+                # ambient) rejects every healthy sample against the
+                # stale reference and T_now stays null until a host
+                # re-enable (matches firmware).
+                tc.rate_ref_valid = False
+                tc.seed_pending = False
             tc.sensor_tripped = True
         # Data validity for this cycle only: feeds status and the null
         # T_now/resistance reporting. A latched channel with plausible,

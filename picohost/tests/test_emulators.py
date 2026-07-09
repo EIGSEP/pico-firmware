@@ -860,14 +860,14 @@ class TestTempCtrlSensorSanity:
         assert emu.lna.sensor_tripped is False
 
     def test_enable_true_clears_sensor_rejects_and_rate_reference(self):
-        import picohost.emulators.tempctrl as mod
-
         emu = TempCtrlEmulator()
         self._seed(emu)
-        emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS)
-        for _ in range(mod.MAX_REJECTS):
-            _run_to_pi_tick(emu)
-        assert emu.lna.sensor_rejects == mod.MAX_REJECTS
+        # Two rejects: below the latch ceiling, so the anchor is still
+        # held (a burst short of the latch must not move the reference).
+        emu.lna.inject_sensor_glitch(90.0, count=2)
+        _run_to_pi_tick(emu)
+        _run_to_pi_tick(emu)
+        assert emu.lna.sensor_rejects == 2
         assert emu.lna.rate_ref_valid is True
         emu.server({"LNA_enable": True})
         assert emu.lna.sensor_rejects == 0
@@ -906,6 +906,43 @@ class TestTempCtrlSensorSanity:
         emu.server({"LNA_enable": True})
         _run_to_pi_tick(emu)
         assert emu.lna.sensor_tripped is False
+
+    def test_latched_channel_recovers_reporting_at_shifted_level(self):
+        """A trip whose sensor settles at a NEW level must not null
+        T_now forever. Once the latch fires, drive is gated, so the
+        frozen rate reference serves no control purpose: the anchor
+        drops and the channel re-seeds two-to-anchor from the sensor's
+        actual level. Reporting recovers on its own; only drive stays
+        gated until the host ack. (Field bug: a tripped channel relaxes
+        toward ambient, so the real temperature soon sits far from the
+        frozen reference and every healthy sample was rejected against
+        it — T_now stayed null until a blind re-enable dropped the
+        anchor.)
+        """
+        import picohost.emulators.tempctrl as mod
+
+        emu = TempCtrlEmulator()
+        self._seed(emu)
+        # Garbage burst latches the channel; the sensor then keeps
+        # reading a steady, plausible level far from the frozen 25.0
+        # reference.
+        emu.lna.inject_sensor_glitch(90.0, count=mod.MAX_REJECTS + 2)
+        for _ in range(mod.MAX_REJECTS):
+            _run_to_pi_tick(emu)
+        assert emu.lna.sensor_tripped is True
+        # Two steady post-latch samples: candidate, then confirm — the
+        # channel re-anchors at the new level and reporting recovers
+        # without any host action.
+        _run_to_pi_tick(emu)
+        _run_to_pi_tick(emu)
+        assert emu.lna.rate_ref_valid is True
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(90.0)
+        # The latch is still host-ack-only: drive stays gated.
+        assert emu.lna.sensor_tripped is True
+        assert status["LNA_sensor_tripped"] is True
+        assert emu.lna.drive == 0.0
 
     def test_seed_requires_two_samples(self):
         emu = TempCtrlEmulator()

@@ -66,6 +66,11 @@
 // cadence this rejects steps larger than ~1 C. After TEMPCTRL_MAX_REJECTS
 // consecutive rejects (~600 ms of sustained garbage) the channel latches
 // sensor_tripped, which gates drive until the host acks with *_enable=true.
+// The latch transition also drops the rate anchor: with drive gated the
+// frozen reference serves no control purpose, so the channel re-seeds
+// two-to-anchor from the sensor's actual level and keeps reporting valid
+// data (a trip whose sensor settles at a shifted level would otherwise
+// reject every healthy sample against the stale reference forever).
 // A lone glitch is absorbed: one rejected sample reports one "error" status
 // cycle, then control continues.
 #define TEMPCTRL_MAX_RATE_C_PER_S  5.0f

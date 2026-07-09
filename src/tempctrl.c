@@ -350,6 +350,17 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
     // resets sensor_rejects but must not re-enable a channel whose sensor
     // just produced a burst of garbage.
     if (tempctrl->sensor_rejects >= TEMPCTRL_MAX_REJECTS) {
+        if (!tempctrl->sensor_tripped) {
+            // Latch transition: drive is gated from here on, so the frozen
+            // rate reference no longer serves control. Drop it so the
+            // channel re-seeds two-to-anchor from the sensor's actual level
+            // and reporting recovers on its own. Without this, a trip whose
+            // sensor settles at a shifted level (a gated channel relaxes
+            // toward ambient) rejects every healthy sample against the
+            // stale reference and T_now stays null until a host re-enable.
+            tempctrl->rate_ref_valid = false;
+            tempctrl->seed_pending = false;
+        }
         tempctrl->sensor_tripped = true;
     }
     // Data validity for this cycle only (feeds the per-channel status
