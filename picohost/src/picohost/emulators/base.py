@@ -1,4 +1,5 @@
 import json
+import math
 import threading
 import time
 import logging
@@ -18,6 +19,26 @@ def _safe_int(val, default=0):
         return int(val)
     except (ValueError, TypeError):
         return default
+
+
+def _cjson_number(value):
+    """Reshape one JSON value the way firmware cJSON prints it.
+
+    cJSON's print_number emits a whole-valued double with no decimal
+    point ("30" not "30.0") — via %d when the value fits in a C int and
+    via %1.15g (which also drops the point for whole values) above that
+    — so the host's json.loads yields int for KV_FLOAT fields whenever
+    the reading lands on a whole value (issue #148). %1.15g switches to
+    exponent notation at 1e15, where the text parses back as float.
+    NaN/inf print as JSON null in cJSON; Python's json.dumps would emit
+    the non-JSON tokens 'NaN'/'Infinity' instead, so map those to None.
+    """
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        if value.is_integer() and abs(value) < 1e15:
+            return int(value)
+    return value
 
 
 def _safe_float(val, default=0.0):
@@ -156,7 +177,16 @@ class PicoEmulator:
         if not data or self._peer is None:
             return
         try:
-            line = json.dumps(data, separators=(",", ":")) + "\n"
+            # Serialize numbers the way firmware cJSON does, so tests
+            # driving devices through emulators see the same shapes as
+            # real hardware (whole-valued floats arrive as JSON ints).
+            line = (
+                json.dumps(
+                    {k: _cjson_number(v) for k, v in data.items()},
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
             self._peer.write(line.encode("utf-8"))
         except Exception as e:
             logger.debug(f"Emulator write error: {e}")
