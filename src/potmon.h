@@ -10,6 +10,14 @@
 
 #define POTMON_GPIO_AZ          26
 
+/* SP1 failsafe termination control. The pin was freed when the el pot
+ * was removed. LOW = SHORT cap (failsafe: matches the unpowered state
+ * of the termination switch, so a rebooted or dead pico leaves the
+ * long cable shorted), HI = OPEN. */
+#define POTMON_GPIO_SP1_TERM    27
+#define POTMON_SP1_TERM_SHORT   0
+#define POTMON_SP1_TERM_OPEN    1
+
 #define POTMON_ADC_BITS         12
 #define POTMON_ADC_MAX          ((1 << POTMON_ADC_BITS) - 1)
 #define POTMON_VREF             3.3f
