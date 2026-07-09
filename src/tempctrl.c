@@ -182,29 +182,35 @@ void tempctrl_status(uint8_t app_id) {
     const uint32_t time_lna = temp_sensor_get_sample_time(&tempctrl_lna.temp_sensor);
     const uint32_t time_load = temp_sensor_get_sample_time(&tempctrl_load.temp_sensor);
 
-    /* Per-channel status reports DATA VALIDITY ONLY: "error" while the most
-       recent sample cycle produced no trustworthy temperature (plausibility
-       failure or rate-guard reject — see data_invalid in tempctrl.h), in
+    /* Per-channel status reports DATA EXISTENCE ONLY: "error" while the most
+       recent sample cycle produced no measurement at all (plausibility
+       failure or channel not installed — see data_invalid in tempctrl.h), in
        which case T_now/resistance are reported as JSON null (NaN KV_FLOAT)
-       while voltage stays live for open-vs-short diagnosis. The sticky
+       while voltage stays live for open-vs-short diagnosis. T_now reports
+       the raw conversion (temp_sensor.temperature), NOT the control
+       reference: a rate-guard-rejected sample stays in the stream with the
+       published sensor_rejects counter as the cross-check marker. The sticky
        control latches (sensor/stall/runaway_tripped, watchdog_tripped) gate
-       drive but never set status: a latched channel with a recovered sensor
-       keeps publishing valid science data. The picohost fan-out lifts these
-       strings to the per-stream top-level status consumed by
-       eigsep_observing._avg_sensor_values. */
+       drive but never set status. The picohost fan-out lifts these strings
+       to the per-stream top-level status consumed by
+       eigsep_observing._avg_sensor_values, which drops "error" rows — so an
+       errored cycle deletes that row from the corr record, and only
+       measurement absence may do that. */
     const char *status_lna = tempctrl_lna.data_invalid ? "error" : "update";
     const char *status_load = tempctrl_load.data_invalid ? "error" : "update";
-    const float T_lna = tempctrl_lna.data_invalid ? NAN : tempctrl_lna.T_now;
-    const float T_load = tempctrl_load.data_invalid ? NAN : tempctrl_load.T_now;
+    const float T_lna = tempctrl_lna.data_invalid
+        ? NAN : tempctrl_lna.temp_sensor.temperature;
+    const float T_load = tempctrl_load.data_invalid
+        ? NAN : tempctrl_load.temp_sensor.temperature;
     const float R_lna =
         tempctrl_lna.data_invalid ? NAN : tempctrl_lna.temp_sensor.resistance;
     const float R_load =
         tempctrl_load.data_invalid ? NAN : tempctrl_load.temp_sensor.resistance;
 
-    /* 42 KV pairs: 4 device-wide + 19 per channel * 2 channels. send_json
+    /* 44 KV pairs: 4 device-wide + 20 per channel * 2 channels. send_json
        silently truncates if the count argument disagrees with the actual
        entries — re-count when editing. */
-    send_json(42,
+    send_json(44,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -220,6 +226,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LNA_enabled", tempctrl_lna.enabled,
         KV_BOOL, "LNA_active", tempctrl_lna.active,
         KV_BOOL, "LNA_sensor_tripped", tempctrl_lna.sensor_tripped,
+        KV_INT, "LNA_sensor_rejects", tempctrl_lna.sensor_rejects,
         KV_BOOL, "LNA_stall_tripped", tempctrl_lna.stall_tripped,
         KV_BOOL, "LNA_runaway_tripped", tempctrl_lna.runaway_tripped,
         KV_BOOL, "LNA_cooling_enabled", tempctrl_lna.cooling_enabled,
@@ -239,6 +246,7 @@ void tempctrl_status(uint8_t app_id) {
         KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
         KV_BOOL, "LOAD_active", tempctrl_load.active,
         KV_BOOL, "LOAD_sensor_tripped", tempctrl_load.sensor_tripped,
+        KV_INT, "LOAD_sensor_rejects", tempctrl_load.sensor_rejects,
         KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
         KV_BOOL, "LOAD_runaway_tripped", tempctrl_load.runaway_tripped,
         KV_BOOL, "LOAD_cooling_enabled", tempctrl_load.cooling_enabled,
@@ -353,21 +361,26 @@ void tempctrl_update_sensor_drive(TempControl *tempctrl) {
         if (!tempctrl->sensor_tripped) {
             // Latch transition: drive is gated from here on, so the frozen
             // rate reference no longer serves control. Drop it so the
-            // channel re-seeds two-to-anchor from the sensor's actual level
-            // and reporting recovers on its own. Without this, a trip whose
-            // sensor settles at a shifted level (a gated channel relaxes
-            // toward ambient) rejects every healthy sample against the
-            // stale reference and T_now stays null until a host re-enable.
+            // channel re-seeds two-to-anchor from the sensor's actual
+            // level: a trip whose sensor settles at a shifted level (a
+            // gated channel relaxes toward ambient) would otherwise reject
+            // every healthy sample against the stale reference forever.
+            // With the anchor re-seeded, sensor_rejects falls back to 0 —
+            // combined with the held trip flag, the host's "sensor
+            // consistent again, safe to re-ack" signal.
             tempctrl->rate_ref_valid = false;
             tempctrl->seed_pending = false;
         }
         tempctrl->sensor_tripped = true;
     }
     // Data validity for this cycle only (feeds the per-channel status
-    // string and the null T_now/resistance reporting). A latched channel
-    // whose samples are plausible and rate-consistent again reports valid
-    // data — only drive stays gated.
-    tempctrl->data_invalid = !plausible || rejected;
+    // string and the null T_now/resistance reporting). Plausibility-only:
+    // a rate-guard reject was still a real ADC conversion, so status keeps
+    // reporting it (temp_sensor.temperature) with the published
+    // sensor_rejects counter as the marker. Only "no measurement exists"
+    // errors the stream — the corr record must not lose rows to a
+    // statistical guard; downstream owns the trust call.
+    tempctrl->data_invalid = !plausible;
 
     // rate_ref_valid gates control as well as the guard: until the reference
     // is anchored T_now is only a candidate, so the channel stays idle (the

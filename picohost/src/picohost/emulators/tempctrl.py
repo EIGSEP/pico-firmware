@@ -105,6 +105,12 @@ class TempControlState:
         self.T_target = 30.0
         self.voltage = 0.0
         self.resistance = 0.0
+        # Mirrors temp_sensor.temperature (temp_simple.c): the most recent
+        # plausible conversion, updated on every plausible read — including
+        # rate-guard-rejected ones. This is the REPORTED value; T_now is the
+        # control reference and holds on reject. Boot value 0.0 is never
+        # published: data_invalid is True until the first plausible sample.
+        self.temperature = 0.0
         self.drive = 0.0
         self.Kp = 0.2
         self.Ki = 0.0
@@ -123,9 +129,12 @@ class TempControlState:
         self.installed = True
         # Per-cycle data validity (NOT a latch, mirrors data_invalid in
         # tempctrl.h): True when the most recent sample cycle produced no
-        # trustworthy temperature — plausibility failure or rate-guard
-        # reject. Drives the per-channel status string and the null
-        # T_now/resistance reporting. True at boot: no sample taken yet.
+        # measurement at all — plausibility failure (railed divider) or
+        # channel not installed. Drives the per-channel status string and
+        # the null T_now/resistance reporting. Rate-guard rejects do NOT
+        # invalidate: a rejected sample was still a real conversion and
+        # stays in the stream (sensor_rejects is the published marker).
+        # True at boot: no sample taken yet.
         self.data_invalid = True
         # Asymmetric clamp guard (see tempctrl.h). True preserves the
         # original symmetric drive range; False forbids drive<0 so the
@@ -181,10 +190,12 @@ class TempControlState:
         Each is consumed on a subsequent op tick and run through
         the rate-of-change guard, mirroring a thermistor/ADC path that
         returns garbage. A jump larger than ``MAX_RATE_C_PER_S * dt`` is
-        rejected (``T_now`` holds, ``sensor_rejects`` increments, the cycle
-        reports ``data_invalid``); after ``MAX_REJECTS`` consecutive rejects
-        the channel latches the sticky ``sensor_tripped``, which gates drive
-        until the host acks with ``*_enable=true``.
+        rejected for control (``T_now`` holds, ``sensor_rejects``
+        increments) but still reported — the raw conversion stays in the
+        stream with the reject counter as the marker; after ``MAX_REJECTS``
+        consecutive rejects the channel latches the sticky
+        ``sensor_tripped``, which gates drive until the host acks with
+        ``*_enable=true``.
         """
         self._glitch_queue.extend([float(value)] * count)
 
@@ -422,6 +433,10 @@ class TempCtrlEmulator(PicoEmulator):
             return False, False
         raw = tc._glitch_queue.pop(0) if tc._glitch_queue else tc.T_now
         _set_thermistor_diagnostics(tc, raw)
+        # Every plausible conversion is stored for reporting, accepted or
+        # not — mirrors temp_sensor_read() writing temp_sensor.temperature
+        # before the rate guard runs.
+        tc.temperature = raw
         if not tc.rate_ref_valid:
             if not tc.seed_pending:
                 # First sample: hold as candidate, await confirmation.
@@ -485,19 +500,22 @@ class TempCtrlEmulator(PicoEmulator):
                 # Latch transition: drive is gated from here on, so the
                 # frozen rate reference no longer serves control. Drop
                 # it so the channel re-seeds two-to-anchor from the
-                # sensor's actual level and reporting recovers on its
-                # own. Without this, a trip whose sensor settles at a
-                # shifted level (a gated channel relaxes toward
-                # ambient) rejects every healthy sample against the
-                # stale reference and T_now stays null until a host
-                # re-enable (matches firmware).
+                # sensor's actual level: a trip whose sensor settles at
+                # a shifted level (a gated channel relaxes toward
+                # ambient) would otherwise reject every healthy sample
+                # against the stale reference forever. With the anchor
+                # re-seeded, sensor_rejects falls back to 0 — combined
+                # with the held trip flag, the host's "sensor consistent
+                # again, safe to re-ack" signal (matches firmware).
                 tc.rate_ref_valid = False
                 tc.seed_pending = False
             tc.sensor_tripped = True
         # Data validity for this cycle only: feeds status and the null
-        # T_now/resistance reporting. A latched channel with plausible,
-        # rate-consistent samples reports valid data — only drive gates.
-        tc.data_invalid = not plausible or rejected
+        # T_now/resistance reporting. Plausibility-only — a rate-guard
+        # reject was still a real conversion and stays in the stream
+        # (the published sensor_rejects counter is the marker); the
+        # firmware never withholds science data on rate statistics alone.
+        tc.data_invalid = not plausible
 
         # rate_ref_valid gates control too: until the reference anchors T_now
         # is only a candidate, so the channel stays idle (drive held at 0)
@@ -585,11 +603,16 @@ class TempCtrlEmulator(PicoEmulator):
         self._update_channel(self.load)
 
     def get_status(self):
-        # Per-channel status reports DATA VALIDITY ONLY; the sticky control
-        # latches (sensor/stall/runaway_tripped) gate drive but never set
-        # status. Invalid cycles report T_now/resistance as None (the
-        # firmware sends NaN KV_FLOATs, which cJSON prints as JSON null)
-        # while voltage stays live for open-vs-short diagnosis.
+        # Per-channel status reports DATA EXISTENCE ONLY: "error" means the
+        # cycle produced no measurement (plausibility failure / channel not
+        # installed), reported as None T_now/resistance (the firmware sends
+        # NaN KV_FLOATs, which cJSON prints as JSON null) while voltage
+        # stays live for open-vs-short diagnosis. T_now reports the raw
+        # conversion (tc.temperature), NOT the control reference — a
+        # rate-guard-rejected sample stays in the stream with the
+        # sensor_rejects counter as the cross-check marker. The sticky
+        # control latches (sensor/stall/runaway_tripped) gate drive but
+        # never set status.
         lna_status = "error" if self.lna.data_invalid else "update"
         load_status = "error" if self.load.data_invalid else "update"
         return {
@@ -598,7 +621,9 @@ class TempCtrlEmulator(PicoEmulator):
             "watchdog_tripped": self.watchdog_tripped,
             "watchdog_timeout_ms": self.watchdog_timeout_ms,
             "LNA_status": lna_status,
-            "LNA_T_now": None if self.lna.data_invalid else self.lna.T_now,
+            "LNA_T_now": (
+                None if self.lna.data_invalid else self.lna.temperature
+            ),
             "LNA_voltage": self.lna.voltage,
             "LNA_resistance": (
                 None if self.lna.data_invalid else self.lna.resistance
@@ -610,6 +635,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_enabled": self.lna.enabled,
             "LNA_active": self.lna.active,
             "LNA_sensor_tripped": self.lna.sensor_tripped,
+            "LNA_sensor_rejects": self.lna.sensor_rejects,
             "LNA_stall_tripped": self.lna.stall_tripped,
             "LNA_runaway_tripped": self.lna.runaway_tripped,
             "LNA_cooling_enabled": self.lna.cooling_enabled,
@@ -619,7 +645,9 @@ class TempCtrlEmulator(PicoEmulator):
             "LNA_Ki": self.lna.Ki,
             "LNA_integral": self.lna.integral,
             "LOAD_status": load_status,
-            "LOAD_T_now": None if self.load.data_invalid else self.load.T_now,
+            "LOAD_T_now": (
+                None if self.load.data_invalid else self.load.temperature
+            ),
             "LOAD_voltage": self.load.voltage,
             "LOAD_resistance": (
                 None if self.load.data_invalid else self.load.resistance
@@ -631,6 +659,7 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_enabled": self.load.enabled,
             "LOAD_active": self.load.active,
             "LOAD_sensor_tripped": self.load.sensor_tripped,
+            "LOAD_sensor_rejects": self.load.sensor_rejects,
             "LOAD_stall_tripped": self.load.stall_tripped,
             "LOAD_runaway_tripped": self.load.runaway_tripped,
             "LOAD_cooling_enabled": self.load.cooling_enabled,

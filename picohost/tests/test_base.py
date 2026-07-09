@@ -1089,6 +1089,7 @@ class TestPicoPeltierRedisHandler:
         "LNA_enabled": True,
         "LNA_active": True,
         "LNA_sensor_tripped": False,
+        "LNA_sensor_rejects": 1,
         "LNA_stall_tripped": False,
         "LNA_runaway_tripped": False,
         "LNA_cooling_enabled": True,
@@ -1110,6 +1111,7 @@ class TestPicoPeltierRedisHandler:
         "LOAD_enabled": True,
         "LOAD_active": False,
         "LOAD_sensor_tripped": False,
+        "LOAD_sensor_rejects": 0,
         "LOAD_stall_tripped": False,
         "LOAD_runaway_tripped": False,
         "LOAD_cooling_enabled": False,
@@ -1135,6 +1137,7 @@ class TestPicoPeltierRedisHandler:
         "enabled",
         "active",
         "sensor_tripped",
+        "sensor_rejects",
         "stall_tripped",
         "runaway_tripped",
         "cooling_enabled",
@@ -1182,6 +1185,7 @@ class TestPicoPeltierRedisHandler:
             assert lna["drive_level"] == pytest.approx(0.42)
             assert lna["active"] is True
             assert lna["sensor_tripped"] is False
+            assert lna["sensor_rejects"] == 1
             assert lna["runaway_tripped"] is False
             assert load["T_now"] is None
             assert load["resistance"] is None

@@ -68,11 +68,14 @@
 // sensor_tripped, which gates drive until the host acks with *_enable=true.
 // The latch transition also drops the rate anchor: with drive gated the
 // frozen reference serves no control purpose, so the channel re-seeds
-// two-to-anchor from the sensor's actual level and keeps reporting valid
-// data (a trip whose sensor settles at a shifted level would otherwise
-// reject every healthy sample against the stale reference forever).
-// A lone glitch is absorbed: one rejected sample reports one "error" status
-// cycle, then control continues.
+// two-to-anchor from the sensor's actual level (a trip whose sensor settles
+// at a shifted level would otherwise reject every healthy sample against
+// the stale reference forever, pegging sensor_rejects).
+// The guard is CONTROL-ONLY: a rejected sample was still a plausible ADC
+// conversion, so it is reported (status "update", raw value) with the
+// published sensor_rejects counter as the cross-check marker — the firmware
+// never withholds science data on rate statistics alone. A lone glitch is
+// absorbed: control continues on the next accepted sample.
 #define TEMPCTRL_MAX_RATE_C_PER_S  5.0f
 #define TEMPCTRL_MAX_REJECTS       3
 
@@ -110,10 +113,12 @@ typedef struct {
     // only via *_enable=true.
     bool installed;
     // Per-cycle data validity (NOT a latch): true when this sample cycle
-    // produced no trustworthy temperature — plausibility conversion failed
-    // (railed divider) or the rate guard rejected the sample. Drives the
+    // produced no measurement at all — the plausibility conversion failed
+    // (railed divider) or the channel is not installed. Drives the
     // per-channel status string ("error") and the null T_now/resistance
-    // reporting; clears by itself on the next good sample.
+    // reporting; clears by itself on the next plausible sample. Rate-guard
+    // rejects do NOT set it: a rejected sample is still reported (see the
+    // guard comment above TEMPCTRL_MAX_RATE_C_PER_S).
     bool data_invalid;
     // Asymmetric clamp: when false, the PI controller saturates at
     // [0, +clamp] instead of [-clamp, +clamp], forbidding cooling drive.
@@ -143,9 +148,11 @@ typedef struct {
     uint8_t runaway_strikes;
     // Sensor sanity guard state. rate_ref_ms advances on every fresh sample
     // (so the rate denominator is one sample); T_now itself is the value
-    // reference (held on reject). sensor_rejects counts consecutive rejected
-    // samples; when it reaches TEMPCTRL_MAX_REJECTS the channel latches via
-    // the sticky sensor_tripped flag. sensor_tripped is cleared only by an
+    // reference (held on reject — the REPORTED value is the raw conversion
+    // in temp_sensor.temperature). sensor_rejects counts consecutive
+    // rejected samples and is published in status as the per-cycle
+    // cross-check marker; when it reaches TEMPCTRL_MAX_REJECTS the channel
+    // latches via the sticky sensor_tripped flag. sensor_tripped is cleared only by an
     // explicit *_enable=true host ack (like stall_tripped), so a sensor that
     // produced a burst of garbage cannot silently re-enable drive when a
     // later reading happens to fall back within the rate budget.
