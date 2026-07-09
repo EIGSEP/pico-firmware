@@ -217,7 +217,8 @@ def derive_level_theta(u, nominal_level_axis, motor_el_deg):
         th_u = np.unwrap(theta[order])
         slope = -slope
     coef = np.polyfit(motor[order], np.degrees(th_u), 1)
-    home = -coef[1] / coef[0]
+    intercept = (coef[1] + 180.0) % 360.0 - 180.0
+    home = -intercept / coef[0]
     home = (home + 180.0) % 360.0 - 180.0
     if abs(home) > _HOME_FLIP_GUARD_DEG:
         raise ValueError(

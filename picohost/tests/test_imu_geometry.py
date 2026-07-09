@@ -177,6 +177,21 @@ def test_derive_level_theta_anchors_at_nominal_down():
     assert np.all(np.diff(np.unwrap(theta[order])) > 0)
 
 
+def test_derive_level_theta_wraps_intercept_before_slope_division():
+    # Slope != 1 (fitted, not nominal) exposed a wrap-before-divide bug:
+    # home = -intercept/slope computed on the UNWRAPPED intercept and
+    # only then wrapped, so a global +360 offset on the unwrapped theta
+    # carried a 1/slope amplification through the wrap and flipped the
+    # sign of small home offsets. physical el = 0.99*motor + 3.0, so
+    # el=0 (home) at motor = -3.0/0.99 ~= -3.03 deg.
+    scaled_motor = 0.99 * MOTOR_STOPS
+    u = _el_sweep_units(scaled_motor, M_EL_TRUE, level_offset_deg=3.0)
+    theta, home = ig.derive_level_theta(
+        u, ig.NOMINAL_LEVEL_AXIS["imu_el"], MOTOR_STOPS
+    )
+    assert abs(home - (-3.0 / 0.99)) < 0.5
+
+
 def test_derive_level_theta_flip_guard():
     # inverted mount: nominal -z actually points UP at level -> derived
     # level lands at motor ~180 -> hard error, not a silent 180 offset
