@@ -18,8 +18,8 @@
 // LOAD Temperature Control configuration
 #define TEMP_SENSOR_LOAD_PIN    26
 #define PELTIER_LOAD_PWM_PIN    9   // enable2
-#define PELTIER_LOAD_DIR_PIN3   11  // in3
-#define PELTIER_LOAD_DIR_PIN4   13  // in4
+#define PELTIER_LOAD_DIR_PIN3   13  // in3
+#define PELTIER_LOAD_DIR_PIN4   11  // in4
 
 // PWM configuration
 #define PWM_WRAP            1000
