@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.0](https://github.com/EIGSEP/pico-firmware/compare/v4.3.0...v4.4.0) (2026-07-09)
+
+
+### Features
+
+* **picohost:** el-only calibrate-imu with derived (most-down) home; retire az blend ([#152](https://github.com/EIGSEP/pico-firmware/issues/152)) ([f86a226](https://github.com/EIGSEP/pico-firmware/commit/f86a22697c92bde4f34ae4ed14c5092142488cbe))
+
 ## [4.3.0](https://github.com/EIGSEP/pico-firmware/compare/v4.2.0...v4.3.0) (2026-07-09)
 
 
