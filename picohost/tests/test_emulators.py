@@ -1621,6 +1621,43 @@ ALL_EMULATORS = [
 ]
 
 
+class TestPotMonEmulatorSp1Term:
+    """SP1 failsafe termination control — mirrors src/potmon.c.
+
+    GPIO 27 LOW/0 = SHORT cap (failsafe: the unpowered/reboot state),
+    HI/1 = OPEN. potmon_server accepts {"sp1_term": 0|1} and ignores
+    anything else, mirroring rfswitch_server's cJSON validation.
+    """
+
+    def test_boots_short(self):
+        emu = PotMonEmulator()
+        assert emu.sp1_term == PotMonEmulator.SP1_TERM_SHORT
+        assert emu.get_status()["sp1_term"] == 0
+
+    def test_command_sets_open_and_back(self):
+        emu = PotMonEmulator()
+        emu.server({"sp1_term": 1})
+        assert emu.get_status()["sp1_term"] == 1
+        emu.server({"sp1_term": 0})
+        assert emu.get_status()["sp1_term"] == 0
+
+    def test_invalid_commands_ignored(self):
+        emu = PotMonEmulator()
+        emu.server({"sp1_term": 1})
+        # cJSON_IsNumber rejects bools/strings; exact 0/1 only.
+        for bad in (2, -1, 0.5, "OPEN", True, None):
+            emu.server({"sp1_term": bad})
+            assert emu.get_status()["sp1_term"] == 1
+        emu.server({"unrelated": 0})
+        assert emu.get_status()["sp1_term"] == 1
+
+    def test_init_resets_to_short(self):
+        emu = PotMonEmulator()
+        emu.server({"sp1_term": 1})
+        emu.init()
+        assert emu.sp1_term == PotMonEmulator.SP1_TERM_SHORT
+
+
 class TestSensorName:
     """Ensure every emulator status contains 'sensor_name' for redis_handler."""
 
