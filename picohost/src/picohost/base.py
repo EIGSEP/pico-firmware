@@ -949,13 +949,13 @@ class PicoPeltier(PicoDevice):
 
 
 class PicoIMU(PicoDevice):
-    """IMU device (BNO08x UART RVC mode) with live az/el conversion.
+    """IMU device (BNO08x UART RVC mode) with live elevation conversion.
 
     Loads its mount calibration from an :class:`ImuCalStore` section keyed
     by sensor name (``imu_el`` / ``imu_az``) and augments each status tick
-    with derived angles. ``imu_az`` reports az + el; ``imu_el`` reports el
-    only (it cannot observe azimuth). All derived fields are ``None`` when
-    that IMU is uncalibrated, so the published shape is stable.
+    with a derived elevation angle. Both IMUs report ``el_deg`` only;
+    azimuth is owned by potmon (descope 2026-07-09). ``el_deg`` is ``None``
+    when that IMU is uncalibrated, so the published shape is stable.
 
     Note on ``el_deg`` sign convention: ``imu_el.el_deg`` is SIGNED
     (``el_from_imu``, negative below horizontal), while ``imu_az.el_deg``
@@ -1001,15 +1001,13 @@ class PicoIMU(PicoDevice):
             if name == "imu_el":
                 data["el_deg"] = self._el_only(data, cal)
             elif name == "imu_az":
-                data.update(self._az_and_el(data, cal))
+                data["el_deg"] = self._el_abs_only(data, cal)
         except Exception:
             # A malformed/partial cal section (or a bad sample) must never
-            # suppress the raw firmware tick: publish raw with null derived
-            # fields, keeping the published shape stable. Warn once per IMU.
-            if name == "imu_el":
-                data["el_deg"] = None
-            elif name == "imu_az":
-                data.update(self._az_null())
+            # suppress the raw firmware tick: publish raw with a null
+            # derived field, keeping the published shape stable. Warn once
+            # per IMU.
+            data["el_deg"] = None
             if name not in self._imu_derive_warned:
                 self._imu_derive_warned.add(name)
                 self.logger.warning(
@@ -1019,17 +1017,6 @@ class PicoIMU(PicoDevice):
                 )
         self._base_redis_handler(data)
 
-    @staticmethod
-    def _az_null():
-        """Null-valued imu_az derived shape (stable keys, no calibration)."""
-        return {
-            "el_deg": None,
-            "az_deg": None,
-            "az_from_accel_deg": None,
-            "az_from_yaw_deg": None,
-            "az_blend_weight": None,
-        }
-
     def _el_only(self, data, cal):
         if cal is None:
             return None
@@ -1038,39 +1025,13 @@ class PicoIMU(PicoDevice):
             return None
         return ig.el_from_imu(a, cal["M"])
 
-    def _az_and_el(self, data, cal):
-        out = self._az_null()
+    def _el_abs_only(self, data, cal):
         if cal is None:
-            return out
+            return None
         a = self._accel_unit(data, cal)
         if a is None:
-            return out
-        M = cal["M"]
-        el = ig.el_abs_from_imu_az(a, M)
-        az_a = ig.az_from_accel(
-            a, M, cal["az_sign"], cal["az_accel_offset_deg"]
-        )
-        out["el_deg"] = el
-        out["az_from_accel_deg"] = az_a
-        yaw = data.get("yaw")
-        if yaw is not None:
-            az_y = ig.az_from_yaw(
-                yaw, cal["az_yaw_sign"], cal["az_yaw_offset_deg"]
-            )
-            az, w = ig.blend_az(
-                az_a,
-                az_y,
-                el,
-                cal.get("theta_sat_deg", ig.DEFAULT_THETA_SAT_DEG),
-                cal.get("theta_dead_deg", ig.DEFAULT_THETA_DEAD_DEG),
-            )
-            out["az_from_yaw_deg"] = az_y
-            out["az_deg"] = az
-            out["az_blend_weight"] = w
-        else:
-            out["az_deg"] = az_a
-            out["az_blend_weight"] = 1.0
-        return out
+            return None
+        return ig.el_abs_from_imu_az(a, cal["M"])
 
 
 class PicoLidar(PicoDevice):

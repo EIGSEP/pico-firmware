@@ -521,16 +521,12 @@ class TestDiscoverNew:
         """_register_devices wires imu_cal_store into PicoIMU at init."""
         import picohost.manager as mgr_mod
 
+        # El-only cal section shape (fit_el_calibration output) since the
+        # 2026-07-09 azimuth descope.
         _AZ_CAL = {
             "accel_bias": [0.0, 0.0, 0.0],
             "accel_scale": 1.0,
             "M": [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],
-            "az_accel_offset_deg": 30.0,
-            "az_sign": 1.0,
-            "az_yaw_offset_deg": 30.0,
-            "az_yaw_sign": 1.0,
-            "theta_sat_deg": 45.0,
-            "theta_dead_deg": 8.0,
         }
         # Pre-populate the manager's ImuCalStore before discovery.
         mgr._imu_cal_store.upload({"imu_az": _AZ_CAL})

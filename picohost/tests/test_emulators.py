@@ -1073,15 +1073,16 @@ class TestImuEmulator:
         from picohost import imu_geometry as ig
 
         emu = ImuEmulator(app_id=6)  # imu_az, identity mount
+        # az_deg only varies the raw accel_x/accel_y split -- el_abs_from_imu_az
+        # is invariant to rotation about the az spin axis (retired along with
+        # the azimuth blend estimator; el is the only derived field now).
         emu.set_orientation(az_deg=70.0, el_deg=40.0)
         emu.op()
         s = emu.get_status()
         a = np.array([s["accel_x"], s["accel_y"], s["accel_z"]])
         a_unit = a / np.linalg.norm(a)
         el = ig.el_abs_from_imu_az(a_unit, np.eye(3))
-        az = ig.az_from_accel(a_unit, np.eye(3))
         assert el == pytest.approx(40.0, abs=1e-3)
-        assert az == pytest.approx(70.0, abs=1e-3)
 
     def test_accel_error_scales_norm(self):
         import numpy as np

@@ -8,18 +8,12 @@ from picohost.testing import DummyPicoIMU
 
 _SCALARS = (str, int, float, bool, type(None))
 
-# An imu_az calibration with identity mount and a +30 deg pot offset on both
-# az channels, so az = phi + 30 (accel) and az = yaw + 30 (yaw).
+# An imu_az calibration with identity mount (el-only; azimuth is owned by
+# potmon since the 2026-07-09 descope).
 _AZ_CAL = {
     "accel_bias": [0.0, 0.0, 0.0],
     "accel_scale": 1.0,
     "M": [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],
-    "az_accel_offset_deg": 30.0,
-    "az_sign": 1.0,
-    "az_yaw_offset_deg": 30.0,
-    "az_yaw_sign": 1.0,
-    "theta_sat_deg": 45.0,
-    "theta_dead_deg": 8.0,
 }
 _EL_CAL = {
     "accel_bias": [0.0, 0.0, 0.0],
@@ -55,58 +49,34 @@ def _az_status(theta_deg, phi_deg, yaw_deg):
     }
 
 
-def test_imu_az_uncalibrated_publishes_none_fields():
+def test_imu_az_uncalibrated_publishes_none_el():
     dev = DummyPicoIMU("/dev/dummy")
     pub = _capture(dev, _az_status(30, 70, 100))
+    assert pub["el_deg"] is None
     for k in (
         "az_deg",
-        "el_deg",
         "az_from_accel_deg",
         "az_from_yaw_deg",
         "az_blend_weight",
     ):
-        assert pub[k] is None
+        assert k not in pub
     # raw fields preserved
     assert pub["yaw"] == 100
     dev.disconnect()
 
 
-def test_imu_az_calibrated_reports_az_and_el():
+def test_imu_az_calibrated_reports_el_only():
     dev = DummyPicoIMU("/dev/dummy")
     dev.set_calibration(imu_az=_AZ_CAL)
     pub = _capture(dev, _az_status(60.0, 70.0, 100.0))
     assert pub["el_deg"] == pytest.approx(60.0, abs=1e-3)
-    # well tilted (in the 45-135 deg plateau) -> accel regime -> az = phi + 30
-    assert pub["az_from_accel_deg"] == pytest.approx(100.0, abs=1e-3)
-    assert pub["az_from_yaw_deg"] == pytest.approx(130.0, abs=1e-3)
-    assert pub["az_blend_weight"] == pytest.approx(1.0)
-    assert pub["az_deg"] == pytest.approx(100.0, abs=1e-3)
-    dev.disconnect()
-
-
-def test_imu_az_legacy_cal_deadband_suppresses_pole_garbage():
-    # A cal written before the sin^2 blend (only the old theta_cross_deg key)
-    # must still pick up the deadband via the handler's .get(...) fallbacks, so
-    # a near-pole tilt -- which the old linear ramp would have trusted as full
-    # accel -- now falls entirely on yaw.
-    legacy = {k: v for k, v in _AZ_CAL.items()}
-    del legacy["theta_sat_deg"]
-    del legacy["theta_dead_deg"]
-    legacy["theta_cross_deg"] = 1.6
-    dev = DummyPicoIMU("/dev/dummy")
-    dev.set_calibration(imu_az=legacy)
-    pub = _capture(dev, _az_status(5.0, 70.0, 100.0))  # 5 deg < 8 deg deadband
-    assert pub["az_blend_weight"] == pytest.approx(0.0)
-    assert pub["az_deg"] == pytest.approx(130.0, abs=1e-3)  # yaw + 30
-    dev.disconnect()
-
-
-def test_imu_az_near_level_uses_yaw():
-    dev = DummyPicoIMU("/dev/dummy")
-    dev.set_calibration(imu_az=_AZ_CAL)
-    pub = _capture(dev, _az_status(0.0, 0.0, 100.0))
-    assert pub["az_blend_weight"] == pytest.approx(0.0)
-    assert pub["az_deg"] == pytest.approx(130.0, abs=1e-3)  # yaw + 30
+    for k in (
+        "az_deg",
+        "az_from_accel_deg",
+        "az_from_yaw_deg",
+        "az_blend_weight",
+    ):
+        assert k not in pub
     dev.disconnect()
 
 
@@ -209,23 +179,25 @@ def test_imu_el_calibrated_published_dict_is_scalar_only():
 def test_imu_az_malformed_cal_still_publishes_raw():
     """A partial/broken cal section must never suppress the raw firmware tick.
 
-    The handler derives az/el before its single publish; a missing key in the
-    cal must degrade the derived fields to None, not drop the whole record.
+    The handler derives el before its single publish; a missing key in the
+    cal must degrade el_deg to None, not drop the whole record.
     """
     dev = DummyPicoIMU("/dev/dummy")
-    # cal missing "M" (and more) -> derivation raises mid-handler
+    # cal missing "M" -> derivation raises mid-handler
     dev.set_calibration(imu_az={"accel_bias": [0.0, 0.0, 0.0]})
     pub = _capture(dev, _az_status(30, 70, 100))
     assert pub["yaw"] == 100  # raw tick survived
     assert pub["accel_x"] is not None
+    assert (
+        pub["el_deg"] is None
+    )  # derived degraded to None, shape stays stable
     for k in (
         "az_deg",
-        "el_deg",
         "az_from_accel_deg",
         "az_from_yaw_deg",
         "az_blend_weight",
     ):
-        assert pub[k] is None  # derived degraded to None, shape stays stable
+        assert k not in pub
     dev.disconnect()
 
 
@@ -252,15 +224,14 @@ def test_imu_el_malformed_cal_still_publishes_raw():
 
 
 def test_emulator_to_handler_roundtrip_identity_mount():
-    """Forward-model status dict at a known pose; handler recovers az/el
+    """Forward-model status dict at a known pose; handler recovers el
     with a cal whose mount matches the forward model's (identity)."""
     dev = DummyPicoIMU(
         "/dev/dummy"
     )  # handler keys off data["sensor_name"], not the device name
     dev.set_calibration(imu_az=_AZ_CAL)
-    # craft an imu_az status straight from the forward model at (el=35, az=80)
-    pub = _capture(dev, _az_status(35.0, 80.0 - 30.0, 80.0 - 30.0))
-    # az_accel_offset is +30 so phi=50 -> az 80; yaw 50 -> az 80
+    # craft an imu_az status straight from the forward model at el=35 (phi is
+    # irrelevant to el_abs_from_imu_az -- rotation about the az spin axis)
+    pub = _capture(dev, _az_status(35.0, 80.0, 0.0))
     assert pub["el_deg"] == pytest.approx(35.0, abs=1e-3)
-    assert pub["az_deg"] == pytest.approx(80.0, abs=1e-3)
     dev.disconnect()
