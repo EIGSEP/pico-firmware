@@ -683,6 +683,7 @@ class PicoPeltier(PicoDevice):
         "enabled",
         "active",
         "sensor_tripped",
+        "sensor_rejects",
         "stall_tripped",
         "runaway_tripped",
         "cooling_enabled",

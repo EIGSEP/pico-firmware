@@ -253,6 +253,7 @@ class TestTempCtrlEmulator:
             "LNA_enabled",
             "LNA_active",
             "LNA_sensor_tripped",
+            "LNA_sensor_rejects",
             "LNA_stall_tripped",
             "LNA_runaway_tripped",
             "LNA_cooling_enabled",
@@ -272,6 +273,7 @@ class TestTempCtrlEmulator:
             "LOAD_enabled",
             "LOAD_active",
             "LOAD_sensor_tripped",
+            "LOAD_sensor_rejects",
             "LOAD_stall_tripped",
             "LOAD_runaway_tripped",
             "LOAD_cooling_enabled",
@@ -791,10 +793,13 @@ class TestTempCtrlRunawayGuard:
 
 class TestTempCtrlSensorSanity:
     """A fresh sample implying a physically impossible rate of change is
-    rejected (T_now holds, the cycle reports invalid data); MAX_REJECTS
-    consecutive rejects latch the sticky sensor_tripped, which gates drive
-    until the host acks. Recovered data reports "update" again — the latch
-    never masks a healthy stream (the corr record keeps the readings).
+    rejected for CONTROL only: the control reference T_now holds and the
+    reject counts toward the latch, but the cycle still reports the raw
+    conversion (status "update") with the published sensor_rejects counter
+    as the marker. MAX_REJECTS consecutive rejects latch the sticky
+    sensor_tripped, which gates drive until the host acks. Only the
+    plausibility chain — no measurement exists — errors the stream; the
+    firmware never vetoes science data on rate statistics alone.
     """
 
     def _seed(self, emu):
@@ -816,18 +821,24 @@ class TestTempCtrlSensorSanity:
         _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == 1
         assert emu.lna.sensor_tripped is False
-        # The rejected cycle reports invalid data: no trustworthy sample
-        # was produced, so status errors and the values null for one cycle.
-        assert emu.lna.data_invalid is True
-        status = emu.get_status()
-        assert status["LNA_status"] == "error"
-        assert status["LNA_T_now"] is None
-        # Bogus value was not adopted — T_now holds the last good reading.
-        assert emu.lna.T_now == 25.0
-        # The next good sample clears it without any host action.
-        _run_to_pi_tick(emu)
+        # The rejected sample was still a plausible ADC conversion, so the
+        # cycle reports it: raw value in the stream, published reject
+        # counter as the marker that the rate guard discarded it for
+        # control. Downstream owns the trust call.
         assert emu.lna.data_invalid is False
-        assert emu.get_status()["LNA_status"] == "update"
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(90.0)
+        assert status["LNA_sensor_rejects"] == 1
+        # Bogus value was not adopted for control — the rate/PI reference
+        # holds the last good reading.
+        assert emu.lna.T_now == 25.0
+        # The next good sample clears the counter without any host action.
+        _run_to_pi_tick(emu)
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(25.0)
+        assert status["LNA_sensor_rejects"] == 0
 
     def test_consecutive_glitches_latch_sensor_fault(self):
         import picohost.emulators.tempctrl as mod
@@ -839,10 +850,14 @@ class TestTempCtrlSensorSanity:
             _run_to_pi_tick(emu)
         assert emu.lna.sensor_rejects == mod.MAX_REJECTS
         assert emu.lna.sensor_tripped is True
-        # The latching cycle itself was a reject → invalid data this cycle.
-        assert emu.get_status()["LNA_status"] == "error"
-        assert emu.get_status()["LNA_T_now"] is None
-        # Never adopted a garbage value while latching.
+        # The latching cycle's sample was still a plausible conversion, so
+        # it stays in the stream; the pegged reject counter and the sticky
+        # trip flag are the fault markers.
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(90.0)
+        assert status["LNA_sensor_rejects"] == mod.MAX_REJECTS
+        # Control never adopted a garbage value while latching.
         assert emu.lna.T_now == 25.0
 
     def test_good_sample_after_glitches_resets(self):
@@ -939,6 +954,10 @@ class TestTempCtrlSensorSanity:
         status = emu.get_status()
         assert status["LNA_status"] == "update"
         assert status["LNA_T_now"] == pytest.approx(90.0)
+        # The reject counter recovered to 0 — combined with the held trip
+        # flag this is the operator's "sensor consistent again, safe to
+        # re-ack" signal.
+        assert status["LNA_sensor_rejects"] == 0
         # The latch is still host-ack-only: drive stays gated.
         assert emu.lna.sensor_tripped is True
         assert status["LNA_sensor_tripped"] is True
@@ -1380,6 +1399,8 @@ class TestTempCtrlStatusTypes:
             assert isinstance(status[f"{prefix}_enabled"], bool)
             assert isinstance(status[f"{prefix}_active"], bool)
             assert isinstance(status[f"{prefix}_sensor_tripped"], bool)
+            # KV_INT (and not a bool masquerading as one).
+            assert type(status[f"{prefix}_sensor_rejects"]) is int
             assert isinstance(status[f"{prefix}_runaway_tripped"], bool)
             assert isinstance(status[f"{prefix}_hysteresis"], float)
             assert isinstance(status[f"{prefix}_clamp"], float)

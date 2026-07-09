@@ -355,6 +355,28 @@ class TestTempCtrlProtocol:
         assert isinstance(status["LNA_voltage"], float)
         assert status["LOAD_status"] == "update"
 
+    def test_rate_reject_still_reports_measured_value(self):
+        """tempctrl.c: the rate guard is control-only. A rejected sample
+        was still a plausible ADC conversion, so the cycle reports it
+        (status "update", raw value in T_now) with the published
+        sensor_rejects counter as the cross-check marker; only the
+        plausibility chain — no measurement exists — errors the stream.
+        The firmware never withholds science data on rate statistics
+        alone; downstream owns that call."""
+        emu = TempCtrlEmulator()
+        emu.lna.thermal_frozen = True
+        emu.op()
+        emu.op()  # two-to-anchor at the model temperature (25.0)
+        emu.lna.inject_sensor_glitch(90.0)
+        emu.op()
+        status = emu.get_status()
+        assert status["LNA_status"] == "update"
+        assert status["LNA_T_now"] == pytest.approx(90.0)
+        assert status["LNA_sensor_rejects"] == 1
+        # Control held the last good reference — the raw value is
+        # reported, never acted on.
+        assert emu.lna.T_now == pytest.approx(25.0)
+
     def test_installed_default_true_and_in_status(self):
         """init_single_tempctrl() defaults installed=true; tempctrl_status
         reports LNA_installed / LOAD_installed on every tick."""
