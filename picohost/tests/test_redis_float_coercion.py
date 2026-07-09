@@ -15,7 +15,6 @@ the fix are pinned here:
 """
 
 import json
-import math
 
 from conftest import wait_for_condition
 
@@ -131,7 +130,7 @@ class TestRedisHandlerFloatFields:
         writer = FakeMetadataWriter()
         handler = redis_handler(writer, float_fields=("a", "b"))
         handler({"sensor_name": "s", "a": 30, "b": 2.5, "c": 7})
-        (name, data), = writer.received
+        ((name, data),) = writer.received
         assert name == "s"
         assert data["a"] == 30.0 and isinstance(data["a"], float)
         assert data["b"] == 2.5 and isinstance(data["b"], float)
@@ -142,7 +141,7 @@ class TestRedisHandlerFloatFields:
         writer = FakeMetadataWriter()
         handler = redis_handler(writer, float_fields=("a", "b"))
         handler({"sensor_name": "s", "a": None})
-        (_, data), = writer.received
+        ((_, data),) = writer.received
         assert data["a"] is None
         assert "b" not in data
 
@@ -152,7 +151,7 @@ class TestRedisHandlerFloatFields:
         writer = FakeMetadataWriter()
         handler = redis_handler(writer, float_fields=("a",))
         handler({"sensor_name": "s", "a": True})
-        (_, data), = writer.received
+        ((_, data),) = writer.received
         assert data["a"] is True
 
     def test_caller_dict_not_mutated(self):
@@ -259,7 +258,7 @@ class TestDeviceHandlersCoerce:
             )
         finally:
             dev.disconnect()
-        (name, data), = writer.received
+        ((name, data),) = writer.received
         assert name == "imu_el"
         for key in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
             assert isinstance(data[key], float), key
@@ -326,7 +325,7 @@ class TestDeviceHandlersCoerce:
             )
         finally:
             dev.disconnect()
-        (name, data), = writer.received
+        ((name, data),) = writer.received
         assert name == "potmon"
         assert isinstance(data["pot_az_voltage"], float)
         assert data["pot_az_near_rail"] is False
