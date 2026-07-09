@@ -5,17 +5,13 @@ from picohost.keys import IMU_CAL_KEY
 
 
 def _payload():
+    # El-only cal section shape (fit_el_calibration output) since the
+    # 2026-07-09 azimuth descope; ImuCalStore itself is opaque to the keys.
     return {
         "imu_az": {
             "accel_bias": [0.1, 0.0, -0.1],
             "accel_scale": 12.2,
             "M": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-            "az_accel_offset_deg": 30.0,
-            "az_sign": 1,
-            "az_yaw_offset_deg": 30.0,
-            "az_yaw_sign": 1,
-            "theta_sat_deg": 45.0,
-            "theta_dead_deg": 8.0,
             "mount_perm": ["+x", "+y", "+z"],
             "mount_misalign_deg": 0.5,
         },
@@ -31,7 +27,7 @@ def test_round_trip_preserves_sections():
     store = ImuCalStore(DummyTransport())
     store.upload(_payload())
     loaded = store.get()
-    assert loaded["imu_az"]["az_accel_offset_deg"] == 30.0
+    assert loaded["imu_az"]["mount_misalign_deg"] == 0.5
     assert loaded["imu_az"]["M"] == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
     assert "upload_time" in loaded  # injected by Transport.upload_dict
 
@@ -64,7 +60,7 @@ def test_upload_merges_preserving_other_sections():
     )
 
     loaded = store.get()
-    assert loaded["imu_az"]["az_accel_offset_deg"] == 30.0  # survived
+    assert loaded["imu_az"]["mount_misalign_deg"] == 0.5  # survived
     assert loaded["imu_el"]["el_sign"] == 1  # newly added
     assert loaded["metadata"]["mode"] == "elevation"  # latest run wins
 
@@ -73,5 +69,5 @@ def test_upload_replaces_same_section():
     # Re-calibrating the same IMU overwrites its section (no stale merge).
     store = ImuCalStore(DummyTransport())
     store.upload(_payload())
-    store.upload({"imu_az": {"az_accel_offset_deg": 99.0}})
-    assert store.get()["imu_az"] == {"az_accel_offset_deg": 99.0}
+    store.upload({"imu_az": {"mount_misalign_deg": 99.0}})
+    assert store.get()["imu_az"] == {"mount_misalign_deg": 99.0}

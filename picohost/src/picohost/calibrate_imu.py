@@ -1,16 +1,24 @@
-"""Manual IMU mount calibration.
+"""IMU mount calibration from a single elevation sweep.
 
-Reads accel/yaw from stream:imu_az / stream:imu_el and az truth from
-stream:potmon (pot is the azimuth standard; the motor is a mover only and is
-never used as fit truth). Drives the operator through elevation + azimuth
-sweeps, fits each IMU's mount + zero via imu_geometry, then persists to
-ImuCalStore (BGSAVE) and live-pushes to each IMU via PicoProxy.
+One full el revolution (auto-driven by default, mirroring
+calibrate-pot --mode auto) fits each alive IMU's mount + el-zero via
+imu_geometry.fit_el_calibration. El-zero ("home") is DERIVED from the
+sweep itself — the pose where the IMUs look most "down"
+(NOMINAL_LEVEL_AXIS) — so no operator-eyeballed level pose is needed.
+Azimuth estimation from the IMU is retired: at level, az rotation is
+rotation about gravity and fundamentally unobservable to an
+accelerometer (2026-07-08 field data: 20x noise amplification).
+potmon owns azimuth; the IMUs own elevation.
+
+Recipe: calibrate-pot (defines az 0) -> calibrate-imu (defines el 0)
+-> home in motor_manual (re-zeros the counters at cal-defined home).
+The az turntable must be parked at home during the el sweep for the
+imu_az section (checked against the calibrated pot); imu_el alone is
+az-invariant and can be calibrated regardless.
 
 Modes:
-  elevation : elevation sweep -> el calibration for alive IMUs
-  azimuth   : azimuth sweeps (near-level + tilted) -> imu_az az+el; needs pot
-  all       : guided full run (default)
-(A fast rezero-el re-level is a deferred follow-on; see the design doc.)
+  auto   : calibrate-imu drives the el sweep itself (default)
+  manual : operator drives stop-by-stop (motor stream must publish)
 """
 
 from argparse import ArgumentParser
@@ -23,11 +31,12 @@ import numpy as np
 from eigsep_redis import Transport
 
 from .buses import ImuCalStore, PotCalStore
-from .imu_geometry import (
-    DEFAULT_THETA_DEAD_DEG,
-    DEFAULT_THETA_SAT_DEG,
-    circular_mean_deg,
-    fit_calibration_from_sweeps,
+from .imu_geometry import fit_el_calibration
+from .motor_sweep import (
+    SETTLE_TIMEOUT_S,
+    motor_command,
+    read_motor_pos_deg,
+    wait_for_settle,
 )
 from .proxy import PicoProxy
 
@@ -36,6 +45,24 @@ logger = logging.getLogger(__name__)
 SAMPLE_TIMEOUT_S = 5.0
 STATUS_SAMPLES = 5  # frames to sample when classifying a stream's liveness
 IMU_AZ, IMU_EL, POTMON = "imu_az", "imu_el", "potmon"
+MOTOR_NAME = "motor"
+
+# The imu_az section is only meaningful if the turntable is parked at az
+# home during the el sweep: the pot (calibrated) must read within this many
+# degrees of 0. imu_el is az-invariant and needs no such gate.
+AZ_HOME_TOL_DEG = 10.0
+# Warn if the derived level sits more than this from motor zero — the motor
+# step counter is probably stale and should be re-homed after saving. The
+# >90 deg (inverted-mount) case is already a hard ValueError from the fit.
+HOME_WARN_DEG = 10.0
+# Per-stop imu_el vs imu_az elevation disagreement flag threshold (matches
+# the live handler's runtime cross-check tolerance).
+CROSS_CHECK_TOL_DEG = 5.0
+# Manual-mode sweep-quality floor: the fit needs a full revolution to
+# resolve the sign and locate derived level. Auto satisfies both by
+# construction (n_stops+1 stops over +/-180).
+MIN_STOPS = 5
+MIN_SPAN_DEG = 180.0
 
 
 def collect_vector(transport, name, fields, n, start_id="$", reducer=None):
@@ -134,116 +161,169 @@ def stream_alive(transport, name, timeout_s=SAMPLE_TIMEOUT_S):
     return stream_status(transport, name, timeout_s=timeout_s) == "healthy"
 
 
-class Calibrator:
-    """Operator-driven sweep collection (separated so tests can stub it)."""
+def _read_pot_az_deg(transport, n):
+    """Latest averaged pot azimuth angle (deg) from stream:potmon."""
+    return float(collect_vector(transport, POTMON, ("pot_az_angle",), n)[0])
 
-    def __init__(self, transport, n_samples, alive, mode):
-        self.transport = transport
-        self.n = n_samples
-        self.alive = alive  # set of alive stream names
-        self.mode = mode
 
-    def _accel(self, name):
-        return collect_vector(
-            self.transport, name, ("accel_x", "accel_y", "accel_z"), self.n
+def _collect_stop(transport, n_samples, alive):
+    """Sample each alive IMU's accel vector at the current stop."""
+    out = {}
+    for name in (IMU_EL, IMU_AZ):
+        if name in alive:
+            out[name] = collect_vector(
+                transport,
+                name,
+                ("accel_x", "accel_y", "accel_z"),
+                n_samples,
+            )
+    return out
+
+
+def _stack_rows(rows):
+    """(N,3) array of the collected samples, or None if the IMU was absent."""
+    return np.array(rows) if rows else None
+
+
+def collect_el_auto(transport, motor_proxy, n_samples, n_stops, alive):
+    """Drive el through n_stops+1 stops over ±180 deg; sample IMUs.
+
+    Same claim / non-blocking-move / settle-poll / halt-on-failure /
+    release pattern as calibrate_pot.collect_auto (see that docstring
+    for the rationale). Returns {"motor_el_deg": [...],
+    "imu_el": (N,3) array or None, "imu_az": (N,3) array or None}.
+    """
+    claim_ttl = int(SETTLE_TIMEOUT_S * (n_stops + 3))
+    motor_command(motor_proxy, "claim", ttl=claim_ttl)
+    rows = {IMU_EL: [], IMU_AZ: []}
+    motor_el = []
+    try:
+        for i in range(n_stops + 1):
+            target = -180.0 + i * (360.0 / n_stops)
+            print(f"\nMoving to el {target:.1f} deg...")
+            motor_command(
+                motor_proxy,
+                "el_target_deg",
+                target_deg=target,
+                wait_for_start=False,
+                wait_for_stop=False,
+            )
+            el = wait_for_settle(transport, "el", target)
+            samples = _collect_stop(transport, n_samples, alive)
+            motor_el.append(el)
+            for name, vec in samples.items():
+                rows[name].append(vec)
+        print("\nReturning el to motor zero...")
+        motor_command(
+            motor_proxy,
+            "el_target_deg",
+            target_deg=0.0,
+            wait_for_start=False,
+            wait_for_stop=False,
         )
+        wait_for_settle(transport, "el", 0.0)
+    except BaseException:
+        # Includes KeyboardInterrupt: an operator's Ctrl-C mid-sweep must
+        # stop the motor, not just this process. Moves are non-blocking, so
+        # the firmware would otherwise keep driving with nobody watching.
+        try:
+            motor_proxy.send_command("halt")
+        except (TimeoutError, RuntimeError):
+            pass  # best-effort; the original failure is what matters
+        raise
+    finally:
+        motor_proxy.send_command("release")
+    return {
+        "motor_el_deg": motor_el,
+        IMU_EL: _stack_rows(rows[IMU_EL]),
+        IMU_AZ: _stack_rows(rows[IMU_AZ]),
+    }
 
-    def _pot(self):
-        return float(
-            collect_vector(self.transport, POTMON, ("pot_az_angle",), self.n)[
-                0
-            ]
-        )
 
-    def _yaw(self):
-        # Yaw wraps at +/-180, so average it circularly, not linearly.
-        return collect_vector(
-            self.transport,
-            IMU_AZ,
-            ("yaw",),
-            self.n,
-            reducer=lambda r: circular_mean_deg(r[:, 0]),
-        )
+def collect_el_manual(transport, n_samples, alive):
+    """Operator-driven stops; reads settled motor el from stream:motor.
 
-    def run_sweeps(self):
-        """Return (el_sweep, az_level, az_tilt) dicts, gated by self.mode.
-
-        Prompts the operator stop-by-stop; records pot/accel/yaw at rest.
-        """
-        el_sweep = {
-            "imu_el": None,
-            "imu_az": None,
-            "level_index": 0,
-            "direction": 1,
-        }
-        az_level = {"imu_az": None, "yaw_deg": None, "pot_deg": None}
-        az_tilt = {"imu_az": None, "pot_deg": None, "imu_el": None}
-        if self.mode in ("elevation", "all"):
-            el_sweep = self._elevation_sweep()
-        if self.mode in ("azimuth", "all"):
-            if IMU_AZ in self.alive and POTMON in self.alive:
-                az_level = self._az_sweep("near-LEVEL", want_yaw=True)
-                az_tilt = self._az_sweep("TILTED (~20-45 deg)", want_yaw=False)
-        return el_sweep, az_level, az_tilt
-
-    def _elevation_sweep(self):
-        el_el, el_az = [], []
-        print("\n== ELEVATION sweep ==")
-        input("Drive to the LEVEL pose (el 0), stop, press Enter.")
-        if IMU_EL in self.alive:
-            el_el.append(self._accel(IMU_EL))
-        if IMU_AZ in self.alive:
-            el_az.append(self._accel(IMU_AZ))
-        while True:
-            r = input("Next el stop + Enter (or 'q' to finish): ").strip()
-            if r.lower() == "q":
-                break
-            if IMU_EL in self.alive:
-                el_el.append(self._accel(IMU_EL))
-            if IMU_AZ in self.alive:
-                el_az.append(self._accel(IMU_AZ))
-        return {
-            "imu_el": np.array(el_el) if el_el else None,
-            "imu_az": np.array(el_az) if el_az else None,
-            "level_index": 0,
-            "direction": 1,
-        }
-
-    def _az_sweep(self, label, want_yaw):
-        print(f"\n== AZIMUTH sweep ({label}) ==")
-        acc, yaw, pot, el = [], [], [], []
-        input("Drive to the first az stop, stop, press Enter.")
-        while True:
-            acc.append(self._accel(IMU_AZ))
-            pot.append(self._pot())
-            if want_yaw:
-                yaw.append(self._yaw())
-            if IMU_EL in self.alive:
-                el.append(self._accel(IMU_EL))
-            r = input("Next az stop + Enter (or 'q' to finish): ").strip()
-            if r.lower() == "q":
-                break
-        out = {"imu_az": np.array(acc), "pot_deg": np.array(pot)}
-        out["yaw_deg"] = np.array(yaw) if want_yaw else None
-        out["imu_el"] = np.array(el) if el else None
-        return out
+    Returns the same dict shape as :func:`collect_el_auto`. stream:motor
+    must be publishing (it feeds the sign resolution and flip guard).
+    """
+    rows = {IMU_EL: [], IMU_AZ: []}
+    motor_el = []
+    print("\n== ELEVATION sweep (manual) ==")
+    print("Cover a full revolution; any order; level NOT required.")
+    while True:
+        r = input("Drive to an el stop + Enter (or 'q' to finish): ")
+        if r.strip().lower() == "q":
+            break
+        motor_el.append(read_motor_pos_deg(transport, "el"))
+        for name, vec in _collect_stop(transport, n_samples, alive).items():
+            rows[name].append(vec)
+    return {
+        "motor_el_deg": motor_el,
+        IMU_EL: _stack_rows(rows[IMU_EL]),
+        IMU_AZ: _stack_rows(rows[IMU_AZ]),
+    }
 
 
 def build_parser():
-    p = ArgumentParser(description="Calibrate IMU mount -> az/el conversion.")
-    p.add_argument(
-        "-m", "--mode", default="all", choices=["elevation", "azimuth", "all"]
+    p = ArgumentParser(
+        description="Calibrate IMU mount + el-zero from one el sweep."
     )
+    p.add_argument("-m", "--mode", default="auto", choices=["auto", "manual"])
     p.add_argument("-n", "--n-samples", type=int, default=10)
     p.add_argument(
-        "--theta-sat-deg", type=float, default=DEFAULT_THETA_SAT_DEG
-    )
-    p.add_argument(
-        "--theta-dead-deg", type=float, default=DEFAULT_THETA_DEAD_DEG
+        "--n-stops",
+        type=int,
+        default=12,
+        help="auto-mode el stops (12 -> 30 deg spacing, 13 stops over +/-180)",
     )
     p.add_argument("--redis-host", default="localhost")
     p.add_argument("--redis-port", type=int, default=6379)
     return p
+
+
+def _print_cross_check(cross):
+    """Print the per-stop el_signed/el_abs table, flagging disagreements."""
+    print("\nPer-stop cross-check (motor_el, el_signed, el_abs):")
+    for m, el_s, el_a in cross:
+        flag = ""
+        if (
+            el_s is not None
+            and el_a is not None
+            and abs(abs(el_s) - el_a) > CROSS_CHECK_TOL_DEG
+        ):
+            flag = "  <-- FLAG"
+        s_txt = "   --  " if el_s is None else f"{el_s:+7.1f}"
+        a_txt = "  --  " if el_a is None else f"{el_a:6.1f}"
+        print(f"  {m:+7.1f}  {s_txt}  {a_txt}{flag}")
+
+
+def _pot_az_home_gate(transport, alive, n_samples):
+    """Gate the imu_az section on a calibrated pot parked at az home.
+
+    Returns ``(keep_az, pot_az_home_deg, abort)``: whether to keep the
+    imu_az section, the pot angle stamped into metadata (``None`` when
+    running imu_el-only), and whether the operator chose to abort.
+    """
+    cal = PotCalStore(transport).get()
+    calibrated = bool(cal and cal.get("pot_az"))
+    pot_deg = None
+    if calibrated:
+        try:
+            pot_deg = _read_pot_az_deg(transport, n_samples)
+        except RuntimeError:
+            # A quiet pot stream reads the same as "not parked": offer el-only.
+            pot_deg = None
+    if pot_deg is not None and abs(pot_deg) <= AZ_HOME_TOL_DEG:
+        return True, pot_deg, False
+    print(
+        "az not parked at home (or pot uncalibrated) — home az first "
+        "(calibrate-pot / motor_manual).",
+        file=sys.stderr,
+    )
+    ans = input("Continue imu_el-only? [y / Enter to abort]: ").strip().lower()
+    if ans in ("y", "yes"):
+        return False, None, False
+    return False, None, True
 
 
 def main(argv=None):
@@ -279,44 +359,64 @@ def main(argv=None):
     if IMU_AZ not in alive and IMU_EL not in alive:
         print("No IMU streams alive; nothing to calibrate.", file=sys.stderr)
         return 1
-    # The pot must be CALIBRATED, not merely alive, to serve as the az
-    # standard: an uncalibrated pot streams pot_az_angle=None, which would
-    # otherwise crash the az sweep mid-run. Drop it from `alive` so the check
-    # below treats it like a missing pot (azimuth aborts; all skips az).
-    if args.mode in ("azimuth", "all") and POTMON in alive:
-        pot_cal = PotCalStore(transport).get()
-        if not (pot_cal and pot_cal.get("pot_az")):
-            print(
-                "pot is alive but uncalibrated; run calibrate_pot first.",
-                file=sys.stderr,
-            )
-            alive.discard(POTMON)
-    if args.mode in ("azimuth", "all") and POTMON not in alive:
-        print(
-            "pot not alive; azimuth needs the pot standard.", file=sys.stderr
-        )
-        if args.mode == "azimuth":
-            return 1
 
-    cal = Calibrator(transport, args.n_samples, alive, args.mode)
+    # Pot / az-home gate: imu_az's el section is only meaningful if the
+    # turntable is parked at az home during the sweep. imu_el is
+    # az-invariant, so an off-home / uncalibrated pot only drops imu_az.
+    pot_az_home_deg = None
+    if IMU_AZ in alive:
+        keep_az, pot_az_home_deg, abort = _pot_az_home_gate(
+            transport, alive, args.n_samples
+        )
+        if abort:
+            return 1
+        if not keep_az:
+            alive.discard(IMU_AZ)
+            if IMU_EL not in alive:
+                print(
+                    "imu_el not alive; nothing calibratable.", file=sys.stderr
+                )
+                return 1
+
     try:
-        el_sweep, az_level, az_tilt = cal.run_sweeps()
-    except RuntimeError as e:
+        if args.mode == "auto":
+            motor_proxy = PicoProxy(
+                MOTOR_NAME, transport, source="calibrate-imu"
+            )
+            sweep = collect_el_auto(
+                transport,
+                motor_proxy,
+                n_samples=args.n_samples,
+                n_stops=args.n_stops,
+                alive=alive,
+            )
+        else:
+            sweep = collect_el_manual(transport, args.n_samples, alive)
+    except (RuntimeError, TimeoutError) as e:
         # A fault that begins mid-sweep makes collect_vector abort with a
-        # named RuntimeError; surface it cleanly rather than as a traceback.
+        # named RuntimeError; a motor that never settles raises TimeoutError.
+        # Surface either cleanly rather than as a traceback.
         print(f"Sweep aborted: {e}", file=sys.stderr)
         return 1
+
+    motor_el = sweep["motor_el_deg"]
+    span = (max(motor_el) - min(motor_el)) if motor_el else 0.0
+    if len(motor_el) < MIN_STOPS or span < MIN_SPAN_DEG:
+        print(
+            f"Sweep too small to fit ({len(motor_el)} stops spanning "
+            f"{span:.0f} deg; need >= {MIN_STOPS} stops over "
+            f">= {MIN_SPAN_DEG:.0f} deg). Cover a full revolution.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
-        sections = fit_calibration_from_sweeps(
-            el_sweep,
-            az_level,
-            az_tilt,
-            theta_sat_deg=args.theta_sat_deg,
-            theta_dead_deg=args.theta_dead_deg,
+        sections, report = fit_el_calibration(
+            sweep[IMU_EL], sweep[IMU_AZ], motor_el
         )
     except ValueError as e:
-        # Backstop: a degenerate/zero-norm fit (e.g. a fault that slipped in
-        # mid-sweep) names its cause here instead of an opaque SVD failure.
+        # Backstop: a degenerate/zero-norm fit or an inverted mount names its
+        # cause here instead of an opaque SVD failure.
         print(f"Fit failed: {e}", file=sys.stderr)
         return 1
     if not sections:
@@ -329,6 +429,18 @@ def main(argv=None):
             f"misalign={sec.get('mount_misalign_deg'):.2f} deg "
             f"accel_scale={sec['accel_scale']:.3f}"
         )
+    home = report["home_offset_motor_deg"]
+    print(
+        f"\nDerived level (home) at motor {home:+.1f} deg "
+        f"(anchor: {report['anchor']})."
+    )
+    if abs(home) > HOME_WARN_DEG:
+        print(
+            f"WARNING: motor zero is >{HOME_WARN_DEG:.0f} deg from IMU level "
+            "— motor zero may be stale; home after saving."
+        )
+    _print_cross_check(report["cross_check"])
+
     if input("\nSave this calibration? [y/N]: ").strip().lower() not in (
         "y",
         "yes",
@@ -341,6 +453,9 @@ def main(argv=None):
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": args.mode,
         "n_samples": args.n_samples,
+        "n_stops": args.n_stops,
+        "derived_home_motor_deg": home,
+        "pot_az_home_deg": pot_az_home_deg,
     }
     ImuCalStore(transport).upload(payload)
     transport.r.bgsave()
@@ -353,6 +468,11 @@ def main(argv=None):
             print(f"Live {name} updated.")
         except (TimeoutError, RuntimeError) as e:
             print(f"Live push to {name} failed: {e}", file=sys.stderr)
+
+    print(
+        "\nNow run home (h + confirm) in motor_manual to re-zero the "
+        "counters at the new cal-defined home."
+    )
     return 0
 
 

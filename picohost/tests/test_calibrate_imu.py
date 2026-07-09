@@ -1,21 +1,60 @@
 import json
+
 import numpy as np
 import pytest
 from eigsep_redis.testing import DummyTransport
 
 from picohost import calibrate_imu
+from picohost import imu_geometry as ig
 from picohost.buses import ImuCalStore, PotCalStore
+
+
+# --- synthetic el-sweep helpers (mirrored from tests/test_imu_geometry.py) --
+# Duplicated (not imported) so this suite doesn't depend on another test
+# module's import surface; kept minimal and in sync with the originals.
+def _el_sweep_units(motor_deg, M_true, level_offset_deg=0.0):
+    """Sensor-frame accel unit vectors for an el sweep (see test_imu_geometry).
+
+    Physical el at each stop = motor + level_offset; M_true maps sensor
+    a_unit -> host frame, host gravity at el t = [0, sin t, cos t].
+    """
+    ts = np.radians(np.asarray(motor_deg, float) + level_offset_deg)
+    host = np.array([[0.0, np.sin(t), np.cos(t)] for t in ts])
+    return host @ M_true
+
+
+MOTOR_STOPS = np.arange(-180.0, 181.0, 30.0)  # 13 stops, 360 deg span
+M_EL_TRUE = ig.R_z(np.radians(3.0)) @ ig.R_x(np.pi)  # a_unit -> -z at level
+M_AZ_TRUE = ig.R_y(-np.pi / 2) @ ig.R_x(np.radians(2.0))  # a_unit -> +x
 
 
 def test_build_parser_modes():
     p = calibrate_imu.build_parser()
-    args = p.parse_args(["--mode", "elevation"])
-    assert args.mode == "elevation"
-    for m in ("elevation", "azimuth", "all"):
-        assert p.parse_args(["--mode", m]).mode == m
+    args = p.parse_args([])
+    assert args.mode == "auto"
+    assert args.n_stops == 12
+    args = p.parse_args(["-m", "manual"])
+    assert args.mode == "manual"
+    with pytest.raises(SystemExit):
+        p.parse_args(["-m", "azimuth"])  # retired mode
 
 
-def test_collect_vector_averages_named_fields(monkeypatch):
+class FakeProxy:
+    def __init__(self, *a, **k):
+        self.is_available = True
+        self.commands = []
+
+    def send_command(self, action, **kw):
+        self.commands.append((action, kw))
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# collect_vector / stream_status: unchanged behavior, kept from the old suite
+# ---------------------------------------------------------------------------
+
+
+def test_collect_vector_averages_named_fields():
     t = DummyTransport()
     # publish 3 entries on stream:imu_az
     for ax in (1.0, 2.0, 3.0):
@@ -33,198 +72,6 @@ def test_collect_vector_averages_named_fields(monkeypatch):
         t, "imu_az", ("accel_x", "accel_y", "accel_z"), n=3, start_id="0-0"
     )
     assert np.allclose(v, [2.0, 0.0, 9.0])  # mean of 1,2,3 -> 2
-
-
-def test_yaw_collected_with_circular_mean(monkeypatch):
-    """_yaw must reduce its samples circularly (robust to the +/-180 wrap),
-    not with the linear mean that collect_vector applies by default."""
-    cal = calibrate_imu.Calibrator(DummyTransport(), 2, {"imu_az"}, "azimuth")
-
-    def fake_collect(transport, name, fields, n, start_id="$", reducer=None):
-        assert reducer is not None  # _yaw must supply a circular reducer
-        return reducer(np.array([[179.0], [-179.0]]))
-
-    monkeypatch.setattr(calibrate_imu, "collect_vector", fake_collect)
-    assert abs(cal._yaw()) == pytest.approx(180.0, abs=1e-6)  # linear -> ~0
-
-
-def test_main_azimuth_uncalibrated_pot_aborts(monkeypatch):
-    """An alive-but-uncalibrated pot is not a usable az standard: azimuth
-    mode must abort up front, not crash mid-sweep on a None pot angle."""
-    transport = DummyTransport()
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
-    monkeypatch.setattr(
-        calibrate_imu,
-        "stream_status",
-        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
-    )
-    monkeypatch.setattr(
-        calibrate_imu.Calibrator,
-        "run_sweeps",
-        lambda self: pytest.fail("must abort before sweeps"),
-    )
-    # no PotCalStore uploaded -> pot alive but uncalibrated
-    assert calibrate_imu.main(["--mode", "azimuth"]) == 1
-    assert ImuCalStore(transport).get() is None
-
-
-def test_main_persists_and_pushes(monkeypatch):
-    """End-to-end main(): synthetic sweeps -> fit -> ImuCalStore + proxy push."""
-    from picohost import imu_geometry as ig
-
-    transport = DummyTransport()
-    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})  # az standard ready
-
-    # Fake operator-driven collection: return forward-model sweeps.
-    M_az = ig.R_z(-0.3)
-    phi_degs = np.linspace(0, 359, 24)
-
-    def fake_run_sweeps(self):
-        return (
-            {  # el_sweep
-                "imu_el": None,
-                "imu_az": None,
-                "level_index": 12,
-                "direction": 1,
-            },
-            {  # az_level
-                "imu_az": np.array(
-                    [ig.R_z(np.radians(p)).T @ [0, 0, 1.0] for p in phi_degs]
-                ),
-                "yaw_deg": -phi_degs,
-                "pot_deg": -phi_degs + 40.0,
-            },
-            {  # az_tilt
-                "imu_az": np.array(
-                    [
-                        M_az.T
-                        @ (
-                            ig.R_z(np.radians(p)).T
-                            @ [
-                                0,
-                                np.sin(np.radians(40)),
-                                np.cos(np.radians(40)),
-                            ]
-                        )
-                        for p in phi_degs
-                    ]
-                )
-                * ig.GRAVITY,
-                "pot_deg": -phi_degs + 40.0,
-                "imu_el": None,
-            },
-        )
-
-    captured = {}
-
-    class FakeProxy:
-        def __init__(self, *a, **k):
-            pass
-
-        @property
-        def is_available(self):
-            return True
-
-        def send_command(self, action, **kw):
-            captured[action] = kw
-            return {}
-
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
-    monkeypatch.setattr(calibrate_imu, "PicoProxy", FakeProxy)
-    monkeypatch.setattr(
-        calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps
-    )
-    monkeypatch.setattr(
-        calibrate_imu,
-        "stream_status",
-        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
-    )
-    monkeypatch.setattr("builtins.input", lambda *a: "y")  # confirm save
-
-    rc = calibrate_imu.main(["--mode", "azimuth"])
-    assert rc == 0
-    stored = ImuCalStore(transport).get()
-    assert "imu_az" in stored
-    assert "set_calibration" in captured  # live push happened
-    assert "imu_az" in captured["set_calibration"]
-
-
-def test_main_discard_writes_nothing(monkeypatch):
-    """Declining the save prompt persists nothing and pushes nothing."""
-    from picohost import imu_geometry as ig
-
-    transport = DummyTransport()
-    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})  # az standard ready
-
-    M_az = ig.R_z(-0.3)
-    phi_degs = np.linspace(0, 359, 24)
-
-    def fake_run_sweeps(self):
-        return (
-            {
-                "imu_el": None,
-                "imu_az": None,
-                "level_index": 12,
-                "direction": 1,
-            },
-            {
-                "imu_az": np.array(
-                    [ig.R_z(np.radians(p)).T @ [0, 0, 1.0] for p in phi_degs]
-                ),
-                "yaw_deg": -phi_degs,
-                "pot_deg": -phi_degs + 40.0,
-            },
-            {
-                "imu_az": np.array(
-                    [
-                        M_az.T
-                        @ (
-                            ig.R_z(np.radians(p)).T
-                            @ [
-                                0,
-                                np.sin(np.radians(40)),
-                                np.cos(np.radians(40)),
-                            ]
-                        )
-                        for p in phi_degs
-                    ]
-                )
-                * ig.GRAVITY,
-                "pot_deg": -phi_degs + 40.0,
-                "imu_el": None,
-            },
-        )
-
-    captured = {}
-
-    class FakeProxy:
-        def __init__(self, *a, **k):
-            pass
-
-        @property
-        def is_available(self):
-            return True
-
-        def send_command(self, action, **kw):
-            captured[action] = kw
-            return {}
-
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
-    monkeypatch.setattr(calibrate_imu, "PicoProxy", FakeProxy)
-    monkeypatch.setattr(
-        calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps
-    )
-    monkeypatch.setattr(
-        calibrate_imu,
-        "stream_status",
-        lambda t, n, **k: "healthy" if n in ("imu_az", "potmon") else "dead",
-    )
-    monkeypatch.setattr("builtins.input", lambda *a: "n")  # decline save
-
-    rc = calibrate_imu.main(["--mode", "azimuth"])
-    assert rc == 0  # clean discard
-    assert ImuCalStore(transport).get() is None  # nothing persisted
-    assert "set_calibration" not in captured  # no live push
 
 
 def _xadd(t, stream, **fields):
@@ -359,6 +206,194 @@ def test_stream_alive_delegates_to_status(monkeypatch):
     assert calibrate_imu.stream_alive(DummyTransport(), "imu_el") is False
 
 
+# ---------------------------------------------------------------------------
+# collect_el_auto: motor-driven sweep (claim -> stops -> halt/release)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_el_auto_commands_stops_and_halts_on_failure(monkeypatch):
+    t = DummyTransport()
+    proxy = FakeProxy()
+    settled = []
+
+    def fake_settle(transport, axis, target, **kw):
+        assert axis == "el"
+        settled.append(target)
+        return target
+
+    monkeypatch.setattr(calibrate_imu, "wait_for_settle", fake_settle)
+    monkeypatch.setattr(
+        calibrate_imu,
+        "collect_vector",
+        lambda tr, name, fields, n, **kw: np.array([0.0, 0.0, -9.81]),
+    )
+    stops = calibrate_imu.collect_el_auto(
+        t, proxy, n_samples=2, n_stops=4, alive={"imu_el"}
+    )
+    # 5 sweep stops over +/-180 plus the return-to-zero move
+    assert settled == [-180.0, -90.0, 0.0, 90.0, 180.0, 0.0]
+    assert [a for a, _ in proxy.commands].count("el_target_deg") == 6
+    assert proxy.commands[0][0] == "claim"
+    assert proxy.commands[-1][0] == "release"
+    assert len(stops["motor_el_deg"]) == 5
+    assert stops["imu_el"].shape == (5, 3)
+    assert stops["imu_az"] is None
+
+
+def test_collect_el_auto_halts_and_releases_on_settle_timeout(monkeypatch):
+    t = DummyTransport()
+    proxy = FakeProxy()
+
+    def boom(transport, axis, target, **kw):
+        raise TimeoutError("no settle")
+
+    monkeypatch.setattr(calibrate_imu, "wait_for_settle", boom)
+    with pytest.raises(TimeoutError):
+        calibrate_imu.collect_el_auto(
+            t, proxy, n_samples=2, n_stops=4, alive={"imu_el"}
+        )
+    actions = [a for a, _ in proxy.commands]
+    assert "halt" in actions
+    assert actions[-1] == "release"
+
+
+def test_collect_el_manual_reads_motor_and_samples(monkeypatch):
+    """Manual mode reads settled motor el from stream:motor at each stop and
+    samples each alive IMU; 'q' ends the sweep."""
+    t = DummyTransport()
+    reads = iter([-90.0, 0.0, 90.0])
+    # read_motor_pos_deg's production default (start_id="$") reads only NEW
+    # entries; monkeypatch it so the test doesn't race that on fakeredis.
+    monkeypatch.setattr(
+        calibrate_imu,
+        "read_motor_pos_deg",
+        lambda tr, axis, **kw: next(reads),
+    )
+    monkeypatch.setattr(
+        calibrate_imu,
+        "collect_vector",
+        lambda tr, name, fields, n, **kw: np.array([0.0, 0.0, -9.81]),
+    )
+    answers = iter(["", "", "", "q"])
+    monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+    sweep = calibrate_imu.collect_el_manual(t, n_samples=2, alive={"imu_el"})
+    assert sweep["motor_el_deg"] == [-90.0, 0.0, 90.0]
+    assert sweep["imu_el"].shape == (3, 3)
+    assert sweep["imu_az"] is None
+
+
+# ---------------------------------------------------------------------------
+# main(): gating, sweep-quality, fit, persist/push
+# ---------------------------------------------------------------------------
+
+
+def test_main_aborts_without_pot_home_unless_el_only(monkeypatch, capsys):
+    """Calibrated pot parked off-home -> offer imu_el-only, Enter aborts."""
+    t = DummyTransport()
+    calibrate_imu.PotCalStore(t).upload({"pot_az": [320.0, -400.0]})
+    t.r.xadd(  # pot parked at 60 deg
+        "stream:potmon",
+        {"value": json.dumps({"status": "update", "pot_az_angle": 60.0})},
+    )
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda *a, **k: "healthy"
+    )
+    monkeypatch.setattr("builtins.input", lambda *a: "")  # abort
+    assert calibrate_imu.main([]) == 1
+    assert "home az" in capsys.readouterr().err.lower()
+
+
+def _synthetic_sweep(alive, scale=9.81, bias=(0.05, -0.02, 0.1)):
+    b = np.asarray(bias)
+    return {
+        "motor_el_deg": list(MOTOR_STOPS),
+        "imu_el": (
+            _el_sweep_units(MOTOR_STOPS, M_EL_TRUE) * scale + b
+            if "imu_el" in alive
+            else None
+        ),
+        "imu_az": (
+            _el_sweep_units(MOTOR_STOPS, M_AZ_TRUE) * scale + b
+            if "imu_az" in alive
+            else None
+        ),
+    }
+
+
+def test_main_persists_and_pushes(monkeypatch):
+    """Stubbed sweep -> fit -> save 'y' -> ImuCalStore + one live push/IMU."""
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [320.0, -400.0]})  # az standard ready
+
+    def fake_collect(transport, motor_proxy, n_samples, n_stops, alive):
+        return _synthetic_sweep(alive)
+
+    pushes = []
+
+    class RecordingProxy:
+        def __init__(self, *a, **k):
+            self.is_available = True
+
+        def send_command(self, action, **kw):
+            pushes.append((action, kw))
+            return {}
+
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
+    monkeypatch.setattr(calibrate_imu, "PicoProxy", RecordingProxy)
+    monkeypatch.setattr(calibrate_imu, "collect_el_auto", fake_collect)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda *a, **k: "healthy"
+    )
+    # Pot parked at home so the imu_az section is kept.
+    monkeypatch.setattr(calibrate_imu, "_read_pot_az_deg", lambda *a, **k: 0.0)
+    monkeypatch.setattr("builtins.input", lambda *a: "y")  # confirm save
+
+    assert calibrate_imu.main([]) == 0
+    stored = ImuCalStore(t).get()
+    assert "imu_el" in stored and "imu_az" in stored
+    assert "derived_home_motor_deg" in stored["metadata"]
+    assert stored["metadata"]["mode"] == "auto"
+    sc = [kw for act, kw in pushes if act == "set_calibration"]
+    assert len(sc) == 2  # one live push per IMU
+    pushed = set()
+    for kw in sc:
+        pushed |= set(kw)
+    assert pushed == {"imu_el", "imu_az"}
+
+
+def test_main_discard_writes_nothing(monkeypatch):
+    """Declining the save prompt persists nothing and pushes nothing."""
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [320.0, -400.0]})
+
+    def fake_collect(transport, motor_proxy, n_samples, n_stops, alive):
+        return _synthetic_sweep(alive)
+
+    pushes = []
+
+    class RecordingProxy:
+        def __init__(self, *a, **k):
+            self.is_available = True
+
+        def send_command(self, action, **kw):
+            pushes.append((action, kw))
+            return {}
+
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
+    monkeypatch.setattr(calibrate_imu, "PicoProxy", RecordingProxy)
+    monkeypatch.setattr(calibrate_imu, "collect_el_auto", fake_collect)
+    monkeypatch.setattr(
+        calibrate_imu, "stream_status", lambda *a, **k: "healthy"
+    )
+    monkeypatch.setattr(calibrate_imu, "_read_pot_az_deg", lambda *a, **k: 0.0)
+    monkeypatch.setattr("builtins.input", lambda *a: "n")  # decline save
+
+    assert calibrate_imu.main([]) == 0  # clean discard
+    assert ImuCalStore(t).get() is None  # nothing persisted
+    assert not [p for p in pushes if p[0] == "set_calibration"]
+
+
 def _answers(*seq):
     """Return an input() stand-in that yields the given answers in order."""
     it = iter(seq)
@@ -368,48 +403,43 @@ def _answers(*seq):
 def test_main_faulted_imu_aborts_by_default(monkeypatch):
     """imu_el publishing only status=error: main names it and aborts (return
     1) when the operator does not opt to continue — never reaching the fit."""
-    transport = DummyTransport()
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    t = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
     monkeypatch.setattr(
         calibrate_imu,
         "stream_status",
-        lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
+        lambda tr, n, **k: "faulted" if n == "imu_el" else "healthy",
     )
     monkeypatch.setattr(
-        calibrate_imu.Calibrator,
-        "run_sweeps",
-        lambda self: pytest.fail("must abort before sweeps"),
+        calibrate_imu,
+        "collect_el_manual",
+        lambda *a, **k: pytest.fail("must abort before collection"),
     )
     monkeypatch.setattr("builtins.input", _answers(""))  # Enter = abort
-    assert calibrate_imu.main(["--mode", "elevation"]) == 1
-    assert ImuCalStore(transport).get() is None
+    assert calibrate_imu.main(["-m", "manual"]) == 1
+    assert ImuCalStore(t).get() is None
 
 
 def test_main_faulted_imu_continue_skips_it(monkeypatch):
     """Operator opts to continue without the faulted imu_el: main proceeds and
-    imu_el is absent from the alive set handed to the Calibrator."""
-    transport = DummyTransport()
-    PotCalStore(transport).upload({"pot_az": [1.0, 0.0]})
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    imu_el is absent from the alive set handed to the collector."""
+    t = DummyTransport()
+    PotCalStore(t).upload({"pot_az": [320.0, -400.0]})
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
     monkeypatch.setattr(
         calibrate_imu,
         "stream_status",
-        lambda t, n, **k: "faulted" if n == "imu_el" else "healthy",
+        lambda tr, n, **k: "faulted" if n == "imu_el" else "healthy",
     )
+    monkeypatch.setattr(calibrate_imu, "_read_pot_az_deg", lambda *a, **k: 0.0)
     seen = {}
 
-    def fake_run_sweeps(self):
-        seen["alive"] = set(self.alive)
-        # Minimal empty sweeps -> no sections -> main returns 1 cleanly.
-        return (
-            {"imu_el": None, "imu_az": None, "level_index": 0, "direction": 1},
-            {"imu_az": None, "yaw_deg": None, "pot_deg": None},
-            {"imu_az": None, "pot_deg": None, "imu_el": None},
-        )
+    def fake_collect(transport, n_samples, alive):
+        seen["alive"] = set(alive)
+        # Empty sweep -> quality gate returns 1 cleanly.
+        return {"motor_el_deg": [], "imu_el": None, "imu_az": None}
 
-    monkeypatch.setattr(
-        calibrate_imu.Calibrator, "run_sweeps", fake_run_sweeps
-    )
+    monkeypatch.setattr(calibrate_imu, "collect_el_manual", fake_collect)
 
     prompts = []
 
@@ -418,58 +448,79 @@ def test_main_faulted_imu_continue_skips_it(monkeypatch):
         return "y"
 
     monkeypatch.setattr("builtins.input", spy_input)
-    calibrate_imu.main(["--mode", "all"])
+    assert calibrate_imu.main(["-m", "manual"]) == 1
     assert "imu_el" not in seen["alive"]
     assert "imu_az" in seen["alive"]
-    assert any(
-        "imu_el" in p for p in prompts
-    )  # operator was actually prompted
+    assert any("imu_el" in p for p in prompts)  # operator was prompted
 
 
 def test_main_fit_valueerror_is_clean(monkeypatch):
     """A backstop ValueError from the fit surfaces as a clean return 1, not an
-    uncaught traceback."""
-    transport = DummyTransport()
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    uncaught traceback (and no prompt fires before the fit)."""
+    t = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
     monkeypatch.setattr(
-        calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
+        calibrate_imu,
+        "stream_status",
+        lambda tr, n, **k: "healthy" if n == "imu_el" else "dead",
     )
+    el_el = _el_sweep_units(MOTOR_STOPS, M_EL_TRUE) * 9.81
     monkeypatch.setattr(
-        calibrate_imu.Calibrator,
-        "run_sweeps",
-        lambda self: (
-            {"imu_el": None, "imu_az": None, "level_index": 0, "direction": 1},
-            {"imu_az": None, "yaw_deg": None, "pot_deg": None},
-            {"imu_az": None, "pot_deg": None, "imu_el": None},
-        ),
+        calibrate_imu,
+        "collect_el_manual",
+        lambda *a, **k: {
+            "motor_el_deg": list(MOTOR_STOPS),
+            "imu_el": el_el,
+            "imu_az": None,
+        },
     )
 
     def boom(*a, **k):
         raise ValueError("degenerate accel sphere")
 
-    monkeypatch.setattr(calibrate_imu, "fit_calibration_from_sweeps", boom)
+    monkeypatch.setattr(calibrate_imu, "fit_el_calibration", boom)
     monkeypatch.setattr(
         "builtins.input",
         lambda *a, **k: pytest.fail("no prompt expected before fit error"),
     )
-    assert calibrate_imu.main(["--mode", "elevation"]) == 1
+    assert calibrate_imu.main(["-m", "manual"]) == 1
 
 
 def test_main_sweep_runtimeerror_is_clean(monkeypatch):
-    """A RuntimeError raised by collect_vector during a sweep (sustained fault
-    beginning mid-sweep) must surface as a clean return 1, not an uncaught
-    traceback."""
-    transport = DummyTransport()
-    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: transport)
+    """A RuntimeError raised during collection (sustained fault mid-sweep)
+    must surface as a clean return 1, not an uncaught traceback."""
+    t = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
     monkeypatch.setattr(
-        calibrate_imu, "stream_status", lambda t, n, **k: "healthy"
+        calibrate_imu,
+        "stream_status",
+        lambda tr, n, **k: "healthy" if n == "imu_el" else "dead",
     )
 
-    def boom(self):
+    def boom(*a, **k):
         raise RuntimeError(
             "imu_el: 3 consecutive status=error frames (sensor faulted); "
             "collected only 0/10 valid samples."
         )
 
-    monkeypatch.setattr(calibrate_imu.Calibrator, "run_sweeps", boom)
-    assert calibrate_imu.main(["--mode", "elevation"]) == 1
+    monkeypatch.setattr(calibrate_imu, "collect_el_manual", boom)
+    assert calibrate_imu.main(["-m", "manual"]) == 1
+
+
+def test_main_sweep_timeouterror_is_clean(monkeypatch):
+    """A TimeoutError from the auto sweep (motor never settled) also surfaces
+    as a clean return 1."""
+    t = DummyTransport()
+    monkeypatch.setattr(calibrate_imu, "Transport", lambda **kw: t)
+    monkeypatch.setattr(calibrate_imu, "PicoProxy", FakeProxy)
+    monkeypatch.setattr(
+        calibrate_imu,
+        "stream_status",
+        lambda tr, n, **k: "healthy" if n == "imu_el" else "dead",
+    )
+
+    def boom(*a, **k):
+        raise TimeoutError("motor el did not settle")
+
+    monkeypatch.setattr(calibrate_imu, "collect_el_auto", boom)
+    assert calibrate_imu.main([]) == 1

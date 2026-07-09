@@ -86,7 +86,9 @@ def test_nearest_signed_permutation_reports_small_misalignment():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: el/az estimators, tilt blend, accel inverse
+# El estimators (imu_el signed, imu_az |theta|) — azimuth is owned by potmon
+# since the 2026-07-09 descope; the accel/yaw blend estimator and its
+# sweep-based fitter were retired along with their tests.
 # ---------------------------------------------------------------------------
 
 
@@ -116,229 +118,6 @@ def test_el_abs_from_imu_az_is_unsigned():
     assert ig.el_abs_from_imu_az(a_neg, M) == pytest.approx(30.0, abs=1e-6)
 
 
-def test_az_from_accel_recovers_phi_with_offset_and_sign():
-    M = ig.R_x(0.1)
-    a = _accel_az(np.radians(35.0), np.radians(70.0), M)
-    # default sign/offset -> raw phi
-    assert ig.az_from_accel(a, M) == pytest.approx(70.0, abs=1e-6)
-    # registered to a pot frame: az = -phi + 200
-    assert ig.az_from_accel(a, M, az_sign=-1.0, az_offset_deg=200.0) == (
-        pytest.approx(130.0, abs=1e-6)
-    )
-
-
-def test_az_from_yaw_applies_sign_and_offset():
-    assert ig.az_from_yaw(10.0, az_yaw_sign=-1.0, az_yaw_offset_deg=5.0) == (
-        pytest.approx(-5.0)
-    )
-
-
-def test_blend_az_picks_yaw_near_level_and_accel_when_tilted():
-    az_y, az_a = 100.0, 104.0
-    near, w_near = ig.blend_az(
-        az_a, az_y, el_deg=0.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    tilt, w_tilt = ig.blend_az(
-        az_a, az_y, el_deg=90.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    assert near == pytest.approx(100.0)  # near a pole -> all yaw
-    assert w_near == pytest.approx(0.0)
-    assert tilt == pytest.approx(104.0)  # well tilted -> all accel
-    assert w_tilt == pytest.approx(1.0)
-
-
-def test_blend_az_full_accel_plateau_between_thresholds():
-    # sin^2 weight saturates to 1 across the well-tilted band
-    # [theta_sat, 180 - theta_sat]; both edges and the midpoint are pure accel.
-    for el in (45.0, 90.0, 135.0):
-        az, w = ig.blend_az(
-            104.0, 100.0, el_deg=el, theta_sat_deg=45.0, theta_dead_deg=8.0
-        )
-        assert w == pytest.approx(1.0)
-        assert az == pytest.approx(104.0)
-
-
-def test_blend_az_deadband_zeros_weight_near_both_poles():
-    # within theta_dead of colatitude 0 OR 180 deg the accel-azimuth is
-    # degenerate, so the weight is hard-zeroed and the blend is pure yaw.
-    for el in (5.0, 175.0):
-        az, w = ig.blend_az(
-            104.0, 100.0, el_deg=el, theta_sat_deg=45.0, theta_dead_deg=8.0
-        )
-        assert w == pytest.approx(0.0)
-        assert az == pytest.approx(100.0)  # pure yaw
-
-
-def test_blend_az_weight_is_pole_symmetric():
-    # weight depends on |sin(el)|, so el and 180-el give identical weight:
-    # the inverted high pole is handled exactly like the low one.
-    _, w_lo = ig.blend_az(
-        104.0, 100.0, el_deg=20.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    _, w_hi = ig.blend_az(
-        104.0, 100.0, el_deg=160.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    assert w_lo == pytest.approx(w_hi)
-    expected = (np.sin(np.radians(20.0)) / np.sin(np.radians(45.0))) ** 2
-    assert w_lo == pytest.approx(expected)
-
-
-def test_blend_az_takes_shortest_circular_path():
-    # yaw 359, accel 1 -> blend should cross 0, not sweep backwards
-    az, w = ig.blend_az(
-        1.0, 359.0, el_deg=90.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    assert az == pytest.approx(1.0)  # w=1 -> accel; sanity on wrap helper
-    # el=30 -> w = (sin30/sin45)^2 = 0.5; halfway across the wrap seam
-    mid, w_mid = ig.blend_az(
-        1.0, 359.0, el_deg=30.0, theta_sat_deg=45.0, theta_dead_deg=8.0
-    )
-    assert w_mid == pytest.approx(0.5)
-    assert mid == pytest.approx(360.0, abs=1e-6)
-
-
-def test_blend_az_misconfig_defaults_to_yaw():
-    # non-positive theta_sat is a misconfiguration -> degrade to all-yaw
-    # (accel-azimuth is the untrustworthy estimator near the poles), never
-    # dividing by zero.
-    az, w = ig.blend_az(
-        104.0, 100.0, el_deg=90.0, theta_sat_deg=0.0, theta_dead_deg=8.0
-    )
-    assert az == pytest.approx(100.0)
-    assert w == pytest.approx(0.0)
-
-
-def test_estimate_theta_phi_round_trip():
-    M_el, M_az = ig.R_x(0.2), ig.R_z(-0.4) @ ig.R_y(0.1)
-    theta_t, phi_t = 35.0, -60.0
-    a_el = _accel_el(np.radians(theta_t), M_el)
-    a_az = _accel_az(np.radians(theta_t), np.radians(phi_t), M_az)
-    theta, phi = ig.estimate_theta_phi_from_accel(a_el, a_az, M_el, M_az)
-    assert theta == pytest.approx(theta_t, abs=1e-6)
-    assert phi == pytest.approx(phi_t, abs=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# Task 8: assign_sweep_theta, cone_angle, register_linear, fit_calibration
-# ---------------------------------------------------------------------------
-
-
-def _el_sweep_accel(thetas_deg, M, bias=(0, 0, 0), scale=1.0):
-    out = []
-    for d in thetas_deg:
-        th = np.radians(d)
-        g = M.T @ np.array([0.0, np.sin(th), np.cos(th)])
-        out.append(scale * ig.GRAVITY * g + np.asarray(bias))
-    return np.array(out)
-
-
-def _az_sweep_accel(theta_deg, phis_deg, M, bias=(0, 0, 0), scale=1.0):
-    out = []
-    th = np.radians(theta_deg)
-    for d in phis_deg:
-        g = M.T @ (ig.R_z(np.radians(d)).T @ [0.0, np.sin(th), np.cos(th)])
-        out.append(scale * ig.GRAVITY * g + np.asarray(bias))
-    return np.array(out)
-
-
-def test_assign_sweep_theta_signed_arc():
-    M = np.eye(3)
-    thetas = np.array([-30.0, -10.0, 0.0, 20.0, 50.0])
-    u = ig.precondition(_el_sweep_accel(thetas, M), [0, 0, 0])
-    level = 2  # index of the 0.0 entry
-    rec = np.degrees(ig.assign_sweep_theta(u, level_index=level, direction=1))
-    assert np.allclose(rec, thetas, atol=1e-6)
-
-
-def test_cone_angle_of_fixed_tilt_az_sweep():
-    phis = np.linspace(0, 360, 24, endpoint=False)
-    u = ig.precondition(_az_sweep_accel(40.0, phis, np.eye(3)), [0, 0, 0])
-    assert np.degrees(ig.cone_angle(u)) == pytest.approx(40.0, abs=1e-6)
-
-
-def test_register_linear_recovers_sign_and_offset():
-    truth = np.array([0.0, 50.0, 100.0, 150.0])
-    pred = -truth + 30.0
-    sign, offset = ig.register_linear(pred, truth)
-    assert sign == pytest.approx(-1.0)
-    # truth = sign*pred + offset  ->  offset = 30
-    assert offset == pytest.approx(30.0, abs=1e-6)
-
-
-def test_fit_calibration_full_reproduces_truth():
-    M_el = ig.R_y(0.25) @ ig.R_x(-0.15)
-    M_az = ig.R_z(-0.5) @ ig.R_x(0.1)
-    bias_az, scale_az = (0.3, -0.2, 0.1), 12.2 / ig.GRAVITY
-    el_degs = np.linspace(-80, 80, 33)
-    phi_degs = np.linspace(0, 359, 36)
-    # az sweeps reported in the POT frame: pot = -phi + 40 (sign -1, offset 40)
-    pot_level = -phi_degs + 40.0
-    pot_tilt = -phi_degs + 40.0
-
-    # one IMU has one (bias, scale): apply bias_az/scale_az to EVERY imu_az
-    # chunk. imu_el here is bias-free (bias=0) and shares its own scale=1.
-    el_sweep = {
-        "imu_el": _el_sweep_accel(el_degs, M_el),
-        "imu_az": _el_sweep_accel(el_degs, M_az, bias_az, scale_az),
-        "level_index": int(np.argmin(np.abs(el_degs))),
-        "direction": 1,
-    }
-    az_level = {
-        "imu_az": _az_sweep_accel(0.0, phi_degs, M_az, bias_az, scale_az),
-        "yaw_deg": -phi_degs,  # yaw tracks -phi at level for this M_az
-        "pot_deg": pot_level,
-    }
-    az_tilt = {
-        "imu_az": _az_sweep_accel(40.0, phi_degs, M_az, bias_az, scale_az),
-        "pot_deg": pot_tilt,
-        "imu_el": _el_sweep_accel(np.full_like(phi_degs, 40.0), M_el),
-    }
-    cal = ig.fit_calibration_from_sweeps(el_sweep, az_level, az_tilt)
-
-    # imu_el mount recovered (up to the fit) -> el reproduces truth
-    a = ig.precondition(
-        _el_sweep_accel([55.0], M_el)[0], cal["imu_el"]["accel_bias"]
-    )
-    assert ig.el_from_imu(a, np.array(cal["imu_el"]["M"])) == pytest.approx(
-        55.0, abs=0.2
-    )
-
-    # imu_az: az reproduces the POT value (pot = -phi + 40) at a tilted pose
-    M_az_fit = np.array(cal["imu_az"]["M"])
-    a_az = ig.precondition(
-        _az_sweep_accel(40.0, [70.0], M_az, bias_az, scale_az)[0],
-        cal["imu_az"]["accel_bias"],
-    )
-    az = ig.az_from_accel(
-        a_az,
-        M_az_fit,
-        cal["imu_az"]["az_sign"],
-        cal["imu_az"]["az_accel_offset_deg"],
-    )
-    assert az == pytest.approx(-70.0 + 40.0, abs=0.5)
-    # cross-check fields present
-    assert (
-        "mount_perm" in cal["imu_az"] and "mount_misalign_deg" in cal["imu_az"]
-    )
-    # blend shaping stamped for the live handler (base.py reads these back)
-    assert cal["imu_az"]["theta_sat_deg"] == pytest.approx(45.0)
-    assert cal["imu_az"]["theta_dead_deg"] == pytest.approx(8.0)
-    # yaw registration: pot = -phi + 40, yaw = -phi => pot = yaw + 40
-    # => sign = +1, offset = +40
-    assert cal["imu_az"]["az_yaw_sign"] == pytest.approx(1.0)
-    assert cal["imu_az"]["az_yaw_offset_deg"] == pytest.approx(40.0, abs=1.0)
-
-
-def test_circular_mean_deg_handles_wrap():
-    # ordinary samples: circular mean matches the arithmetic mean
-    assert ig.circular_mean_deg([10.0, 20.0, 30.0]) == pytest.approx(20.0)
-    # straddling the +/-180 seam: a linear mean would give ~0; circular = 180
-    assert abs(ig.circular_mean_deg([179.0, -179.0])) == pytest.approx(180.0)
-    assert abs(ig.circular_mean_deg([170.0, -170.0])) == pytest.approx(
-        180.0, abs=1e-6
-    )
-
-
 # ---------------------------------------------------------------------------
 # Task 1: Math backstops (zero-norm and degenerate accel guards)
 # ---------------------------------------------------------------------------
@@ -364,3 +143,112 @@ def test_fit_accel_sphere_rejects_degenerate_scale():
     must raise, not silently feed scale=0 into a divide."""
     with pytest.raises(ValueError, match="degenerate"):
         ig.fit_accel_sphere(np.zeros((6, 3)))
+
+
+def _el_sweep_units(motor_deg, M_true, level_offset_deg=0.0):
+    """Sensor-frame accel unit vectors for an el sweep.
+
+    Physical el at each stop = motor + level_offset (the derived-level
+    fit must find level at motor = -level_offset). M_true maps sensor
+    a_unit -> host frame, host gravity at el t = [0, sin t, cos t].
+    """
+    ts = np.radians(np.asarray(motor_deg, float) + level_offset_deg)
+    host = np.array([[0.0, np.sin(t), np.cos(t)] for t in ts])
+    return host @ M_true  # == (M_true.T @ h) per row
+
+
+MOTOR_STOPS = np.arange(-180.0, 181.0, 30.0)
+# imu_el-like mount: a_unit at level = -z  (R_x(pi) maps -z -> +z),
+# plus a ~3 deg misalignment like the field unit.
+M_EL_TRUE = ig.R_z(np.radians(3.0)) @ ig.R_x(np.pi)
+# imu_az-like mount: a_unit at level = +x  (R_y(-pi/2) maps +x -> +z).
+M_AZ_TRUE = ig.R_y(-np.pi / 2) @ ig.R_x(np.radians(2.0))
+
+
+def test_derive_level_theta_anchors_at_nominal_down():
+    u = _el_sweep_units(MOTOR_STOPS, M_EL_TRUE, level_offset_deg=3.0)
+    theta, home = ig.derive_level_theta(
+        u, ig.NOMINAL_LEVEL_AXIS["imu_el"], MOTOR_STOPS
+    )
+    # level derived at motor ~ -3 (physical level is 3 deg past motor 0)
+    assert abs(home - (-3.0)) < 1.0
+    # theta increases with motor el (sign resolved via motor)
+    order = np.argsort(MOTOR_STOPS)
+    assert np.all(np.diff(np.unwrap(theta[order])) > 0)
+
+
+def test_derive_level_theta_wraps_intercept_before_slope_division():
+    # Slope != 1 (fitted, not nominal) exposed a wrap-before-divide bug:
+    # home = -intercept/slope computed on the UNWRAPPED intercept and
+    # only then wrapped, so a global +360 offset on the unwrapped theta
+    # carried a 1/slope amplification through the wrap and flipped the
+    # sign of small home offsets. physical el = 0.99*motor + 3.0, so
+    # el=0 (home) at motor = -3.0/0.99 ~= -3.03 deg.
+    scaled_motor = 0.99 * MOTOR_STOPS
+    u = _el_sweep_units(scaled_motor, M_EL_TRUE, level_offset_deg=3.0)
+    theta, home = ig.derive_level_theta(
+        u, ig.NOMINAL_LEVEL_AXIS["imu_el"], MOTOR_STOPS
+    )
+    assert abs(home - (-3.0 / 0.99)) < 0.5
+
+
+def test_derive_level_theta_flip_guard():
+    # inverted mount: nominal -z actually points UP at level -> derived
+    # level lands at motor ~180 -> hard error, not a silent 180 offset
+    u = _el_sweep_units(MOTOR_STOPS, ig.R_z(np.radians(3.0)), 0.0)
+    with pytest.raises(ValueError, match="[Ii]nverted|180"):
+        ig.derive_level_theta(u, ig.NOMINAL_LEVEL_AXIS["imu_el"], MOTOR_STOPS)
+
+
+def test_derive_level_theta_axis_parallel_degenerate():
+    # nominal axis parallel to the sweep axis: no unique closest point
+    u = _el_sweep_units(MOTOR_STOPS, M_EL_TRUE)
+    with pytest.raises(ValueError, match="parallel"):
+        ig.derive_level_theta(u, np.array([1.0, 0.0, 0.0]), MOTOR_STOPS)
+
+
+def test_fit_el_calibration_recovers_both_mounts():
+    scale, bias = 9.81, np.array([0.05, -0.02, 0.1])
+    el_el = _el_sweep_units(MOTOR_STOPS, M_EL_TRUE) * scale + bias
+    el_az = _el_sweep_units(MOTOR_STOPS, M_AZ_TRUE) * scale + bias
+    sections, report = ig.fit_el_calibration(el_el, el_az, MOTOR_STOPS)
+    assert set(sections) == {"imu_el", "imu_az"}
+    for sec in sections.values():
+        assert set(sec) == {
+            "accel_bias",
+            "accel_scale",
+            "M",
+            "mount_perm",
+            "mount_misalign_deg",
+        }
+    # el round-trips through the same estimators the live handler uses
+    u = ig.precondition(el_el, sections["imu_el"]["accel_bias"])
+    for want, a in zip(MOTOR_STOPS, u):
+        got = ig.el_from_imu(a, sections["imu_el"]["M"])
+        assert abs((got - want + 180) % 360 - 180) < 0.5
+    u_az = ig.precondition(el_az, sections["imu_az"]["accel_bias"])
+    for want, a in zip(MOTOR_STOPS, u_az):
+        got = ig.el_abs_from_imu_az(a, sections["imu_az"]["M"])
+        assert abs(got - abs(want)) < 1.0
+    assert report["anchor"] == "imu_el"
+    assert abs(report["home_offset_motor_deg"]) < 1.0
+    assert len(report["cross_check"]) == len(MOTOR_STOPS)
+
+
+def test_fit_el_calibration_imu_az_only_falls_back():
+    el_az = _el_sweep_units(MOTOR_STOPS, M_AZ_TRUE) * 9.81
+    sections, report = ig.fit_el_calibration(None, el_az, MOTOR_STOPS)
+    assert set(sections) == {"imu_az"}
+    assert report["anchor"] == "imu_az"
+
+
+def test_fit_accel_sphere_coplanar_pins_null_component():
+    bias = np.array([0.05, -0.02, 0.1])
+    u = _el_sweep_units(MOTOR_STOPS, M_EL_TRUE)
+    p = u * 9.81 + bias
+    n = ig.fit_plane_normal(p)
+    fit_bias, scale = ig.fit_accel_sphere_coplanar(p, n)
+    assert abs(fit_bias @ n) < 1e-9
+    bias_perp = bias - (bias @ n) * n
+    assert np.allclose(fit_bias, bias_perp, atol=1e-9)
+    assert scale == pytest.approx(9.81, abs=0.01)
