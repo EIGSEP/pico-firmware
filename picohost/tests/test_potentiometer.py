@@ -316,3 +316,47 @@ class TestPicoPotentiometerCalSource:
             assert pot._cal["pot_az"] == (3.0, 4.0)
         finally:
             pot.disconnect()
+
+
+class TestSp1Termination:
+    """SP1 failsafe termination: command method + handler name field."""
+
+    def test_set_sp1_termination_drives_emulator(self):
+        pot = _make_pot()
+        pot.set_sp1_termination("OPEN")
+        wait_for_condition(lambda: pot.last_status.get("sp1_term") == 1)
+        pot.set_sp1_termination("SHORT")
+        wait_for_condition(lambda: pot.last_status.get("sp1_term") == 0)
+        pot.disconnect()
+
+    def test_set_sp1_termination_invalid_raises(self):
+        pot = _make_pot()
+        with pytest.raises(ValueError, match="Invalid SP1 termination"):
+            pot.set_sp1_termination("open")  # case-sensitive
+        with pytest.raises(ValueError, match="Invalid SP1 termination"):
+            pot.set_sp1_termination(1)
+        pot.disconnect()
+
+    def test_handler_adds_sp1_term_name(self):
+        from picohost.base import PicoPotentiometer
+
+        pot = PicoPotentiometer.__new__(PicoPotentiometer)
+        pot._cal = {"pot_az": None}
+        captured = {}
+        pot._base_redis_handler = lambda d: captured.update(d)
+        pot._pot_redis_handler(
+            {"sensor_name": "potmon", "status": "update", "sp1_term": 1}
+        )
+        # Additive: raw int kept, name added.
+        assert captured["sp1_term"] == 1
+        assert captured["sp1_term_name"] == "OPEN"
+
+    def test_handler_sp1_term_name_none_when_missing(self):
+        from picohost.base import PicoPotentiometer
+
+        pot = PicoPotentiometer.__new__(PicoPotentiometer)
+        pot._cal = {"pot_az": None}
+        captured = {}
+        pot._base_redis_handler = lambda d: captured.update(d)
+        pot._pot_redis_handler({"sensor_name": "potmon", "status": "update"})
+        assert captured["sp1_term_name"] is None
