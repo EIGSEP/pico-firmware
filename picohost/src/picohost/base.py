@@ -23,7 +23,7 @@ PICO_PID_CDC = 0x0009  # CDC mode (serial)
 PICO_PID_BOOTSEL = 0x000F  # RP2350 BOOTSEL mode (RP2040 was 0x0003)
 
 
-def redis_handler(writer):
+def redis_handler(writer, float_fields=()):
     """
     Create a handler function that publishes a status dict via a
     :class:`eigsep_redis.MetadataWriter`.
@@ -35,6 +35,15 @@ def redis_handler(writer):
         field on each data dict is used as the metadata key (so
         ``stream:{sensor_name}`` carries the per-sensor history and
         ``metadata[sensor_name]`` holds the live snapshot).
+    float_fields : tuple of str, optional
+        Published field names that are float-typed in the consumer
+        metadata schema. Values arriving as ``int`` are cast to
+        ``float`` before publication: firmware cJSON prints a
+        whole-valued double with no decimal point ("30" not "30.0"),
+        so ``json.loads`` yields ``int`` for KV_FLOAT fields whenever
+        the reading lands on a whole value (issue #148). ``bool`` and
+        ``None`` values are never touched, and the caller's dict is
+        not mutated (it doubles as ``last_status``).
 
     Returns
     -------
@@ -68,7 +77,12 @@ def redis_handler(writer):
         except KeyError:
             logger.error("Data does not contain 'sensor_name' key")
             return
-        writer.add(name, data)
+        out = dict(data)
+        for key in float_fields:
+            value = out.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                out[key] = float(value)
+        writer.add(name, out)
 
     return handler
 
@@ -77,6 +91,14 @@ class PicoDevice:
     """
     Base class for communicating with Pico devices running custom firmware.
     """
+
+    #: Published field names that are float-typed in the consumer
+    #: metadata schema (see :func:`redis_handler`). Subclasses list
+    #: every field their firmware app emits as ``KV_FLOAT``, under the
+    #: field's PUBLISHED name (after any fan-out renaming), so that a
+    #: whole-valued reading — which cJSON serializes as a JSON int —
+    #: is cast back to float at the publish boundary.
+    _REDIS_FLOAT_FIELDS = ()
 
     def __init__(
         self,
@@ -122,7 +144,9 @@ class PicoDevice:
             self.name = name
 
         if metadata_writer is not None:
-            self.redis_handler = redis_handler(metadata_writer)
+            self.redis_handler = redis_handler(
+                metadata_writer, self._REDIS_FLOAT_FIELDS
+            )
         else:
             self.redis_handler = None
         self.connect()
@@ -456,6 +480,10 @@ class PicoRFSwitch(PicoDevice):
     SW_STATE_UNKNOWN = -1
     SW_STATE_UNKNOWN_NAME = "UNKNOWN"
 
+    # Firmware KV_FLOAT fields (src/rfswitch.c status tick); the
+    # host-derived temp_therm* are float-or-None already.
+    _REDIS_FLOAT_FIELDS = ("volt_therm0", "volt_therm1", "volt_therm2")
+
     # --- PCB thermistor conversion (host-side) --------------------------
     # Three 10k NTC thermistors on the RF switch PCB (ADC0-2). Wiring:
     #   5.0V --[10k pullup]-- ADC pin --[NTC]-- GND
@@ -693,6 +721,24 @@ class PicoPeltier(PicoDevice):
         "integral",
     )
     _PELTIER_STREAMS = (("LNA", "tempctrl_lna"), ("LOAD", "tempctrl_load"))
+
+    # The subset of _PELTIER_CHANNEL_FIELDS the firmware emits as
+    # KV_FLOAT (src/tempctrl.c status tick) — keep the two in sync when
+    # adding channel fields. Coerced under their published (unprefixed)
+    # names, i.e. after the LNA_/LOAD_ fan-out.
+    _REDIS_FLOAT_FIELDS = (
+        "T_now",
+        "voltage",
+        "resistance",
+        "timestamp",
+        "T_target",
+        "drive_level",
+        "hysteresis",
+        "clamp",
+        "Kp",
+        "Ki",
+        "integral",
+    )
 
     def _peltier_redis_handler(self, data):
         """Fan out the combined tempctrl status dict into two Redis streams.
@@ -964,6 +1010,17 @@ class PicoIMU(PicoDevice):
     difference.
     """
 
+    # Firmware KV_FLOAT fields (src/imu.c status tick); the derived
+    # angle fields are host-computed floats or None already.
+    _REDIS_FLOAT_FIELDS = (
+        "yaw",
+        "pitch",
+        "roll",
+        "accel_x",
+        "accel_y",
+        "accel_z",
+    )
+
     def __init__(self, *args, imu_cal_store=None, **kwargs):
         # {"imu_el": {...}, "imu_az": {...}} — only loaded sections present.
         self._imu_cal = {}
@@ -1087,6 +1144,11 @@ class PicoLidar(PicoDevice):
     when uncalibrated (no nominal fallback).
     """
 
+    # Firmware KV_FLOAT fields (src/lidar.c status tick).
+    # ``current_voltage`` is coerced in the system_current fan-out; the
+    # derived current fields are host-computed floats or None already.
+    _REDIS_FLOAT_FIELDS = ("distance_m", "current_voltage")
+
     def __init__(self, *args, current_cal_store=None, **kwargs):
         """
         Parameters
@@ -1203,6 +1265,10 @@ POT_NEAR_RAIL_V = 0.2
 
 class PicoPotentiometer(PicoDevice):
     """Potentiometer monitoring device with voltage-to-angle calibration."""
+
+    # Firmware KV_FLOAT fields (src/potmon.c status tick); the derived
+    # cal/angle fields are explicitly float()-cast in the handler.
+    _REDIS_FLOAT_FIELDS = ("pot_az_voltage",)
 
     def __init__(
         self,

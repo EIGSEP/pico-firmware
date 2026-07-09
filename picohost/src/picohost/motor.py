@@ -87,10 +87,10 @@ class PicoMotor(PicoDevice):
             usb_serial=usb_serial,
             verbose=verbose,
         )
-        # Wrap the base redis handler to publish position fields as
-        # floats. See _motor_redis_handler. Install this immediately
-        # after super().__init__ because the base class may already
-        # have started the reader thread.
+        # Wrap the base redis handler to checkpoint positions and
+        # detect reboots. See _motor_redis_handler. Install this
+        # immediately after super().__init__ because the base class may
+        # already have started the reader thread.
         if self.redis_handler is not None:
             self._base_redis_handler = self.redis_handler
             self.redis_handler = self._motor_redis_handler
@@ -103,34 +103,25 @@ class PicoMotor(PicoDevice):
         "el_target_pos",
     )
 
+    # The C firmware emits position fields with ``KV_INT`` (raw step
+    # counts), which the JSON parser surfaces as Python ``int``.
+    # Position values legitimately change within a single consumer
+    # integration window during a scan, so the consumer-side
+    # per-integration reduction needs the float→mean policy rather
+    # than the int→min "invariant" policy. Listing them here casts
+    # them at the publish boundary (see PicoDevice._REDIS_FLOAT_FIELDS)
+    # without requiring a firmware reflash.
+    _REDIS_FLOAT_FIELDS = _POSITION_FIELDS
+
     def _motor_redis_handler(self, data):
-        """Cast position fields to float before uploading to Redis.
+        """Checkpoint the raw integer positions, then publish.
 
-        The C firmware emits position fields with ``KV_INT`` (raw step
-        counts), which the JSON parser surfaces as Python ``int``.
-        Position values legitimately change within a single consumer
-        integration window during a scan, so the consumer-side
-        per-integration reduction needs the float→mean policy rather
-        than the int→min "invariant" policy. Coercing here at the
-        publish boundary keeps the consumer schema clean (positions
-        declared as ``float``, mean reduction) without requiring a
-        firmware reflash.
-
-        Mirrors :meth:`PicoPotentiometer._pot_redis_handler` and
-        :meth:`PicoRFSwitch._rfswitch_redis_handler`: both adapt the
-        raw firmware payload to the published Redis shape at the same
-        boundary.
-
-        Also drives the position checkpoint / boot-detection logic
-        (:meth:`_checkpoint_and_seed`) off the raw integer payload,
-        before the float cast.
+        The position checkpoint / boot-detection logic
+        (:meth:`_checkpoint_and_seed`) runs off the raw integer
+        payload; the float cast for the published position fields
+        happens downstream in the base handler (``_REDIS_FLOAT_FIELDS``).
         """
         self._checkpoint_and_seed(data)
-        data = data.copy()
-        for key in self._POSITION_FIELDS:
-            v = data.get(key)
-            if v is not None:
-                data[key] = float(v)
         self._base_redis_handler(data)
 
     def _checkpoint_and_seed(self, data):

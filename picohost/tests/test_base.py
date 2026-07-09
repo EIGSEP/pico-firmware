@@ -477,22 +477,35 @@ class TestRFSwitchThermistorFanout:
 
 
 class TestMotorRedisHandler:
-    """Verify _motor_redis_handler coerces position fields to float.
+    """Verify the motor publish path coerces position fields to float.
 
     The C firmware emits ``az_pos``/``el_pos``/``az_target_pos``/
     ``el_target_pos`` with ``KV_INT``, which the JSON parser surfaces
     as Python ``int``. The downstream consumer schema declares these
     as ``float`` so the per-integration reduction picks the
     float→mean policy (positions legitimately change within an
-    integration during a scan). Coercing here at the publish boundary
-    is what makes the producer satisfy that contract.
+    integration during a scan). The cast happens in the base redis
+    handler via ``PicoMotor._REDIS_FLOAT_FIELDS``; these tests drive
+    the full wrapper chain down to the writer boundary.
     """
 
     _POSITION_KEYS = ("az_pos", "az_target_pos", "el_pos", "el_target_pos")
 
     def _capture(self, motor, data):
+        from picohost.base import redis_handler
+
         captured = {}
-        motor._base_redis_handler = lambda d: captured.update(d)
+
+        class _Writer:
+            def add(self, name, payload):
+                captured.update(payload)
+
+        # Same wiring as PicoDevice.__init__ with a metadata_writer,
+        # minus the emulator: factory handler (float coercion) fed by
+        # the motor wrapper (checkpointing).
+        motor._base_redis_handler = redis_handler(
+            _Writer(), motor._REDIS_FLOAT_FIELDS
+        )
         motor._motor_redis_handler(data)
         return captured
 

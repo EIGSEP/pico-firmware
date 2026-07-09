@@ -279,11 +279,15 @@ class TestIMUIntegration:
         s = imu.last_status
         # Integers
         assert isinstance(s["app_id"], int)
-        # Floats
+        # KV_FLOAT fields: numeric on the wire, but cJSON prints a
+        # whole-valued double with no decimal point, so json.loads may
+        # yield int (issue #148). Float typing is restored at the Redis
+        # publish boundary (see test_redis_float_coercion.py).
         for key in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
-            assert isinstance(s[key], float), (
-                f"{key} should be float, got {type(s[key])}"
+            assert isinstance(s[key], (int, float)), (
+                f"{key} should be numeric, got {type(s[key])}"
             )
+            assert not isinstance(s[key], bool), key
         # Strings
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["status"], str)
