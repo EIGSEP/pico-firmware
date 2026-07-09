@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.3.0](https://github.com/EIGSEP/pico-firmware/compare/v4.2.0...v4.3.0) (2026-07-09)
+
+
+### Features
+
+* **tempctrl:** report every plausible sample; rate guard is control-only ([a983473](https://github.com/EIGSEP/pico-firmware/commit/a983473eddc22062dd6fe44aa9d72d2557715488))
+
+
+### Bug Fixes
+
+* **picohost:** publish whole-valued firmware floats as floats ([#148](https://github.com/EIGSEP/pico-firmware/issues/148)) ([74fc79e](https://github.com/EIGSEP/pico-firmware/commit/74fc79eb4b589323c2a24c404e10fbc24b31d158))
+* **tempctrl:** drop rate anchor on sensor-trip latch so reporting recovers ([0b41a1d](https://github.com/EIGSEP/pico-firmware/commit/0b41a1d80231e0f0fb3fc48a131f1fe3c25f7d83))
+
 ## [4.2.0](https://github.com/EIGSEP/pico-firmware/compare/v4.1.0...v4.2.0) (2026-07-08)
 
 
