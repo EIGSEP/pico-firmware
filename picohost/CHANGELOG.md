@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.5.0](https://github.com/EIGSEP/pico-firmware/compare/v4.4.0...v4.5.0) (2026-07-10)
+
+
+### Features
+
+* **picohost:** PicoPotentiometer.set_sp1_termination + sp1_term_name ([d1bfd9f](https://github.com/EIGSEP/pico-firmware/commit/d1bfd9f778d1209e47fe91d460b8a09ceb8ff01a))
+* **potmon:** sp1_term failsafe-termination state in emulator ([b632e91](https://github.com/EIGSEP/pico-firmware/commit/b632e91fe9f15f23f5c8cb4394df784b4c76e6d3))
+
 ## [4.4.0](https://github.com/EIGSEP/pico-firmware/compare/v4.3.0...v4.4.0) (2026-07-09)
 
 
