@@ -1210,6 +1210,42 @@ class TestImuEmulator:
         assert set(status.keys()) == expected_keys
 
 
+class TestImuEmulatorStandby:
+    """Remote RFI standby: hold the BNO08x in reset and go quiet."""
+
+    def test_standby_reports_standby_and_stops_updates(self):
+        emu = ImuEmulator(app_id=3)
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+
+        emu.server({"cmd": "standby"})
+        # op() while quiet must not release reset or emit a packet
+        emu.op()
+        status = emu.get_status()
+        # Commanded-off reports "error" (no valid data) + standby=true.
+        assert status["status"] == "error"
+        assert status["standby"] is True
+        assert set(status.keys()) == {
+            "sensor_name",
+            "status",
+            "app_id",
+            "standby",
+        }
+        assert status["sensor_name"] == "imu_el"
+
+    def test_resume_restores_updates(self):
+        emu = ImuEmulator(app_id=3)
+        emu.server({"cmd": "standby"})
+        emu.op()
+        assert emu.get_status()["standby"] is True
+
+        emu.server({"cmd": "resume"})
+        emu.op()
+        status = emu.get_status()
+        assert status["status"] == "update"
+        assert "accel_z" in status  # full sensor fields are back
+
+
 class TestLidarEmulator:
     def test_initial_state(self):
         emu = LidarEmulator()
@@ -1249,6 +1285,55 @@ class TestLidarEmulator:
         emu.simulate_sensor_recovery()
         emu.op()
         assert emu.get_status()["status"] == "update"
+
+
+class TestLidarEmulatorStandby:
+    """Remote RFI standby: disable GRF-250 laser firing (opcode 50)."""
+
+    def test_standby_disables_laser_and_reports_standby(self):
+        emu = LidarEmulator()
+        emu.op()
+        assert emu.get_status()["status"] == "update"
+
+        emu.server({"cmd": "standby"})
+        emu.op()
+        status = emu.get_status()
+        # Commanded-off reports "error" (no valid distance) + standby=true.
+        assert status["status"] == "error"
+        assert status["standby"] is True
+        assert status["sensor_name"] == "lidar"
+        assert status["laser_firing"] == 0
+        assert set(status.keys()) == {
+            "sensor_name",
+            "status",
+            "app_id",
+            "current_voltage",
+            "laser_firing",
+            "standby",
+        }
+
+    def test_standby_keeps_current_monitor_alive(self):
+        """currentmon is a separate dispatch: it keeps sampling in standby."""
+        emu = LidarEmulator()
+        emu.server({"cmd": "standby"})
+        emu.op()
+        status = emu.get_status()
+        assert status["standby"] is True
+        v = status["current_voltage"]
+        assert isinstance(v, float)
+        assert v > 0.0
+
+    def test_resume_reenables_laser(self):
+        emu = LidarEmulator()
+        emu.server({"cmd": "standby"})
+        emu.op()
+        assert emu.get_status()["standby"] is True
+
+        emu.server({"cmd": "resume"})
+        emu.op()
+        status = emu.get_status()
+        assert status["status"] == "update"
+        assert "distance_m" in status
 
 
 class TestRFSwitchEmulator:

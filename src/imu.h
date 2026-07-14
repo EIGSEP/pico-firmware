@@ -48,6 +48,11 @@ typedef struct {
        per-cycle "status" field while is_initialized continues to gate
        the longer hardware-recovery timeout. */
     bool      got_packet_this_cycle;
+    /* RFI standby: when true the BNO08x is held in reset (RST low) and the
+       app goes quiet — op() does nothing and status() reports "standby".
+       Toggled by the universal {"cmd":"standby"}/{"cmd":"resume"} commands.
+       In-RAM only (no persistence); a reboot comes back sensing. */
+    bool      standby;
     /* Partial-packet receive buffer */
     uint8_t   rx_buf[RVC_PACKET_SIZE];
     uint8_t   rx_pos;

@@ -40,6 +40,8 @@ class ImuEmulator(PicoEmulator):
         self.is_initialized = True
         self._last_event_time = time.monotonic()
         self._sensor_failed = False  # set via simulate_sensor_failure()
+        # RFI standby: hold the BNO08x in reset (RST low) and go quiet.
+        self._standby = False
         # Per-cycle freshness flag: True iff a packet was produced since
         # the last get_status() call. Drives the "status" field.
         self.got_packet_this_cycle = False
@@ -63,7 +65,16 @@ class ImuEmulator(PicoEmulator):
         self.is_initialized = False
 
     def server(self, cmd):
-        pass  # RVC mode: no commands supported
+        # RVC mode has no sensor commands, but the universal RFI standby
+        # controls apply: standby holds RST low (mirrored here by dropping
+        # is_initialized so resume re-runs the full init), resume re-inits.
+        action = cmd.get("cmd")
+        if action == "standby":
+            self._standby = True
+            self.is_initialized = False
+        elif action == "resume":
+            self._standby = False
+            self.is_initialized = False  # next op() re-inits, like imu_init()
 
     def simulate_sensor_failure(self):
         """Simulate BNO08x crash / power loss (no more events)."""
@@ -106,6 +117,8 @@ class ImuEmulator(PicoEmulator):
         self.yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
 
     def op(self):
+        if self._standby:
+            return  # RST held low: no re-init, no UART drain, no packet
         # Mirrors imu_op -> imu_init, including the memset(&imu.data, 0)
         # at imu.c:109 that zeros sensor data on every (re-)init.
         if not self.is_initialized:
@@ -137,6 +150,15 @@ class ImuEmulator(PicoEmulator):
         self.got_packet_this_cycle = True
 
     def get_status(self):
+        if self._standby:
+            # Commanded-off looks like an error tick (no valid data) but with
+            # standby=true so the host distinguishes it from a real fault.
+            return {
+                "sensor_name": self.name,
+                "status": "error",
+                "app_id": self.app_id,
+                "standby": True,
+            }
         status = "update" if self.got_packet_this_cycle else "error"
         self.got_packet_this_cycle = False
         return {

@@ -111,6 +111,38 @@ class TestBaseProtocol:
 
 
 # ---------------------------------------------------------------------------
+# RFI standby gating (shared)
+# ---------------------------------------------------------------------------
+
+
+class TestStandbyGating:
+    """{"cmd":"standby"}/{"cmd":"resume"} reach the per-app server() via the
+    normal dispatch, but only imu and lidar implement them. Every other app
+    ignores the command, so RFI standby can never silently pause an unrelated
+    app (notably tempctrl's Peltier-safety loop)."""
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: MotorEmulator(),
+            lambda: TempCtrlEmulator(),
+            lambda: PotMonEmulator(),
+            lambda: RFSwitchEmulator(settle_ms=0),
+        ],
+    )
+    def test_standby_ignored_by_unsupported_apps(self, make):
+        emu = make()
+        emu.server({"cmd": "standby"})  # must not raise
+        emu.op()
+        status = emu.get_status()
+        if isinstance(status, list):
+            status = status[0]
+        # never enters standby: no standby flag, keeps its own identity
+        assert not status.get("standby")
+        assert status.get("sensor_name")
+
+
+# ---------------------------------------------------------------------------
 # Motor protocol (src/motor.c)
 # ---------------------------------------------------------------------------
 
@@ -506,6 +538,24 @@ class TestImuProtocol:
         # roll encodes the elevation rotation for imu_el with identity mount
         assert abs(status["roll"] - 30.0) < 1.0
 
+    def test_standby_and_resume_contract(self):
+        """imu.c standby: hold RST low → status "error" (no valid data) with
+        standby=true so it is distinguishable from a fault; resume re-inits
+        and updates return."""
+        emu = ImuEmulator(app_id=3)
+        emu.server({"cmd": "standby"})
+        emu.op()  # RST held low: no packet
+        s = emu.get_status()
+        assert s["status"] == "error"
+        assert s["standby"] is True
+        assert set(s) == {"sensor_name", "status", "app_id", "standby"}
+
+        emu.server({"cmd": "resume"})
+        emu.op()
+        s2 = emu.get_status()
+        assert s2["status"] == "update"
+        assert "standby" not in s2  # flag absent when sensing normally
+
 
 # ---------------------------------------------------------------------------
 # Lidar protocol (src/lidar.c)
@@ -571,6 +621,24 @@ class TestLidarProtocol:
         bad = emu.get_status()
         assert bad["status"] == "error"
         assert bad["distance_m"] == prev_distance
+
+    def test_standby_disables_laser_contract(self):
+        """lidar.c standby: write GRF-250 opcode 50 <- 0 (laser off). Reports
+        status="error" (no valid distance) with standby=true and
+        laser_firing=0; the co-located currentmon keeps publishing; resume
+        re-enables the laser and distance updates return."""
+        emu = LidarEmulator()
+        emu.server({"cmd": "standby"})
+        emu.op()
+        s = emu.get_status()
+        assert s["status"] == "error"
+        assert s["standby"] is True
+        assert s["laser_firing"] == 0
+        assert "current_voltage" in s  # currentmon independent of standby
+
+        emu.server({"cmd": "resume"})
+        emu.op()
+        assert emu.get_status()["status"] == "update"
 
 
 # ---------------------------------------------------------------------------

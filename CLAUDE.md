@@ -164,7 +164,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
 ### Hardware Configuration
 
 - **DIP Switches**: GPIO 20, 21, 22 (3-bit selection, pull-up enabled)
-- **Watchdog**: 8-second timeout enabled
+- **Watchdog**: no hardware watchdog is enabled — boards do not auto-reboot. (`tempctrl` has an app-level *communication-safety* timer that gates the Peltier drive when the host goes quiet; it never reboots the Pico.)
 - **USB Serial**: CDC serial for all apps (VID:0x2E8A, PID:0x0009)
 - **Target**: RP2350 (Pico 2), also supports RP2040
 - **LED**: Default Pico LED for heartbeat/status indication

@@ -21,6 +21,8 @@ from picohost.testing import (
     DummyPicoMotor,
     DummyPicoRFSwitch,
     DummyPicoPeltier,
+    DummyPicoIMU,
+    DummyPicoLidar,
 )
 
 
@@ -397,6 +399,62 @@ class TestDummyPicoPeltier:
         assert "LOAD_T_now" in peltier.last_status
         assert "LNA_drive_level" in peltier.last_status
         peltier.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# RFI standby (DummyPicoIMU / DummyPicoLidar)
+# ---------------------------------------------------------------------------
+
+
+class TestDummyPicoStandby:
+    """standby()/resume() drive the sensor quiet and back through the full
+    command path (host -> serial -> emulator -> status)."""
+
+    def test_imu_standby_and_resume(self):
+        imu = DummyPicoIMU(port="/dev/ttyUSB0")
+        cadence = imu.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: imu.last_status.get("status") == "update",
+            cadence_ms=cadence,
+        )
+        imu.standby()
+        wait_for_condition(
+            lambda: imu.last_status.get("standby") is True,
+            cadence_ms=cadence,
+        )
+        # commanded-off reports error (not a new status value) + standby flag
+        assert imu.last_status["status"] == "error"
+        assert imu.last_status["sensor_name"] == "imu_el"
+
+        imu.resume()
+        wait_for_condition(
+            lambda: imu.last_status.get("status") == "update",
+            cadence_ms=cadence,
+        )
+        imu.disconnect()
+
+    def test_lidar_standby_disables_laser_and_resume(self):
+        lidar = DummyPicoLidar(port="/dev/ttyUSB0")
+        cadence = lidar.EMULATOR_CADENCE_MS
+        wait_for_condition(
+            lambda: lidar.last_status.get("status") == "update",
+            cadence_ms=cadence,
+        )
+        lidar.standby()
+        wait_for_condition(
+            lambda: lidar.last_status.get("standby") is True,
+            cadence_ms=cadence,
+        )
+        assert lidar.last_status["status"] == "error"  # not a new status value
+        assert lidar.last_status.get("laser_firing") == 0
+        assert "current_voltage" in lidar.last_status  # currentmon still live
+
+        lidar.resume()
+        wait_for_condition(
+            lambda: lidar.last_status.get("status") == "update",
+            cadence_ms=cadence,
+        )
+        lidar.disconnect()
 
 
 # ---------------------------------------------------------------------------

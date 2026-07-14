@@ -22,6 +22,10 @@ class LidarEmulator(PicoEmulator):
         # Firmware static struct {0}: distance unread until first successful op.
         self.distance = 0.0
         self._sensor_failed = False  # set via simulate_sensor_failure()
+        # RFI standby: disable GRF-250 laser firing (opcode 50). laser_firing
+        # mirrors the value read back from opcode 50 for host confirmation.
+        self._standby = False
+        self.laser_firing = 1
         # Per-cycle freshness flag: True iff op() refreshed the
         # distance reading since the last get_status() call.
         self.last_op_ok = False
@@ -36,7 +40,15 @@ class LidarEmulator(PicoEmulator):
         pass  # lidar_init() only sets up I2C; distance is not reset
 
     def server(self, cmd):
-        pass  # lidar does not handle commands
+        # The only lidar commands are the universal RFI standby controls:
+        # standby writes opcode 50 <- 0 (laser off), resume writes 50 <- 1.
+        action = cmd.get("cmd")
+        if action == "standby":
+            self._standby = True
+            self.laser_firing = 0
+        elif action == "resume":
+            self._standby = False
+            self.laser_firing = 1
 
     def simulate_sensor_failure(self):
         """Simulate i2c read failure / TF-Luna not-ready loop."""
@@ -57,6 +69,11 @@ class LidarEmulator(PicoEmulator):
                 3.3,
             )
         )
+        if self._standby:
+            # Laser off: skip the distance read entirely. currentmon above is
+            # a separate dispatch and keeps sampling (mirrors lidar_op()'s
+            # early return while currentmon_op() still runs).
+            return
         if self._sensor_failed:
             # Matches firmware: i2c_read_timeout or dist_cm==0 → reset+return,
             # leaving previous distance unchanged and last_op_ok at False.
@@ -65,6 +82,18 @@ class LidarEmulator(PicoEmulator):
         self.last_op_ok = True
 
     def get_status(self):
+        if self._standby:
+            # Commanded-off looks like an error tick (no valid distance) but
+            # with standby=true so the host distinguishes it from a real fault.
+            # laser_firing is the opcode-50 read-back (0 = confirmed off).
+            return {
+                "sensor_name": "lidar",
+                "status": "error",
+                "app_id": self.app_id,
+                "current_voltage": self.current_voltage,
+                "laser_firing": self.laser_firing,
+                "standby": True,
+            }
         status = "update" if self.last_op_ok else "error"
         self.last_op_ok = False
         return {

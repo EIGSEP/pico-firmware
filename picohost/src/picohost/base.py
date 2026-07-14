@@ -1044,6 +1044,18 @@ class PicoIMU(PicoDevice):
         if imu_az is not None:
             self._imu_cal["imu_az"] = imu_az
 
+    def standby(self) -> None:
+        """Quiet the IMU for RFI mitigation: firmware holds the BNO08x in
+        reset (RST low) until :meth:`resume`. Status ticks then report
+        ``status="error"`` with ``standby=true`` (distinguishing a commanded
+        off from a real fault). In-RAM only — a reboot comes back sensing.
+        """
+        self.send_command({"cmd": "standby"})
+
+    def resume(self) -> None:
+        """Resume normal sensing after :meth:`standby` (re-inits the IMU)."""
+        self.send_command({"cmd": "resume"})
+
     @staticmethod
     def _accel_unit(data, cal):
         a = [data.get("accel_x"), data.get("accel_y"), data.get("accel_z")]
@@ -1158,6 +1170,20 @@ class PicoLidar(PicoDevice):
         """
         if system_current_params is not None:
             self._current_cal = tuple(system_current_params)
+
+    def standby(self) -> None:
+        """Quiet the lidar for RFI mitigation: firmware disables GRF-250 laser
+        firing (I2C opcode 50 <- 0), stopping the 905 nm emitter until
+        :meth:`resume`. Status ticks then report ``status="error"`` with
+        ``standby=true`` and ``laser_firing`` (0 = laser confirmed off);
+        the co-located system current monitor keeps reporting. In-RAM only —
+        a device reboot comes back with the laser on.
+        """
+        self.send_command({"cmd": "standby"})
+
+    def resume(self) -> None:
+        """Re-enable GRF-250 laser firing after :meth:`standby`."""
+        self.send_command({"cmd": "resume"})
 
     def _current_fields(self, v_adc):
         """Return published (current_a, cal_slope, cal_intercept) for v_adc.

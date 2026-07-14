@@ -4,6 +4,7 @@
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "pico_multi.h"
+#include "cJSON.h"
 
 static ImuState imu;
 
@@ -115,13 +116,48 @@ void imu_init(uint8_t app_id) {
     imu.is_initialized = true;
 }
 
+/* ------------------------------------------------------------------ */
+/* RFI standby                                                        */
+/* ------------------------------------------------------------------ */
+/* Hold the BNO08x in reset to silence it for RFI mitigation. Drops
+   is_initialized so a later resume re-runs the full init sequence. */
+static void imu_enter_standby(void) {
+    gpio_init(IMU_RST_GPIO);
+    gpio_set_dir(IMU_RST_GPIO, GPIO_OUT);
+    gpio_put(IMU_RST_GPIO, 0);      /* hold in reset — sensor goes quiet */
+    imu.is_initialized = false;
+    imu.standby = true;
+}
+
+/* Release reset and re-initialise the sensor (imu_hardware_reset drives
+   RST low->high inside imu_init). */
+static void imu_exit_standby(uint8_t app_id) {
+    imu.standby = false;
+    imu_init(app_id);
+}
+
 void imu_server(uint8_t app_id, const char *json_str) {
-    (void)app_id;
-    (void)json_str;
-    /* RVC mode: no commands supported */
+    /* RVC mode has no sensor commands; the only commands are the universal
+       RFI standby controls. */
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root) {
+        return;
+    }
+    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
+    if (cJSON_IsString(cmd) && cmd->valuestring != NULL) {
+        if (strcmp(cmd->valuestring, "standby") == 0) {
+            imu_enter_standby();
+        } else if (strcmp(cmd->valuestring, "resume") == 0) {
+            imu_exit_standby(app_id);
+        }
+    }
+    cJSON_Delete(root);
 }
 
 void imu_op(uint8_t app_id) {
+    if (imu.standby) {
+        return;  /* RST held low: no re-init, no UART drain, no packets */
+    }
     /* No-op while healthy (guarded by is_initialized check inside
        imu_init).  After an event timeout sets is_initialized = false,
        this re-runs the full init sequence to recover the sensor. */
@@ -147,6 +183,18 @@ void imu_op(uint8_t app_id) {
 }
 
 void imu_status(uint8_t app_id) {
+    if (imu.standby) {
+        /* Commanded-off reports status="error" (no valid data), same as a
+           fault, but with standby=true so the host can tell the two apart. */
+        send_json(4,
+            KV_STR,  "sensor_name", imu.name,
+            KV_STR,  "status",      "error",
+            KV_INT,  "app_id",      app_id,
+            KV_BOOL, "standby",     true
+        );
+        return;
+    }
+
     const char *status = imu.got_packet_this_cycle ? "update" : "error";
 
     send_json(9,
