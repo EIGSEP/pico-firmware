@@ -235,3 +235,37 @@ def test_emulator_to_handler_roundtrip_identity_mount():
     pub = _capture(dev, _az_status(35.0, 80.0, 0.0))
     assert pub["el_deg"] == pytest.approx(35.0, abs=1e-3)
     dev.disconnect()
+
+
+def _imu_standby_status(app_id):
+    """Raw firmware/emulator standby tick: status='error', standby=true,
+    and the sensor data fields omitted (imu.c imu_status standby branch)."""
+    return {
+        "sensor_name": "imu_el" if app_id == 3 else "imu_az",
+        "status": "error",
+        "app_id": app_id,
+        "standby": True,
+    }
+
+
+@pytest.mark.parametrize("app_id", [3, 6])
+def test_imu_standby_publishes_full_shape_with_none_data(app_id):
+    """A standby tick must publish the full field set (data None) plus
+    standby=True, so the consumer contract sees no missing/extra keys."""
+    dev = DummyPicoIMU("/dev/dummy")
+    pub = _capture(dev, _imu_standby_status(app_id))
+    assert pub["standby"] is True
+    assert pub["status"] == "error"
+    for f in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
+        assert f in pub and pub[f] is None
+    assert pub["el_deg"] is None
+    dev.disconnect()
+
+
+def test_imu_normal_tick_carries_standby_false():
+    """Normal ticks gain standby=False so the published shape is stable
+    across normal/standby (the consumer schema requires the key)."""
+    dev = DummyPicoIMU("/dev/dummy")
+    pub = _capture(dev, _az_status(30, 70, 100))
+    assert pub["standby"] is False
+    dev.disconnect()

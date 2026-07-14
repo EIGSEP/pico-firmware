@@ -1412,3 +1412,50 @@ class TestLidarRedisHandler:
             assert [p["sensor_name"] for p in pub] == ["lidar"]
         finally:
             lidar.disconnect()
+
+    def test_standby_publishes_full_lidar_shape(self):
+        """Standby tick (lidar_status standby branch): distance_m is filled
+        None, standby/laser_firing ride through, and the co-located
+        system_current still publishes from current_voltage."""
+        lidar = DummyPicoLidar("/dev/dummy")
+        try:
+            lidar._current_cal = self._CAL
+            pub = self._capture(
+                lidar,
+                {
+                    "sensor_name": "lidar",
+                    "status": "error",
+                    "app_id": 4,
+                    "current_voltage": 1.70,
+                    "laser_firing": 0,
+                    "standby": True,
+                },
+            )
+            assert pub[0]["standby"] is True
+            assert pub[0]["status"] == "error"
+            assert pub[0]["distance_m"] is None
+            assert pub[0]["laser_firing"] == 0
+            assert pub[1]["sensor_name"] == "system_current"
+        finally:
+            lidar.disconnect()
+
+    def test_normal_tick_has_standby_false_laser_none(self):
+        """Normal ticks gain standby=False and laser_firing=None so the
+        published lidar shape is stable / matches the consumer contract."""
+        lidar = DummyPicoLidar("/dev/dummy")
+        try:
+            pub = self._capture(
+                lidar,
+                {
+                    "sensor_name": "lidar",
+                    "status": "update",
+                    "app_id": 4,
+                    "distance_m": 2.0,
+                    "current_voltage": 0.7,
+                },
+            )
+            assert pub[0]["standby"] is False
+            assert pub[0]["laser_firing"] is None
+            assert pub[0]["distance_m"] == 2.0
+        finally:
+            lidar.disconnect()

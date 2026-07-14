@@ -1085,6 +1085,14 @@ class PicoIMU(PicoDevice):
                     "derived fields — check the stored calibration section.",
                     name,
                 )
+        # Standby ticks (status="error", standby=true) omit the sensor data
+        # fields; fill them None so the published shape always matches the
+        # consumer's SENSOR_SCHEMAS contract (no missing-key contract
+        # warnings on the corr path). `standby` defaults False on the normal
+        # path where the firmware omits it.
+        for _f in ("yaw", "pitch", "roll", "accel_x", "accel_y", "accel_z"):
+            data.setdefault(_f, None)
+        data.setdefault("standby", False)
         self._base_redis_handler(data)
 
     def _el_only(self, data, cal):
@@ -1211,6 +1219,15 @@ class PicoLidar(PicoDevice):
         """
         data = data.copy()
         v = data.pop("current_voltage", None)
+        # Standby ticks omit distance_m, and normal ticks omit
+        # standby/laser_firing; fill them so the published lidar entry
+        # always matches the consumer's SENSOR_SCHEMAS contract. Standby
+        # sets distance_m None; the normal path defaults standby False.
+        # laser_firing is the opcode-50 read-back, meaningful only in
+        # standby → None on the normal path.
+        data.setdefault("distance_m", None)
+        data.setdefault("standby", False)
+        data.setdefault("laser_firing", None)
         self._base_redis_handler(data)
         if v is not None:
             current_a, cal_slope, cal_intercept = self._current_fields(v)
