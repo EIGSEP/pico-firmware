@@ -707,11 +707,16 @@ class TestPicoPeltier:
         peltier.disconnect()
 
     def test_set_gains_round_trip(self):
-        """set_gains() updates emulator Kp/Ki and surfaces in status."""
+        """set_gains() updates emulator Kp/Ki and surfaces in status.
+
+        LOAD is a single low-side FET heater (on/off hysteresis), not a
+        PI loop, so firmware silently ignores LOAD_Kp/LOAD_Ki — no
+        "LOAD_Kp" key is ever published (see PicoPeltier._LOAD_HEATER_FIELDS).
+        """
         peltier = DummyPicoPeltier("/dev/dummy")
         cadence = peltier.EMULATOR_CADENCE_MS
         before = peltier.last_status.get("LNA_Kp")
-        peltier.set_gains(LNA_Kp=0.4, LNA_Ki=0.02, LOAD_Kp=0.5)
+        peltier.set_gains(LNA_Kp=0.4, LNA_Ki=0.02)
         assert wait_for_settle(
             lambda: peltier.last_status.get("LNA_Kp"),
             initial=before,
@@ -719,7 +724,7 @@ class TestPicoPeltier:
             max_cycles=10,
         ) == pytest.approx(0.4)
         assert peltier.last_status.get("LNA_Ki") == pytest.approx(0.02)
-        assert peltier.last_status.get("LOAD_Kp") == pytest.approx(0.5)
+        assert "LOAD_Kp" not in peltier.last_status
         peltier.disconnect()
 
     def test_reset_integral_sends_only_selected_channels(self):
@@ -1101,6 +1106,9 @@ class TestPicoPeltierRedisHandler:
         # LOAD models an invalid-data cycle (railed divider): status error,
         # null T_now/resistance, voltage live at the rail for open-vs-short
         # diagnosis. Trip flags stay False — data validity is not a latch.
+        # LOAD is a single low-side FET heater (on/off hysteresis, no PI
+        # loop), so unlike LNA there is no cooling_enabled/clamp/Kp/Ki/
+        # integral — firmware never sends those fields for this channel.
         "LOAD_status": "error",
         "LOAD_T_now": None,
         "LOAD_voltage": 3.3,
@@ -1114,15 +1122,10 @@ class TestPicoPeltierRedisHandler:
         "LOAD_sensor_rejects": 0,
         "LOAD_stall_tripped": False,
         "LOAD_runaway_tripped": False,
-        "LOAD_cooling_enabled": False,
         "LOAD_hysteresis": 0.5,
-        "LOAD_clamp": 0.8,
-        "LOAD_Kp": 0.25,
-        "LOAD_Ki": 0.0,
-        "LOAD_integral": 0.0,
     }
 
-    _EXPECTED_KEYS = {
+    _EXPECTED_LNA_KEYS = {
         "sensor_name",
         "app_id",
         "status",
@@ -1142,6 +1145,16 @@ class TestPicoPeltierRedisHandler:
         "runaway_tripped",
         "cooling_enabled",
         "hysteresis",
+        "clamp",
+        "Kp",
+        "Ki",
+        "integral",
+    }
+
+    # LOAD has no PI/bidirectional-drive fields (cooling_enabled, clamp,
+    # Kp, Ki, integral) — it's a single FET heater under on/off hysteresis.
+    _EXPECTED_LOAD_KEYS = _EXPECTED_LNA_KEYS - {
+        "cooling_enabled",
         "clamp",
         "Kp",
         "Ki",
@@ -1207,12 +1220,15 @@ class TestPicoPeltierRedisHandler:
             peltier.disconnect()
 
     def test_published_shape_stable_across_channel_state(self):
-        """Both streams expose the same key set regardless of values."""
+        """Each stream exposes a stable key set regardless of values —
+        LNA and LOAD have different key sets (different actuators: a
+        Peltier under PI control vs. a single FET heater), but each is
+        internally stable."""
         peltier = DummyPicoPeltier("/dev/dummy")
         try:
             lna, load = self._capture_all(peltier, self._SAMPLE)
-            assert set(lna) == self._EXPECTED_KEYS
-            assert set(load) == self._EXPECTED_KEYS
+            assert set(lna) == self._EXPECTED_LNA_KEYS
+            assert set(load) == self._EXPECTED_LOAD_KEYS
         finally:
             peltier.disconnect()
 

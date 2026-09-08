@@ -262,6 +262,9 @@ class TestTempCtrlEmulator:
             "LNA_Kp",
             "LNA_Ki",
             "LNA_integral",
+            # LOAD is a single low-side FET heater (on/off hysteresis, no
+            # PI loop), so unlike LNA it has no cooling_enabled/clamp/
+            # Kp/Ki/integral.
             "LOAD_status",
             "LOAD_T_now",
             "LOAD_voltage",
@@ -276,12 +279,7 @@ class TestTempCtrlEmulator:
             "LOAD_sensor_rejects",
             "LOAD_stall_tripped",
             "LOAD_runaway_tripped",
-            "LOAD_cooling_enabled",
             "LOAD_hysteresis",
-            "LOAD_clamp",
-            "LOAD_Kp",
-            "LOAD_Ki",
-            "LOAD_integral",
         }
         assert set(status.keys()) == expected_keys
         assert status["LNA_status"] == "update"
@@ -389,9 +387,11 @@ class TestTempCtrlWatchdog:
         # Host intent is preserved.
         assert emu.lna.enabled is True
         assert emu.load.enabled is True
-        # Trip gates drive to zero on both channels.
+        # Trip gates drive to zero on both channels. LOAD has no
+        # continuous `drive` (single FET, on/off), so the equivalent
+        # check is `active is False`.
         assert emu.lna.drive == 0.0
-        assert emu.load.drive == 0.0
+        assert emu.load.active is False
 
     def test_keepalive_does_not_clear_watchdog_trip(self):
         """A bare keepalive refreshes the timer but the trip flag is sticky."""
@@ -557,7 +557,9 @@ class TestTempCtrlStallGuard:
         assert emu.load.stall_tripped is True
         # Host intent unchanged on the tripped channel.
         assert emu.load.enabled is True
-        assert emu.load.drive == 0.0
+        # LOAD has no continuous `drive` (single FET, on/off); the
+        # equivalent check is `active is False`.
+        assert emu.load.active is False
         # LNA is unaffected.
         assert emu.lna.stall_tripped is False
         assert emu.lna.enabled is True
@@ -572,7 +574,10 @@ class TestTempCtrlCoolingGuard:
     def test_default_is_cooling_enabled(self):
         emu = TempCtrlEmulator()
         assert emu.lna.cooling_enabled is True
-        assert emu.load.cooling_enabled is True
+        # LOAD is a single low-side FET heater — it has no reverse
+        # (cooling) direction to guard, so it has no cooling_enabled
+        # attribute at all (unlike LNA's Peltier).
+        assert not hasattr(emu.load, "cooling_enabled")
 
     def test_disable_clamps_drive_to_nonnegative(self):
         """With cooling disabled and setpoint below T_now, drive
@@ -635,27 +640,33 @@ class TestTempCtrlCoolingGuard:
         assert abs(emu.lna.T_now - 30.0) < 0.5
 
     def test_per_channel_isolation(self):
-        """Disabling cooling on LNA leaves LOAD's full range available."""
+        """Disabling cooling on LNA doesn't affect LOAD's independent
+        heating. LOAD has no cooling capability of its own at all — a
+        single FET heater can only heat or passively drift to ambient —
+        so this exercises LOAD *heating up* to its target while LNA is
+        forbidden from cooling down to its (lower) target, verifying the
+        two channels don't interfere with each other.
+        """
         emu = TempCtrlEmulator()
         emu.lna.T_now = 30.0
-        emu.load.T_now = 30.0
+        emu.load.T_now = 20.0
         emu.server(
             {
                 "LNA_temp_target": 20.0,
                 "LNA_enable": True,
                 "LNA_hysteresis": 0.5,
                 "LNA_cooling_enabled": False,
-                "LOAD_temp_target": 20.0,
+                "LOAD_temp_target": 28.0,
                 "LOAD_enable": True,
                 "LOAD_hysteresis": 0.5,
             }
         )
         for _ in range(1000):
             emu.op()
-        # LNA refused to cool; LOAD reached the lower setpoint.
+        # LNA refused to cool; LOAD reached its (higher) setpoint by heating.
         assert emu.lna.drive == 0.0
         assert emu.lna.T_now >= 30.0
-        assert abs(emu.load.T_now - 20.0) < 0.5
+        assert abs(emu.load.T_now - 28.0) < 0.5
 
     def test_saturated_at_zero_does_not_trip_stall(self):
         """With cooling forbidden and T_now stuck above setpoint, the PI
@@ -1404,7 +1415,10 @@ class TestTempCtrlStatusTypes:
             assert type(status[f"{prefix}_sensor_rejects"]) is int
             assert isinstance(status[f"{prefix}_runaway_tripped"], bool)
             assert isinstance(status[f"{prefix}_hysteresis"], float)
-            assert isinstance(status[f"{prefix}_clamp"], float)
+        # LNA-only: PI/bidirectional-drive fields LOAD (a single FET
+        # heater, on/off hysteresis) doesn't have.
+        assert isinstance(status["LNA_clamp"], float)
+        assert "LOAD_clamp" not in status
 
 
 class TestImuStatusTypes:

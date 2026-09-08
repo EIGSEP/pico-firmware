@@ -15,11 +15,33 @@
 #define PELTIER_LNA_DIR_PIN1    10  // in1
 #define PELTIER_LNA_DIR_PIN2    12  // in2
 
-// LOAD Temperature Control configuration
+// LOAD Temperature Control configuration. Unlike LNA (Peltier H-bridge,
+// bidirectional PI drive), LOAD is a single low-side N-FET heater: it can
+// only heat, so control is on/off hysteresis, not PI. TEMP_SENSOR_LOAD_PIN
+// stays the ADC-capable pin the thermistor is wired to; there is no PWM/
+// direction pin pair anymore (see LOAD_FET_PIN).
 #define TEMP_SENSOR_LOAD_PIN    26
-#define PELTIER_LOAD_PWM_PIN    9   // enable2
-#define PELTIER_LOAD_DIR_PIN3   13  // in3
-#define PELTIER_LOAD_DIR_PIN4   11  // in4
+#define LOAD_FET_PIN             17  // low-side N-FET gate (active high)
+
+// LOAD's thermistor is a different physical part than the onboard PCB
+// thermistor temp_simple.c is calibrated for (Vishay NTCLE100E3103 behind a
+// 10.68k/4.7k Thevenin divider) — a 30 kOhm NTC behind a plain 10k pull-up
+// to 3V3. Deliberately independent constants; do not merge with
+// THERMISTOR_* in temp_simple.h.
+#define LOAD_THERM_PULLUP_OHMS      10000.0f
+#define LOAD_THERM_R0_OHMS          30000.0f
+#define LOAD_THERM_T0_KELVIN        298.15f   // 25 C
+#define LOAD_THERM_BETA_KELVIN      3943.0f
+
+// Absolute safety ceiling, independent of whatever target/hysteresis the
+// host has configured: a plausible, rate-guard-anchored reading at or
+// above this forces the FET off and latches LOAD_runaway_tripped (the
+// control loop failed to prevent overheating). LOAD_MAX_TARGET_TEMP_C is
+// not firmware-enforced on the setpoint itself (LNA doesn't clamp
+// LNA_temp_target either — setpoint sanity is a host-side concern), but is
+// documented here as the margin the ceiling assumes.
+#define LOAD_MAX_SAFE_TEMP_C         100.0f
+#define LOAD_DEFAULT_HYSTERESIS_C    2.0f
 
 // PWM configuration
 #define PWM_WRAP            1000
@@ -175,6 +197,76 @@ typedef struct {
     uint8_t sensor_rejects;
     bool sensor_tripped;
 } TempControl;
+
+// LOAD channel: analog NTC thermistor + single low-side FET heater.
+// Mirrors TempControl's safety scaffolding (rate guard, sticky
+// stall/runaway latches, installed flag, watchdog interaction) so the two
+// channels behave consistently from the host's point of view, but drive is
+// on/off (`active`) instead of a continuous PI `drive` level, since a
+// single low-side FET has no reverse (cooling) direction and no PWM duty
+// to modulate — see load_heater_control() in tempctrl.c. Reuses the shared
+// TEMPCTRL_SAMPLE_MS / TEMPCTRL_STALL_* / TEMPCTRL_RUNAWAY_STRIKES /
+// TEMPCTRL_MAX_RATE_C_PER_S / TEMPCTRL_MAX_REJECTS tunables above rather
+// than defining its own, so both channels share one predictable cadence
+// and set of thresholds.
+typedef struct {
+    uint fet_pin;
+    uint adc_input;
+    bool adc_configured;
+
+    // T_raw is the most recent plausible conversion (mirrors
+    // TempControl's temp_sensor.temperature): updated on every plausible
+    // read, including rate-guard-rejected ones, and is what status reports
+    // as *_T_now. T_now is the rate-guard-filtered control reference
+    // (holds on reject) and what the hysteresis control and stall/runaway
+    // guard act on — mirrors the TempControl.T_now / temp_sensor.temperature
+    // split in tempctrl.c.
+    float T_raw;
+    float T_now;
+    float voltage;
+    float resistance;
+    float T_target;
+    float hysteresis;
+    uint32_t last_sample_time;  // ms since boot of last accepted ADC sample
+
+    bool active;      // FET actually driving (on) this tick
+    // `enabled` is host intent only; firmware never mutates it. The
+    // channel drives only when enabled && no trip flag is set below.
+    bool enabled;
+    // Module physically present (host config knob via LOAD_installed;
+    // firmware never mutates it). An uninstalled channel is never sampled
+    // (ADC input never mux-selected) and never driven; the picohost
+    // fan-out suppresses its Redis stream entirely. Default true.
+    bool installed;
+    // Per-cycle data validity (NOT a latch): true when this sample cycle
+    // produced no measurement (plausibility failure or not installed).
+    // Drives the per-channel status string and null T_now/resistance
+    // reporting; self-clears on the next plausible sample.
+    bool data_invalid;
+
+    // Sensor sanity (rate) guard — two-to-anchor scheme, mirrors
+    // TempControl exactly (see tempctrl_update_sensor_drive).
+    bool rate_ref_valid;
+    bool seed_pending;
+    uint32_t rate_ref_ms;
+    uint8_t sensor_rejects;
+    bool sensor_tripped;
+
+    // Stall / runaway guard over a rolling TEMPCTRL_STALL_WINDOW_MS
+    // window while active. stall_tripped = FET on for a full window with
+    // no meaningful rise (heater ineffective or sensor stuck).
+    // runaway_tripped = temperature fell for TEMPCTRL_RUNAWAY_STRIKES
+    // consecutive windows while the FET was on (mis-wired FET/sensor, or
+    // the sensor reads a different thermal mass than the heater) — also
+    // the flag the absolute LOAD_MAX_SAFE_TEMP_C ceiling latches, since
+    // both mean "the control loop is not doing what it should."
+    bool stall_window_active;
+    float stall_check_T;
+    absolute_time_t stall_check_time;
+    uint8_t runaway_strikes;
+    bool stall_tripped;
+    bool runaway_tripped;
+} LoadHeater;
 
 // Standard app interface functions
 void tempctrl_init(uint8_t app_id);

@@ -268,7 +268,12 @@ class TestTempCtrlProtocol:
         assert emu.lna.integral == 0.0
 
     def test_kp_ki_commands_round_trip(self):
-        """LNA_Kp / LNA_Ki / LOAD_Kp / LOAD_Ki update channel state."""
+        """LNA_Kp / LNA_Ki update channel state.
+
+        LOAD is a single low-side FET heater under on/off hysteresis, not
+        a PI loop, so it has no Kp/Ki at all — LOAD_Kp/LOAD_Ki are
+        silently ignored (mirrors firmware tempctrl_server).
+        """
         emu = TempCtrlEmulator()
         emu.server(
             {
@@ -280,8 +285,8 @@ class TestTempCtrlProtocol:
         )
         assert emu.lna.Kp == 0.35
         assert emu.lna.Ki == 0.02
-        assert emu.load.Kp == 0.4
-        assert emu.load.Ki == 0.05
+        assert not hasattr(emu.load, "Kp")
+        assert not hasattr(emu.load, "Ki")
 
     def test_integral_reset_clears_state(self):
         """*_integral_reset zeroes the integrator without touching gains."""

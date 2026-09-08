@@ -44,6 +44,47 @@ THERMISTOR_RT_B = 4791.842
 THERMISTOR_RT_C = -115334.0
 THERMISTOR_RT_D = -3.730535e6
 
+# LOAD channel thermistor: a different physical part on a different
+# divider than the shared Vishay/Steinhart-Hart fit above (which
+# characterizes LNA's onboard PCB thermistor) — a 30k NTC (Beta=3943)
+# behind a plain 10k pull-up to 3V3. Mirrors LOAD_THERM_* in tempctrl.h.
+LOAD_THERM_PULLUP_OHMS = 10000.0
+LOAD_THERM_R0_OHMS = 30000.0
+LOAD_THERM_T0_KELVIN = 298.15  # 25 C
+LOAD_THERM_BETA_KELVIN = 3943.0
+LOAD_MAX_SAFE_TEMP_C = 100.0
+LOAD_DEFAULT_HYSTERESIS_C = 2.0
+
+# LOAD thermal model: a fixed rise per op tick while the FET is on, and a
+# passive cooldown toward ambient while it's off, standing in for a real
+# heater/thermistor pair — enough to exercise the hysteresis, stall, and
+# runaway logic under test without modeling real thermal mass.
+LOAD_THERMAL_DRIFT_PER_OP = 0.05
+LOAD_AMBIENT_C = 22.0
+LOAD_COOLING_PER_OP = 0.01
+
+
+def _load_thermistor_resistance(temp_c):
+    """Beta-equation forward fit: temperature (deg C) -> ohms. Inverse of
+    load_thermistor_voltage_to_temperature() in tempctrl.c."""
+    kelvin = temp_c + 273.15
+    return LOAD_THERM_R0_OHMS * math.exp(
+        LOAD_THERM_BETA_KELVIN * (1.0 / kelvin - 1.0 / LOAD_THERM_T0_KELVIN)
+    )
+
+
+def _load_thermistor_voltage(resistance):
+    return (
+        THERMISTOR_SUPPLY_VOLTS
+        * resistance
+        / (LOAD_THERM_PULLUP_OHMS + resistance)
+    )
+
+
+def _set_load_thermistor_diagnostics(lh, temp_c):
+    lh.resistance = _load_thermistor_resistance(temp_c)
+    lh.voltage = _load_thermistor_voltage(lh.resistance)
+
 
 def _thermistor_resistance(temp_c):
     """Datasheet forward fit: temperature (deg C) -> ohms."""
@@ -200,6 +241,75 @@ class TempControlState:
         self._glitch_queue.extend([float(value)] * count)
 
 
+class LoadHeaterState:
+    """Models the LoadHeater struct from tempctrl.h.
+
+    LOAD is a single low-side FET heater behind an analog thermistor —
+    on/off hysteresis control, not the LNA channel's continuous PI drive
+    on a Peltier. Mirrors TempControlState's safety-scaffolding fields
+    (rate guard, sticky stall/runaway latches, installed flag) but has no
+    drive/Kp/Ki/integral/clamp/cooling_enabled — those are PI/bidirectional
+    concepts a single FET doesn't have.
+    """
+
+    def __init__(self):
+        self.T_now = 25.0
+        self.T_target = 30.0
+        self.voltage = 0.0
+        self.resistance = 0.0
+        # Mirrors LoadHeater.T_raw (tempctrl.h): the most recent plausible
+        # conversion, updated on every plausible read including
+        # rate-guard-rejected ones. This is the REPORTED value; T_now is
+        # the rate-guard-filtered control reference and holds on reject.
+        self.temperature = 0.0
+        self.hysteresis = LOAD_DEFAULT_HYSTERESIS_C
+        self.active = False
+        self.enabled = False
+        # Module physically present (host config knob, mirrors `installed`
+        # in tempctrl.h). Default True so a rebooted pico behaves as
+        # before the flag existed until the host replays config.
+        self.installed = True
+        # Per-cycle data validity (NOT a latch, mirrors data_invalid in
+        # tempctrl.h). True at boot: no sample taken yet.
+        self.data_invalid = True
+        self.timestamp = 0.0
+
+        # Stall/runaway guard mirror (see load_heater_check_stall in
+        # tempctrl.c). stall_tripped = FET on but T_now didn't move for a
+        # full window; runaway_tripped = T_now fell for
+        # TEMPCTRL_RUNAWAY_STRIKES consecutive windows while the FET was
+        # on — also what the LOAD_MAX_SAFE_TEMP_C ceiling latches.
+        self.stall_tripped = False
+        self.runaway_tripped = False
+        self.stall_window_active = False
+        self.stall_check_T = 0.0
+        self.stall_check_time = 0.0
+        self.runaway_strikes = 0
+
+        # Sensor sanity guard mirror (see load_heater_update). Same
+        # two-to-anchor scheme as TempControlState.
+        self.rate_ref_valid = False
+        self.seed_pending = False
+        self.sensor_rejects = 0
+        self.sensor_tripped = False
+
+        # Mirrors temp_sensor_read()-equivalent plausibility failure
+        # (railed divider). Self-clears into data_invalid on every tick.
+        self._sensor_error = False
+        # Test hook: queued bogus raw readings, one consumed per op tick.
+        self._glitch_queue = []
+        # Test hook: skip the thermal model even while active, so the
+        # stall guard can be exercised deterministically.
+        self.thermal_frozen = False
+        _set_load_thermistor_diagnostics(self, self.T_now)
+
+    def inject_sensor_glitch(self, value, count=1):
+        """Queue ``count`` bogus raw sensor readings of ``value``. See
+        TempControlState.inject_sensor_glitch — same rate-guard mechanics.
+        """
+        self._glitch_queue.extend([float(value)] * count)
+
+
 def _reset_controller_state(tc):
     """Match tempctrl_reset_controller_state() in tempctrl.c."""
     tc.drive = 0.0
@@ -270,7 +380,7 @@ class TempCtrlEmulator(PicoEmulator):
 
     def __init__(self, app_id=1, **kwargs):
         self.lna = TempControlState()
-        self.load = TempControlState()
+        self.load = LoadHeaterState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
@@ -283,7 +393,7 @@ class TempCtrlEmulator(PicoEmulator):
 
     def init(self):
         self.lna = TempControlState()
-        self.load = TempControlState()
+        self.load = LoadHeaterState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
@@ -298,7 +408,8 @@ class TempCtrlEmulator(PicoEmulator):
         # (see firmware tempctrl_apply_enable).
         self._last_cmd_time = time.time()
 
-        for prefix, tc in [("LNA", self.lna), ("LOAD", self.load)]:
+        # LNA: full Peltier/PI parsing, unchanged.
+        for prefix, tc in [("LNA", self.lna)]:
             # Numeric fields use _coerce_float (not _safe_float): cJSON
             # writes valuedouble=0.0 for non-numeric JSON, and firmware
             # assigns that directly into the struct.
@@ -369,6 +480,32 @@ class TempCtrlEmulator(PicoEmulator):
                 # and the existing *_enable handling: cJSON's valueint is 0 for
                 # non-numeric JSON, so a string like "false" disables.
                 tc.cooling_enabled = bool(_safe_int(cmd[key], 0))
+
+        # LOAD: single low-side FET heater, on/off hysteresis. Only
+        # temp_target/installed/enable/hysteresis apply — clamp/Kp/Ki/
+        # integral_reset/cooling_enabled are PI/bidirectional-drive
+        # concepts a single FET doesn't have, so (mirroring firmware)
+        # they're silently ignored if a generic caller sends them anyway.
+        lh = self.load
+        if "LOAD_temp_target" in cmd:
+            lh.T_target = _coerce_float(cmd["LOAD_temp_target"])
+        if "LOAD_installed" in cmd:
+            lh.installed = bool(_safe_int(cmd["LOAD_installed"], 0))
+        if "LOAD_enable" in cmd:
+            new_enabled = bool(_safe_int(cmd["LOAD_enable"], 0))
+            if new_enabled:
+                lh.stall_tripped = False
+                lh.runaway_tripped = False
+                lh.stall_window_active = False
+                lh.runaway_strikes = 0
+                lh.sensor_rejects = 0
+                lh.sensor_tripped = False
+                lh.rate_ref_valid = False
+                lh.seed_pending = False
+                self.watchdog_tripped = False
+            lh.enabled = new_enabled
+        if "LOAD_hysteresis" in cmd:
+            lh.hysteresis = _coerce_float(cmd["LOAD_hysteresis"])
 
         if "watchdog_timeout_ms" in cmd:
             val = _safe_int(
@@ -590,6 +727,155 @@ class TempCtrlEmulator(PicoEmulator):
         tc.stall_check_drive = tc.drive
         tc.stall_check_time = now
 
+    def _load_drive_allowed(self, lh):
+        """Mirror load_heater_drive_allowed() from tempctrl.c."""
+        return (
+            lh.installed
+            and lh.enabled
+            and not lh.sensor_tripped
+            and not lh.stall_tripped
+            and not lh.runaway_tripped
+            and not self.watchdog_tripped
+        )
+
+    def _read_load_sensor(self, lh):
+        """Mirror load_heater_read() + the rate guard in
+        load_heater_update() (tempctrl.c). Same two-to-anchor scheme as
+        _read_sensor; see that method's docstring for the full rationale.
+        """
+        if lh._sensor_error:
+            lh.voltage = THERMISTOR_SUPPLY_VOLTS
+            lh.rate_ref_valid = False
+            lh.seed_pending = False
+            return False, False
+        raw = lh._glitch_queue.pop(0) if lh._glitch_queue else lh.T_now
+        _set_load_thermistor_diagnostics(lh, raw)
+        lh.temperature = raw
+        if not lh.rate_ref_valid:
+            if not lh.seed_pending:
+                lh.T_now = raw
+                lh.seed_pending = True
+                lh.sensor_rejects = 0
+                return True, False
+            rate = abs(raw - lh.T_now) / DT_PER_SAMPLE_S
+            if rate > MAX_RATE_C_PER_S:
+                lh.T_now = raw
+                if lh.sensor_rejects < MAX_REJECTS:
+                    lh.sensor_rejects += 1
+            else:
+                lh.T_now = raw
+                lh.rate_ref_valid = True
+                lh.seed_pending = False
+                lh.sensor_rejects = 0
+            return True, False
+        rate = abs(raw - lh.T_now) / DT_PER_SAMPLE_S
+        if rate > MAX_RATE_C_PER_S:
+            if lh.sensor_rejects < MAX_REJECTS:
+                lh.sensor_rejects += 1
+            return True, True
+        lh.T_now = raw
+        lh.sensor_rejects = 0
+        return True, False
+
+    def _load_heater_control(self, lh):
+        """Mirror load_heater_control() from tempctrl.c: on/off hysteresis
+        (heating-only — no deadband-freeze step, no clamp/gain: the FET is
+        either fully on or fully off)."""
+        if lh.active:
+            if lh.T_now >= lh.T_target:
+                lh.active = False
+        else:
+            if lh.T_now <= lh.T_target - lh.hysteresis:
+                lh.active = True
+
+    def _check_load_stall(self, lh):
+        """Mirror load_heater_check_stall() from tempctrl.c."""
+        if not lh.active:
+            lh.stall_window_active = False
+            lh.runaway_strikes = 0
+            return
+        now = time.time()
+        if not lh.stall_window_active:
+            lh.stall_check_T = lh.T_now
+            lh.stall_check_time = now
+            lh.stall_window_active = True
+            return
+        elapsed_ms = (now - lh.stall_check_time) * 1000
+        if elapsed_ms < STALL_WINDOW_MS:
+            return
+        delta = lh.T_now - lh.stall_check_T
+        if delta < -STALL_MIN_DELTA:
+            # Heating engaged but temperature FELL — runaway signature.
+            # Score a strike; trip only after RUNAWAY_STRIKES consecutive
+            # windows (tolerates a brief startup/soak transient).
+            lh.runaway_strikes += 1
+            if lh.runaway_strikes >= RUNAWAY_STRIKES:
+                lh.runaway_tripped = True
+                lh.active = False
+                lh.stall_window_active = False
+                lh.runaway_strikes = 0
+                return
+            lh.stall_check_T = lh.T_now
+            lh.stall_check_time = now
+            return
+        lh.runaway_strikes = 0
+        if delta < STALL_MIN_DELTA:
+            # Heating engaged for a full window with no meaningful rise —
+            # heater ineffective or sensor stuck.
+            lh.stall_tripped = True
+            lh.active = False
+            lh.stall_window_active = False
+            return
+        # Healthy progress; roll the window forward.
+        lh.stall_check_T = lh.T_now
+        lh.stall_check_time = now
+
+    def _update_load_channel(self, lh):
+        """Mirror load_heater_update() from tempctrl.c."""
+        if not lh.installed:
+            lh.data_invalid = True
+            lh.rate_ref_valid = False
+            lh.seed_pending = False
+            lh.active = False
+            lh.stall_window_active = False
+            lh.runaway_strikes = 0
+            return
+
+        plausible, rejected = self._read_load_sensor(lh)
+        if plausible:
+            lh.timestamp = self._ms_since_boot()
+
+        if lh.sensor_rejects >= MAX_REJECTS:
+            if not lh.sensor_tripped:
+                lh.rate_ref_valid = False
+                lh.seed_pending = False
+            lh.sensor_tripped = True
+        lh.data_invalid = not plausible
+
+        # Absolute safety ceiling, independent of target/hysteresis/
+        # rate-guard state — mirrors the LOAD_MAX_SAFE_TEMP_C check in
+        # load_heater_update().
+        if plausible and lh.rate_ref_valid and lh.T_now >= LOAD_MAX_SAFE_TEMP_C:
+            lh.runaway_tripped = True
+
+        if self._load_drive_allowed(lh) and lh.rate_ref_valid and plausible:
+            if not rejected:
+                self._load_heater_control(lh)
+                self._check_load_stall(lh)
+        else:
+            lh.active = False
+            lh.stall_window_active = False
+            lh.runaway_strikes = 0
+
+        # Thermal model: heat while the FET is on, passively cool toward
+        # ambient while it's off — enough to exercise hysteresis/stall/
+        # runaway under test without modeling real thermal mass.
+        if not lh.thermal_frozen:
+            if lh.active:
+                lh.T_now += LOAD_THERMAL_DRIFT_PER_OP
+            elif lh.T_now > LOAD_AMBIENT_C:
+                lh.T_now = max(LOAD_AMBIENT_C, lh.T_now - LOAD_COOLING_PER_OP)
+
     def op(self):
         # Communication watchdog: trip the app-wide flag if no command has
         # arrived within the timeout. `enabled` is host intent and stays
@@ -600,7 +886,7 @@ class TempCtrlEmulator(PicoEmulator):
                 self.watchdog_tripped = True
 
         self._update_channel(self.lna)
-        self._update_channel(self.load)
+        self._update_load_channel(self.load)
 
     def get_status(self):
         # Per-channel status reports DATA EXISTENCE ONLY: "error" means the
@@ -615,6 +901,11 @@ class TempCtrlEmulator(PicoEmulator):
         # never set status.
         lna_status = "error" if self.lna.data_invalid else "update"
         load_status = "error" if self.load.data_invalid else "update"
+        # LOAD_drive_level mirrors LNA's continuous [-1,1] drive as a float
+        # for shape consistency, but is binary: 1.0 while the FET is on,
+        # 0.0 otherwise (there is no PWM duty to report). Mirrors
+        # tempctrl_status's load_drive_level in tempctrl.c.
+        load_drive_level = 1.0 if self.load.active else 0.0
         return {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
@@ -654,7 +945,7 @@ class TempCtrlEmulator(PicoEmulator):
             ),
             "LOAD_timestamp": self.load.timestamp,
             "LOAD_T_target": self.load.T_target,
-            "LOAD_drive_level": self.load.drive,
+            "LOAD_drive_level": load_drive_level,
             "LOAD_installed": self.load.installed,
             "LOAD_enabled": self.load.enabled,
             "LOAD_active": self.load.active,
@@ -662,10 +953,5 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_sensor_rejects": self.load.sensor_rejects,
             "LOAD_stall_tripped": self.load.stall_tripped,
             "LOAD_runaway_tripped": self.load.runaway_tripped,
-            "LOAD_cooling_enabled": self.load.cooling_enabled,
             "LOAD_hysteresis": self.load.hysteresis,
-            "LOAD_clamp": self.load.clamp,
-            "LOAD_Kp": self.load.Kp,
-            "LOAD_Ki": self.load.Ki,
-            "LOAD_integral": self.load.integral,
         }

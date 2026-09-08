@@ -58,6 +58,8 @@ TEMPCTRL_FIELDS = {
     "LNA_Kp",
     "LNA_Ki",
     "LNA_integral",
+    # LOAD is a single low-side FET heater (on/off hysteresis, no PI
+    # loop), so unlike LNA it has no cooling_enabled/clamp/Kp/Ki/integral.
     "LOAD_status",
     "LOAD_T_now",
     "LOAD_voltage",
@@ -72,12 +74,7 @@ TEMPCTRL_FIELDS = {
     "LOAD_sensor_rejects",
     "LOAD_stall_tripped",
     "LOAD_runaway_tripped",
-    "LOAD_cooling_enabled",
     "LOAD_hysteresis",
-    "LOAD_clamp",
-    "LOAD_Kp",
-    "LOAD_Ki",
-    "LOAD_integral",
 }
 
 IMU_FIELDS = {
@@ -352,7 +349,6 @@ class TestPeltierIntegrationTypes:
             "LOAD_T_target",
             "LOAD_drive_level",
             "LOAD_hysteresis",
-            "LOAD_clamp",
             "LOAD_timestamp",
         ):
             assert isinstance(s[key], (int, float)), (

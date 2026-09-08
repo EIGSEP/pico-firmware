@@ -9,7 +9,7 @@
 
 // Static instances
 static TempControl tempctrl_lna;
-static TempControl tempctrl_load;
+static LoadHeater load_heater;
 
 // Communication watchdog state (app-level, not per-channel)
 static absolute_time_t last_cmd_time;
@@ -29,6 +29,19 @@ static void tempctrl_apply_enable(TempControl *, bool);
 static bool tempctrl_drive_allowed(const TempControl *);
 static void tempctrl_pi_drive(TempControl *);
 static void tempctrl_reset_controller_state(TempControl *);
+
+// LOAD channel (thermistor + FET heater) forward declarations.
+static void load_heater_init(LoadHeater *, uint fet_pin, uint temp_gpio_pin);
+static void load_heater_update(LoadHeater *);
+static void load_heater_apply_drive(LoadHeater *);
+static void load_heater_control(LoadHeater *);
+static void load_heater_check_stall(LoadHeater *);
+static void load_heater_apply_enable(LoadHeater *, bool);
+static bool load_heater_drive_allowed(const LoadHeater *);
+static bool load_heater_read(LoadHeater *);
+static bool load_thermistor_voltage_to_temperature(float voltage,
+                                                    float *resistance,
+                                                    float *temperature);
 
 static void init_single_tempctrl(TempControl *tempctrl,
                                  uint dir_pin1, uint dir_pin2, uint pwm_pin,
@@ -86,8 +99,7 @@ void tempctrl_init(uint8_t app_id) {
     pwm_config_set_wrap(&config, PWM_WRAP);
     init_single_tempctrl(&tempctrl_lna, PELTIER_LNA_DIR_PIN1, PELTIER_LNA_DIR_PIN2,
             PELTIER_LNA_PWM_PIN, &config, TEMP_SENSOR_LNA_PIN);
-    init_single_tempctrl(&tempctrl_load, PELTIER_LOAD_DIR_PIN3, PELTIER_LOAD_DIR_PIN4,
-            PELTIER_LOAD_PWM_PIN, &config, TEMP_SENSOR_LOAD_PIN);
+    load_heater_init(&load_heater, LOAD_FET_PIN, TEMP_SENSOR_LOAD_PIN);
     last_cmd_time = get_absolute_time();
     next_sensor_sample = get_absolute_time();  // first op tick samples
 }
@@ -139,34 +151,20 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
     }
     item_json = cJSON_GetObjectItem(root, "LNA_cooling_enabled");
     if (item_json) tempctrl_lna.cooling_enabled = item_json->valueint ? true : false;
+    // LOAD is a single low-side FET heater (on/off hysteresis), so it has
+    // no clamp/Kp/Ki/integral_reset/cooling_enabled — those are PI/
+    // bidirectional-drive concepts that don't apply. A host that sends
+    // them anyway (e.g. a generic caller that pushes the same settings to
+    // both channels) is silently ignored, matching cJSON_GetObjectItem's
+    // existing "field absent -> no-op" behavior for every other field here.
     item_json = cJSON_GetObjectItem(root, "LOAD_temp_target");
-    tempctrl_load.T_target = item_json ? item_json->valuedouble : tempctrl_load.T_target;
+    load_heater.T_target = item_json ? item_json->valuedouble : load_heater.T_target;
     item_json = cJSON_GetObjectItem(root, "LOAD_installed");
-    if (item_json) tempctrl_load.installed = item_json->valueint ? true : false;
+    if (item_json) load_heater.installed = item_json->valueint ? true : false;
     item_json = cJSON_GetObjectItem(root, "LOAD_enable");
-    if (item_json) tempctrl_apply_enable(&tempctrl_load, item_json->valueint ? true : false);
+    if (item_json) load_heater_apply_enable(&load_heater, item_json->valueint ? true : false);
     item_json = cJSON_GetObjectItem(root, "LOAD_hysteresis");
-    tempctrl_load.hysteresis = item_json ? item_json->valuedouble : tempctrl_load.hysteresis;
-    item_json = cJSON_GetObjectItem(root, "LOAD_clamp");
-    if (item_json) tempctrl_load.clamp = fminf(1.0, fmaxf(0.0, item_json->valuedouble));
-    item_json = cJSON_GetObjectItem(root, "LOAD_Kp");
-    if (item_json) tempctrl_load.Kp = item_json->valuedouble;
-    item_json = cJSON_GetObjectItem(root, "LOAD_Ki");
-    if (item_json) {
-        float new_ki = (float)item_json->valuedouble;
-        if (new_ki != tempctrl_load.Ki) {
-            tempctrl_load.integral = 0.0f;
-            tempctrl_load.last_sample_ms = 0;
-        }
-        tempctrl_load.Ki = new_ki;
-    }
-    item_json = cJSON_GetObjectItem(root, "LOAD_integral_reset");
-    if (item_json && item_json->valueint) {
-        tempctrl_load.integral = 0.0f;
-        tempctrl_load.last_sample_ms = 0;
-    }
-    item_json = cJSON_GetObjectItem(root, "LOAD_cooling_enabled");
-    if (item_json) tempctrl_load.cooling_enabled = item_json->valueint ? true : false;
+    load_heater.hysteresis = item_json ? item_json->valuedouble : load_heater.hysteresis;
 
     // Watchdog timeout configuration (0 = disabled)
     item_json = cJSON_GetObjectItem(root, "watchdog_timeout_ms");
@@ -180,37 +178,39 @@ void tempctrl_server(uint8_t app_id, const char *json_str) {
 
 void tempctrl_status(uint8_t app_id) {
     const uint32_t time_lna = temp_sensor_get_sample_time(&tempctrl_lna.temp_sensor);
-    const uint32_t time_load = temp_sensor_get_sample_time(&tempctrl_load.temp_sensor);
 
     /* Per-channel status reports DATA EXISTENCE ONLY: "error" while the most
        recent sample cycle produced no measurement at all (plausibility
        failure or channel not installed — see data_invalid in tempctrl.h), in
        which case T_now/resistance are reported as JSON null (NaN KV_FLOAT)
        while voltage stays live for open-vs-short diagnosis. T_now reports
-       the raw conversion (temp_sensor.temperature), NOT the control
-       reference: a rate-guard-rejected sample stays in the stream with the
-       published sensor_rejects counter as the cross-check marker. The sticky
-       control latches (sensor/stall/runaway_tripped, watchdog_tripped) gate
-       drive but never set status. The picohost fan-out lifts these strings
-       to the per-stream top-level status consumed by
-       eigsep_observing._avg_sensor_values, which drops "error" rows — so an
-       errored cycle deletes that row from the corr record, and only
-       measurement absence may do that. */
+       the raw conversion (temp_sensor.temperature / LoadHeater.T_raw), NOT
+       the control reference: a rate-guard-rejected sample stays in the
+       stream with the published sensor_rejects counter as the cross-check
+       marker. The sticky control latches (sensor/stall/runaway_tripped,
+       watchdog_tripped) gate drive but never set status. The picohost
+       fan-out lifts these strings to the per-stream top-level status
+       consumed by eigsep_observing._avg_sensor_values, which drops "error"
+       rows — so an errored cycle deletes that row from the corr record, and
+       only measurement absence may do that. */
     const char *status_lna = tempctrl_lna.data_invalid ? "error" : "update";
-    const char *status_load = tempctrl_load.data_invalid ? "error" : "update";
+    const char *status_load = load_heater.data_invalid ? "error" : "update";
     const float T_lna = tempctrl_lna.data_invalid
         ? NAN : tempctrl_lna.temp_sensor.temperature;
-    const float T_load = tempctrl_load.data_invalid
-        ? NAN : tempctrl_load.temp_sensor.temperature;
+    const float T_load = load_heater.data_invalid ? NAN : load_heater.T_raw;
     const float R_lna =
         tempctrl_lna.data_invalid ? NAN : tempctrl_lna.temp_sensor.resistance;
     const float R_load =
-        tempctrl_load.data_invalid ? NAN : tempctrl_load.temp_sensor.resistance;
+        load_heater.data_invalid ? NAN : load_heater.resistance;
+    /* LOAD_drive_level mirrors LNA's continuous [-1,1] drive as a float for
+       shape consistency, but is binary: 1.0 while the FET is on, 0.0
+       otherwise (there is no PWM duty to report). */
+    const float load_drive_level = load_heater.active ? 1.0f : 0.0f;
 
-    /* 44 KV pairs: 4 device-wide + 20 per channel * 2 channels. send_json
-       silently truncates if the count argument disagrees with the actual
-       entries — re-count when editing. */
-    send_json(44,
+    /* 39 KV pairs: 4 device-wide + 20 LNA + 15 LOAD. send_json silently
+       truncates if the count argument disagrees with the actual entries —
+       re-count when editing. */
+    send_json(39,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -237,24 +237,19 @@ void tempctrl_status(uint8_t app_id) {
         KV_FLOAT, "LNA_integral", tempctrl_lna.integral,
         KV_STR, "LOAD_status", status_load,
         KV_FLOAT, "LOAD_T_now", T_load,
-        KV_FLOAT, "LOAD_voltage", tempctrl_load.temp_sensor.voltage,
+        KV_FLOAT, "LOAD_voltage", load_heater.voltage,
         KV_FLOAT, "LOAD_resistance", R_load,
-        KV_FLOAT, "LOAD_timestamp", (double)time_load,
-        KV_FLOAT, "LOAD_T_target", tempctrl_load.T_target,
-        KV_FLOAT, "LOAD_drive_level", tempctrl_load.drive,
-        KV_BOOL, "LOAD_installed", tempctrl_load.installed,
-        KV_BOOL, "LOAD_enabled", tempctrl_load.enabled,
-        KV_BOOL, "LOAD_active", tempctrl_load.active,
-        KV_BOOL, "LOAD_sensor_tripped", tempctrl_load.sensor_tripped,
-        KV_INT, "LOAD_sensor_rejects", tempctrl_load.sensor_rejects,
-        KV_BOOL, "LOAD_stall_tripped", tempctrl_load.stall_tripped,
-        KV_BOOL, "LOAD_runaway_tripped", tempctrl_load.runaway_tripped,
-        KV_BOOL, "LOAD_cooling_enabled", tempctrl_load.cooling_enabled,
-        KV_FLOAT, "LOAD_hysteresis", tempctrl_load.hysteresis,
-        KV_FLOAT, "LOAD_clamp", tempctrl_load.clamp,
-        KV_FLOAT, "LOAD_Kp", tempctrl_load.Kp,
-        KV_FLOAT, "LOAD_Ki", tempctrl_load.Ki,
-        KV_FLOAT, "LOAD_integral", tempctrl_load.integral
+        KV_FLOAT, "LOAD_timestamp", (double)load_heater.last_sample_time,
+        KV_FLOAT, "LOAD_T_target", load_heater.T_target,
+        KV_FLOAT, "LOAD_drive_level", load_drive_level,
+        KV_BOOL, "LOAD_installed", load_heater.installed,
+        KV_BOOL, "LOAD_enabled", load_heater.enabled,
+        KV_BOOL, "LOAD_active", load_heater.active,
+        KV_BOOL, "LOAD_sensor_tripped", load_heater.sensor_tripped,
+        KV_INT, "LOAD_sensor_rejects", load_heater.sensor_rejects,
+        KV_BOOL, "LOAD_stall_tripped", load_heater.stall_tripped,
+        KV_BOOL, "LOAD_runaway_tripped", load_heater.runaway_tripped,
+        KV_FLOAT, "LOAD_hysteresis", load_heater.hysteresis
     );
 }
 
@@ -431,7 +426,7 @@ void tempctrl_op(uint8_t app_id) {
     next_sensor_sample = make_timeout_time_ms(TEMPCTRL_SAMPLE_MS);
 
     tempctrl_update_sensor_drive(&tempctrl_lna);
-    tempctrl_update_sensor_drive(&tempctrl_load);
+    load_heater_update(&load_heater);
 }
 
 // Helper functions
@@ -617,4 +612,309 @@ static bool tempctrl_drive_allowed(const TempControl *tempctrl) {
         && !tempctrl->stall_tripped
         && !tempctrl->runaway_tripped
         && !watchdog_tripped;
+}
+
+// ---------------------------------------------------------------------
+// LOAD channel: analog NTC thermistor (30k, Beta=3943, plain 10k pull-up
+// to 3V3) + single low-side FET heater. Reuses the shared ADC sampling
+// helpers from temp_simple.c (adc_channel_init / adc_read_avg_voltage —
+// generic, no thermistor-specific constants), but has its own
+// voltage->temperature conversion: LOAD's thermistor is a different part
+// on a different divider than the one temp_simple.c's Steinhart-Hart fit
+// characterizes for LNA. Everything below mirrors the shape of
+// tempctrl_update_sensor_drive / tempctrl_pi_drive / tempctrl_check_stall
+// / tempctrl_apply_enable / tempctrl_drive_allowed above, with the PI
+// drive step replaced by on/off hysteresis (see load_heater_control) and
+// the bidirectional stall/runaway check collapsed to one drive direction.
+// ---------------------------------------------------------------------
+
+static bool load_thermistor_voltage_to_temperature(float voltage,
+                                                    float *resistance,
+                                                    float *temperature) {
+    if (!isfinite(voltage) ||
+        voltage <= 0.0f ||
+        voltage >= THERMISTOR_SUPPLY_VOLTS) {
+        return false;
+    }
+
+    float r_thermistor = LOAD_THERM_PULLUP_OHMS
+        * voltage / (THERMISTOR_SUPPLY_VOLTS - voltage);
+    if (!isfinite(r_thermistor) || r_thermistor <= 0.0f) {
+        return false;
+    }
+
+    float inverse_kelvin = (1.0f / LOAD_THERM_T0_KELVIN)
+        + (1.0f / LOAD_THERM_BETA_KELVIN)
+          * logf(r_thermistor / LOAD_THERM_R0_OHMS);
+    if (!isfinite(inverse_kelvin) || inverse_kelvin <= 0.0f) {
+        return false;
+    }
+
+    float temp_c = 1.0f / inverse_kelvin - 273.15f;
+    if (!isfinite(temp_c) || temp_c < -40.0f || temp_c > 150.0f) {
+        return false;
+    }
+
+    *resistance = r_thermistor;
+    *temperature = temp_c;
+    return true;
+}
+
+static void load_heater_init(LoadHeater *lh, uint fet_pin, uint temp_gpio_pin) {
+    gpio_init(fet_pin);
+    gpio_set_dir(fet_pin, GPIO_OUT);
+    gpio_put(fet_pin, 0);  // FET off at boot
+
+    lh->fet_pin = fet_pin;
+    lh->adc_configured = adc_channel_init(temp_gpio_pin, &lh->adc_input);
+
+    lh->T_raw = 0.0f;
+    lh->T_now = 0.0f;
+    lh->voltage = 0.0f;
+    lh->resistance = 0.0f;
+    lh->T_target = 30.0;
+    lh->hysteresis = LOAD_DEFAULT_HYSTERESIS_C;
+    lh->last_sample_time = 0;
+
+    lh->active = false;
+    lh->enabled = false;
+    lh->installed = true;
+    // No sample taken yet, so there is no valid temperature to report;
+    // the first op tick samples before the first status message fires.
+    lh->data_invalid = true;
+
+    lh->rate_ref_valid = false;
+    lh->seed_pending = false;
+    lh->rate_ref_ms = 0;
+    lh->sensor_rejects = 0;
+    lh->sensor_tripped = false;
+
+    lh->stall_window_active = false;
+    lh->stall_check_T = 0.0f;
+    lh->stall_check_time = get_absolute_time();
+    lh->runaway_strikes = 0;
+    lh->stall_tripped = false;
+    lh->runaway_tripped = false;
+}
+
+static void load_heater_apply_drive(LoadHeater *lh) {
+    gpio_put(lh->fet_pin, lh->active);
+}
+
+// On/off hysteresis, the heating-only analog of tempctrl_pi_drive: turn on
+// once T_now drops `hysteresis` below target, turn off once T_now reaches
+// target. No deadband-freeze step is needed (there is no integrator), and
+// no clamp/gain — the FET is either fully on or fully off.
+static void load_heater_control(LoadHeater *lh) {
+    if (lh->active) {
+        if (lh->T_now >= lh->T_target) {
+            lh->active = false;
+        }
+    } else {
+        if (lh->T_now <= (lh->T_target - lh->hysteresis)) {
+            lh->active = true;
+        }
+    }
+    load_heater_apply_drive(lh);
+}
+
+static void load_heater_check_stall(LoadHeater *lh) {
+    if (!lh->active) {
+        lh->stall_window_active = false;
+        lh->runaway_strikes = 0;
+        return;
+    }
+    absolute_time_t now = get_absolute_time();
+    if (!lh->stall_window_active) {
+        lh->stall_check_T = lh->T_now;
+        lh->stall_check_time = now;
+        lh->stall_window_active = true;
+        return;
+    }
+    int64_t elapsed_us = absolute_time_diff_us(lh->stall_check_time, now);
+    if (elapsed_us < (int64_t)TEMPCTRL_STALL_WINDOW_MS * 1000) {
+        return;
+    }
+    float delta = lh->T_now - lh->stall_check_T;
+    if (delta < -TEMPCTRL_STALL_MIN_DELTA) {
+        // Heating engaged but temperature FELL — runaway signature
+        // (mis-wired FET/sensor, or the sensor reads a different thermal
+        // mass than the heater). Score a strike; trip only after
+        // TEMPCTRL_RUNAWAY_STRIKES consecutive windows so a brief
+        // startup/soak transient cannot false-trip a channel that is
+        // actually controlling — mirrors tempctrl_check_stall's runaway
+        // branch.
+        lh->runaway_strikes++;
+        if (lh->runaway_strikes >= TEMPCTRL_RUNAWAY_STRIKES) {
+            lh->runaway_tripped = true;
+            lh->active = false;
+            load_heater_apply_drive(lh);
+            lh->stall_window_active = false;
+            lh->runaway_strikes = 0;
+            return;
+        }
+        lh->stall_check_T = lh->T_now;
+        lh->stall_check_time = now;
+        return;
+    }
+    lh->runaway_strikes = 0;
+    if (delta < TEMPCTRL_STALL_MIN_DELTA) {
+        // Heating engaged for a full window with no meaningful rise —
+        // heater ineffective or sensor stuck.
+        lh->stall_tripped = true;
+        lh->active = false;
+        load_heater_apply_drive(lh);
+        lh->stall_window_active = false;
+        return;
+    }
+    // Healthy progress; roll the window forward.
+    lh->stall_check_T = lh->T_now;
+    lh->stall_check_time = now;
+}
+
+static void load_heater_apply_enable(LoadHeater *lh, bool new_enabled) {
+    // *_enable=true is the host's explicit ack of sticky trips: it clears
+    // this channel's trip flags and the app-wide watchdog flag. `enabled`
+    // itself is pure host intent — firmware never mutates it.
+    if (new_enabled) {
+        lh->stall_tripped = false;
+        lh->runaway_tripped = false;
+        lh->stall_window_active = false;
+        lh->runaway_strikes = 0;
+        lh->sensor_rejects = 0;
+        lh->sensor_tripped = false;
+        lh->rate_ref_valid = false;
+        lh->seed_pending = false;
+        watchdog_tripped = false;
+    }
+    lh->enabled = new_enabled;
+}
+
+static bool load_heater_drive_allowed(const LoadHeater *lh) {
+    // installed is defense in depth here: the !installed early return in
+    // load_heater_update already forces drive off before the control
+    // path runs.
+    return lh->installed
+        && lh->enabled
+        && !lh->sensor_tripped
+        && !lh->stall_tripped
+        && !lh->runaway_tripped
+        && !watchdog_tripped;
+}
+
+// Sample the thermistor. Mirrors temp_sensor_read (temp_simple.c): the
+// measured voltage is stored unconditionally (a railed/implausible
+// voltage — near supply for open, near 0 for short — is exactly the
+// field diagnostic), only resistance/T_raw/last_sample_time update on a
+// plausible conversion.
+static bool load_heater_read(LoadHeater *lh) {
+    float voltage = adc_read_avg_voltage(lh->adc_input);
+    lh->voltage = voltage;
+
+    float resistance = 0.0f;
+    float temperature = 0.0f;
+    if (!load_thermistor_voltage_to_temperature(voltage, &resistance,
+                                                 &temperature)) {
+        return false;
+    }
+
+    lh->resistance = resistance;
+    lh->T_raw = temperature;
+    lh->last_sample_time = to_ms_since_boot(get_absolute_time());
+    return true;
+}
+
+// One sample tick: read + rate guard (two-to-anchor, matches
+// tempctrl_update_sensor_drive exactly) on the fixed TEMPCTRL_SAMPLE_MS
+// timer shared with LNA, then on/off control + stall/runaway check on the
+// filtered T_now. See tempctrl_update_sensor_drive for the extensive
+// rationale comments this mirrors.
+static void load_heater_update(LoadHeater *lh) {
+    if (!lh->adc_configured || !lh->installed) {
+        lh->data_invalid = true;
+        lh->rate_ref_valid = false;
+        lh->seed_pending = false;
+        lh->active = false;
+        load_heater_apply_drive(lh);
+        lh->stall_window_active = false;
+        lh->runaway_strikes = 0;
+        return;
+    }
+
+    bool plausible = load_heater_read(lh);
+    bool rejected = false;
+
+    if (!plausible) {
+        lh->rate_ref_valid = false;
+        lh->seed_pending = false;
+    } else {
+        float raw = lh->T_raw;
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (!lh->rate_ref_valid) {
+            if (!lh->seed_pending) {
+                lh->T_now = raw;
+                lh->seed_pending = true;
+                lh->sensor_rejects = 0;
+            } else {
+                float dt = (float)(now_ms - lh->rate_ref_ms) / 1000.0f;
+                if (dt > 0.0f &&
+                    fabsf(raw - lh->T_now) / dt > TEMPCTRL_MAX_RATE_C_PER_S) {
+                    lh->T_now = raw;
+                    if (lh->sensor_rejects < TEMPCTRL_MAX_REJECTS) {
+                        lh->sensor_rejects++;
+                    }
+                } else {
+                    lh->T_now = raw;
+                    lh->rate_ref_valid = true;
+                    lh->seed_pending = false;
+                    lh->sensor_rejects = 0;
+                }
+            }
+        } else {
+            float dt = (float)(now_ms - lh->rate_ref_ms) / 1000.0f;
+            if (dt > 0.0f &&
+                fabsf(raw - lh->T_now) / dt > TEMPCTRL_MAX_RATE_C_PER_S) {
+                rejected = true;
+                if (lh->sensor_rejects < TEMPCTRL_MAX_REJECTS) {
+                    lh->sensor_rejects++;
+                }
+            } else {
+                lh->T_now = raw;
+                lh->sensor_rejects = 0;
+            }
+        }
+        lh->rate_ref_ms = now_ms;
+    }
+
+    if (lh->sensor_rejects >= TEMPCTRL_MAX_REJECTS) {
+        if (!lh->sensor_tripped) {
+            lh->rate_ref_valid = false;
+            lh->seed_pending = false;
+        }
+        lh->sensor_tripped = true;
+    }
+    lh->data_invalid = !plausible;
+
+    // Absolute safety ceiling, independent of target/hysteresis/rate-guard
+    // state: a plausible, anchored reading at or above the hard limit
+    // forces off and latches runaway (the control loop failed to prevent
+    // overheating) regardless of whatever target the host configured.
+    if (plausible && lh->rate_ref_valid && lh->T_now >= LOAD_MAX_SAFE_TEMP_C) {
+        lh->runaway_tripped = true;
+    }
+
+    if (load_heater_drive_allowed(lh) && lh->rate_ref_valid && plausible) {
+        if (!rejected) {
+            load_heater_control(lh);
+            load_heater_check_stall(lh);
+        }
+        /* Lone reject: nothing new to act on. Hold the previous drive
+           state (GPIO keeps it) and the stall window; the next accepted
+           sample resumes control. */
+    } else {
+        lh->active = false;
+        load_heater_apply_drive(lh);
+        lh->stall_window_active = false;
+        lh->runaway_strikes = 0;
+    }
 }

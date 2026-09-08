@@ -721,12 +721,38 @@ class PicoPeltier(PicoDevice):
         "Ki",
         "integral",
     )
-    _PELTIER_STREAMS = (("LNA", "tempctrl_lna"), ("LOAD", "tempctrl_load"))
+    # LOAD is a single low-side FET heater (on/off hysteresis), not a
+    # Peltier under PI control, so it has no clamp/Kp/Ki/integral/
+    # cooling_enabled — those are PI/bidirectional-drive concepts a
+    # single FET doesn't have. See LoadHeater in tempctrl.h /
+    # eigsep_observing.io._LOAD_HEATER_SCHEMA for the field set this
+    # mirrors.
+    _LOAD_HEATER_FIELDS = (
+        "T_now",
+        "voltage",
+        "resistance",
+        "timestamp",
+        "T_target",
+        "drive_level",
+        "enabled",
+        "active",
+        "sensor_tripped",
+        "sensor_rejects",
+        "stall_tripped",
+        "runaway_tripped",
+        "hysteresis",
+    )
+    _PELTIER_STREAMS = (
+        ("LNA", "tempctrl_lna", _PELTIER_CHANNEL_FIELDS),
+        ("LOAD", "tempctrl_load", _LOAD_HEATER_FIELDS),
+    )
 
-    # The subset of _PELTIER_CHANNEL_FIELDS the firmware emits as
-    # KV_FLOAT (src/tempctrl.c status tick) — keep the two in sync when
-    # adding channel fields. Coerced under their published (unprefixed)
-    # names, i.e. after the LNA_/LOAD_ fan-out.
+    # The union of _PELTIER_CHANNEL_FIELDS and _LOAD_HEATER_FIELDS the
+    # firmware emits as KV_FLOAT (src/tempctrl.c status tick) — keep in
+    # sync when adding channel fields. Coerced under their published
+    # (unprefixed) names, i.e. after the LNA_/LOAD_ fan-out. A field only
+    # LNA publishes (e.g. "clamp") is a harmless no-op key for the LOAD
+    # entry, which never has it.
     _REDIS_FLOAT_FIELDS = (
         "T_now",
         "voltage",
@@ -752,12 +778,15 @@ class PicoPeltier(PicoDevice):
         channel's ``LNA_status`` / ``LOAD_status``. The device-wide
         watchdog fields are duplicated into both streams; both come from
         the same firmware tick so a momentary tick-to-tick disagreement
-        is harmless.
+        is harmless. LNA and LOAD publish different field sets (LOAD has
+        no PI/clamp/cooling_enabled fields — see _LOAD_HEATER_FIELDS)
+        since they're physically different actuators (Peltier vs. a
+        single FET heater), not just different tuning of the same thing.
         """
         app_id = data.get("app_id")
         watchdog_tripped = data.get("watchdog_tripped")
         watchdog_timeout_ms = data.get("watchdog_timeout_ms")
-        for prefix, stream in self._PELTIER_STREAMS:
+        for prefix, stream, fields in self._PELTIER_STREAMS:
             # Descoped hardware publishes nothing: a channel marked not
             # installed is absent downstream (no corr-file column, no
             # staleness warnings) instead of streaming status="error"
@@ -766,8 +795,8 @@ class PicoPeltier(PicoDevice):
             # missing the flag (pre-installed-flag firmware) publishes
             # both, so a firmware field-drop bug can never silently
             # masquerade as "uninstalled". The flag itself is never
-            # copied into the stream (not in _PELTIER_CHANNEL_FIELDS),
-            # so the published per-channel shape is unchanged.
+            # copied into the stream (not in `fields`), so the published
+            # per-channel shape is unchanged.
             if data.get(f"{prefix}_installed") is False:
                 continue
             out = {
@@ -777,7 +806,7 @@ class PicoPeltier(PicoDevice):
                 "watchdog_tripped": watchdog_tripped,
                 "watchdog_timeout_ms": watchdog_timeout_ms,
             }
-            for k in self._PELTIER_CHANNEL_FIELDS:
+            for k in fields:
                 out[k] = data.get(f"{prefix}_{k}")
             self._base_redis_handler(out)
 
@@ -927,7 +956,13 @@ class PicoPeltier(PicoDevice):
         self._last_enable = cmd
 
     def set_clamp(self, LNA=None, LOAD=None):
-        """Set maximum drive level [0.0, 1.0], 0.2 default."""
+        """Set maximum drive level [0.0, 1.0], 0.2 default.
+
+        LOAD is a single low-side FET heater (on/off hysteresis, no PWM
+        duty to clamp) — firmware silently ignores ``LOAD_clamp``. Kept
+        here as a no-op rather than raising, so a caller that applies the
+        same settings to both channels doesn't need a LOAD special case.
+        """
         cmd = {}
         if LNA is not None:
             cmd["LNA_clamp"] = LNA
@@ -946,6 +981,12 @@ class PicoPeltier(PicoDevice):
         ``True`` (symmetric); deployments that cannot dissipate
         Peltier heat should explicitly set this ``False`` on the
         affected channel. Cached for replay on reconnect.
+
+        LOAD is a single low-side FET heater — it has no reverse
+        (cooling) direction to forbid, so firmware silently ignores
+        ``LOAD_cooling_enabled``. Kept here as a no-op rather than
+        raising, so a caller that applies the same settings to both
+        channels doesn't need a LOAD special case.
         """
         cmd = {}
         if LNA is not None:
@@ -966,6 +1007,12 @@ class PicoPeltier(PicoDevice):
         Ki defaults to 0 in firmware, so the controller runs as pure
         proportional + deadband until a host opts in. Cached for replay
         on reconnect (firmware resets gains to defaults on reboot).
+
+        LOAD is a single low-side FET heater under on/off hysteresis
+        control, not a PI loop — firmware silently ignores
+        ``LOAD_Kp``/``LOAD_Ki``. Kept here as a no-op rather than
+        raising, so a caller that applies the same settings to both
+        channels doesn't need a LOAD special case.
         """
         cmd = {}
         if LNA_Kp is not None:

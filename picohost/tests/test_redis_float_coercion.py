@@ -169,7 +169,12 @@ class TestRedisHandlerFloatFields:
 
 def _tempctrl_payload():
     """Firmware-shaped tempctrl status (src/tempctrl.c) with every
-    routinely whole-valued KV_FLOAT collapsed to int, as cJSON emits."""
+    routinely whole-valued KV_FLOAT collapsed to int, as cJSON emits.
+
+    LOAD is a single low-side FET heater (on/off hysteresis, no PI
+    loop), so unlike LNA it has no cooling_enabled/clamp/Kp/Ki/integral
+    fields at all — firmware never sends them for this channel.
+    """
     payload = {
         "sensor_name": "tempctrl",
         "app_id": 1,
@@ -192,14 +197,18 @@ def _tempctrl_payload():
                 f"{ch}_sensor_tripped": False,
                 f"{ch}_stall_tripped": False,
                 f"{ch}_runaway_tripped": False,
-                f"{ch}_cooling_enabled": False,
                 f"{ch}_hysteresis": 1,
-                f"{ch}_clamp": 1,
-                f"{ch}_Kp": 2,
-                f"{ch}_Ki": 0,
-                f"{ch}_integral": 0,
             }
         )
+    payload.update(
+        {
+            "LNA_cooling_enabled": False,
+            "LNA_clamp": 1,
+            "LNA_Kp": 2,
+            "LNA_Ki": 0,
+            "LNA_integral": 0,
+        }
+    )
     return payload
 
 
@@ -211,11 +220,11 @@ TEMPCTRL_FLOAT_FIELDS = (
     "T_target",
     "drive_level",
     "hysteresis",
-    "clamp",
-    "Kp",
-    "Ki",
-    "integral",
 )
+
+# LNA-only: PI/bidirectional-drive fields LOAD (a single FET heater, on/off
+# hysteresis) doesn't have.
+TEMPCTRL_LNA_ONLY_FLOAT_FIELDS = ("clamp", "Kp", "Ki", "integral")
 
 
 class TestDeviceHandlersCoerce:
@@ -238,6 +247,9 @@ class TestDeviceHandlersCoerce:
             assert isinstance(data["watchdog_timeout_ms"], int)
             assert data["enabled"] is True
             assert data["status"] == "update"
+        for key in TEMPCTRL_LNA_ONLY_FLOAT_FIELDS:
+            assert isinstance(published["tempctrl_lna"][key], float), key
+            assert key not in published["tempctrl_load"]
 
     def test_imu_publishes_floats(self):
         writer = FakeMetadataWriter()
