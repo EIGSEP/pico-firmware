@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 import time
-from picohost import PicoPeltier
+from picohost import PicoTempCtrl
 
 parser = ArgumentParser(description="Record temperature from Pico device")
 parser.add_argument(
@@ -15,11 +15,11 @@ args = parser.parse_args()
 temp_data = []
 
 
-t = PicoPeltier(args.port, verbose=True)  # Control mode for Peltier
-t.set_temperature(T_LNA=25, T_LOAD=25)
-t.set_enable(LNA=True, LOAD=True)
+t = PicoTempCtrl(args.port, verbose=True)  # Control mode for LOAD heater
+t.set_temperature(T_LOAD=25)
+t.set_enable(LOAD=True)
 try:
     while True:
         time.sleep(0.1)
 except KeyboardInterrupt:
-    t.set_enable(LNA=False, LOAD=False)
+    t.set_enable(LOAD=False)

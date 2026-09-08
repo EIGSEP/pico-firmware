@@ -195,170 +195,82 @@ class TestTempCtrlProtocol:
         assert TempCtrlEmulator().get_status()["sensor_name"] == "tempctrl"
 
     def test_defaults_match_firmware(self):
-        """init_single_tempctrl() sets these defaults."""
+        """LoadHeaterState defaults (tempctrl.h/tempctrl.c load_heater_init)."""
         emu = TempCtrlEmulator()
-        assert emu.lna.T_target == 30.0
-        assert emu.lna.Kp == 0.2
-        assert emu.lna.Ki == 0.0
-        assert emu.lna.integral == 0.0
-        assert emu.lna.clamp == 0.2
-        assert emu.lna.hysteresis == 0.5
-        assert emu.lna.enabled is False
-
-    def test_clamp_validation(self):
-        """tempctrl.c line 77: fminf(1.0, fmaxf(0.0, val))."""
-        emu = TempCtrlEmulator()
-        emu.server({"LNA_clamp": 2.0})
-        assert emu.lna.clamp == 1.0
-        emu.server({"LNA_clamp": -1.0})
-        assert emu.lna.clamp == 0.0
-        emu.server({"LNA_clamp": 0.5})
-        assert emu.lna.clamp == 0.5
+        assert emu.load.T_target == 30.0
+        assert emu.load.hysteresis == 2.0
+        assert emu.load.enabled is False
+        assert emu.load.installed is True
+        # LOAD is a single low-side FET heater under on/off hysteresis —
+        # no PI loop, so no Kp/Ki/clamp/integral fields exist at all.
+        assert not hasattr(emu.load, "Kp")
+        assert not hasattr(emu.load, "clamp")
 
     def test_enable_via_int(self):
-        """tempctrl.c line 73: valueint ? true : false."""
+        """tempctrl.c: valueint ? true : false."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": 1})
-        assert emu.lna.enabled is True
-        emu.server({"LNA_enable": 0})
-        assert emu.lna.enabled is False
+        emu.server({"LOAD_enable": 1})
+        assert emu.load.enabled is True
+        emu.server({"LOAD_enable": 0})
+        assert emu.load.enabled is False
 
-    def test_hysteresis_band_drive_zero(self):
-        """Inside deadband: drive = 0, integrator frozen + cleared."""
+    def test_hysteresis_band_stays_inactive(self):
+        """Inside the hysteresis band: the FET stays off."""
         emu = TempCtrlEmulator()
-        emu.lna.T_now = 29.8
-        emu.lna.integral = 5.0  # leftover state must not leak through
+        emu.load.T_now = 29.8
         emu.server(
             {
-                "LNA_temp_target": 30.0,
-                "LNA_enable": True,
-                "LNA_hysteresis": 0.5,
-                "LNA_Ki": 0.1,
+                "LOAD_temp_target": 30.0,
+                "LOAD_enable": True,
+                "LOAD_hysteresis": 0.5,
             }
         )
-        emu.op()
-        assert emu.lna.drive == 0.0
-        assert emu.lna.active is False
-        assert emu.lna.integral == 0.0
-
-    def test_drive_clamped_to_max(self):
-        """Drive magnitude limited by clamp."""
-        emu = TempCtrlEmulator()
-        emu.lna.T_now = 0.0  # large delta from default target 30.0
-        emu.server({"LNA_enable": True, "LNA_clamp": 0.3})
-        emu.op()
-        assert abs(emu.lna.drive) <= 0.3 + 1e-9
+        for _ in range(2):  # two-to-anchor
+            emu.op()
+        assert emu.load.active is False
 
     def test_sensor_error_disables_drive(self):
-        """tempctrl.c: a plausibility-failed cycle gates drive to 0 and
-        clears the integrator (the sensor may be gone entirely)."""
+        """tempctrl.c: a plausibility-failed cycle gates drive off (the
+        sensor may be gone entirely)."""
         emu = TempCtrlEmulator()
-        emu.server(
-            {"LNA_enable": True, "LNA_temp_target": 50.0, "LNA_Ki": 0.1}
-        )
-        # Two samples so PI fires and drive leaves zero. The first fresh
-        # sample only seeds the candidate reference (two-to-anchor); control
-        # engages on the second, mirroring firmware.
+        emu.server({"LOAD_enable": True, "LOAD_temp_target": 50.0})
+        # Two samples: the first seeds the candidate reference
+        # (two-to-anchor); control engages on the second, mirroring
+        # firmware.
         for _ in range(2):
             emu.op()
-        assert emu.lna.drive != 0.0
-        emu.inject_sensor_error("LNA")
+        assert emu.load.active is True
+        emu.inject_sensor_error()
         emu.op()
-        assert emu.lna.drive == 0.0
-        assert emu.lna.integral == 0.0
+        assert emu.load.active is False
 
-    def test_kp_ki_commands_round_trip(self):
-        """LNA_Kp / LNA_Ki update channel state.
+    def test_kp_ki_keys_are_silently_ignored(self):
+        """LOAD_Kp / LOAD_Ki update state.
 
         LOAD is a single low-side FET heater under on/off hysteresis, not
         a PI loop, so it has no Kp/Ki at all — LOAD_Kp/LOAD_Ki are
-        silently ignored (mirrors firmware tempctrl_server).
+        silently ignored (mirrors firmware tempctrl_server, which never
+        parses these keys for LOAD).
         """
         emu = TempCtrlEmulator()
-        emu.server(
-            {
-                "LNA_Kp": 0.35,
-                "LNA_Ki": 0.02,
-                "LOAD_Kp": 0.4,
-                "LOAD_Ki": 0.05,
-            }
-        )
-        assert emu.lna.Kp == 0.35
-        assert emu.lna.Ki == 0.02
+        emu.server({"LOAD_Kp": 0.4, "LOAD_Ki": 0.05})
         assert not hasattr(emu.load, "Kp")
         assert not hasattr(emu.load, "Ki")
-
-    def test_integral_reset_clears_state(self):
-        """*_integral_reset zeroes the integrator without touching gains."""
-        emu = TempCtrlEmulator()
-        emu.lna.integral = 12.5
-        emu.lna.Kp = 0.4
-        emu.lna.Ki = 0.1
-        emu.server({"LNA_integral_reset": True})
-        assert emu.lna.integral == 0.0
-        assert emu.lna.Kp == 0.4
-        assert emu.lna.Ki == 0.1
-
-    def test_anti_windup_freezes_integral_at_saturation(self):
-        """Integrator must not grow while the output is clamped against
-        the direction of error."""
-        emu = TempCtrlEmulator()
-        emu.lna.T_now = 0.0  # huge positive T_delta vs default target 30
-        emu.server(
-            {
-                "LNA_enable": True,
-                "LNA_Ki": 0.5,
-                "LNA_clamp": 0.6,
-            }
-        )
-        # Many ticks against the saturation rail — integrator must stay put.
-        for _ in range(20):
-            emu.op()
-            emu.lna.T_now = 0.0  # pin T_now so we stay deeply saturated
-        saturated_integral = emu.lna.integral
-        for _ in range(20):
-            emu.op()
-            emu.lna.T_now = 0.0
-        assert emu.lna.integral == saturated_integral
-        assert abs(emu.lna.drive) == pytest.approx(0.6)
-
-    def test_no_baseline_step_when_leaving_hysteresis(self):
-        """Drive must ramp smoothly through small values when T_delta
-        just exits the deadband — the old bang-bang law produced a
-        ~40 % PWM step here, which is the bug this controller fixes.
-        """
-        emu = TempCtrlEmulator()
-        emu.lna.T_now = 29.4  # 0.6 below target, just outside ±0.5 band
-        emu.lna.thermal_frozen = True  # pin T_now so first PI sees T_delta=0.6
-        emu.server(
-            {
-                "LNA_temp_target": 30.0,
-                "LNA_enable": True,
-                "LNA_hysteresis": 0.5,
-            }
-        )
-        # Two samples: the first seeds the candidate reference (two-to-anchor),
-        # the second anchors and runs the first PI step.
-        for _ in range(2):
-            emu.op()
-        # With Kp=0.2 and T_delta=0.6, drive should be ~0.12 (12 % PWM),
-        # not >=0.4 like the old baseline-kick law.
-        assert 0.0 < emu.lna.drive < 0.2
 
     def test_sensor_error_status_field(self):
         """tempctrl.c: per-channel status reports data validity — a
         plausibility failure errors the channel and nulls the derived
         values while the raw voltage stays reported."""
         emu = TempCtrlEmulator()
-        emu.op()  # LOAD samples once so its data is valid
-        emu.inject_sensor_error("LNA")
+        emu.op()
+        assert emu.get_status()["LOAD_status"] == "update"
+        emu.inject_sensor_error()
         emu.op()
         status = emu.get_status()
-        assert status["LNA_status"] == "error"
-        assert status["LNA_T_now"] is None
-        assert status["LNA_resistance"] is None
-        assert isinstance(status["LNA_voltage"], float)
-        assert status["LOAD_status"] == "update"
+        assert status["LOAD_status"] == "error"
+        assert status["LOAD_T_now"] is None
+        assert status["LOAD_resistance"] is None
+        assert isinstance(status["LOAD_voltage"], float)
 
     def test_rate_reject_still_reports_measured_value(self):
         """tempctrl.c: the rate guard is control-only. A rejected sample
@@ -369,95 +281,89 @@ class TestTempCtrlProtocol:
         The firmware never withholds science data on rate statistics
         alone; downstream owns that call."""
         emu = TempCtrlEmulator()
-        emu.lna.thermal_frozen = True
+        emu.load.thermal_frozen = True
         emu.op()
         emu.op()  # two-to-anchor at the model temperature (25.0)
-        emu.lna.inject_sensor_glitch(90.0)
+        emu.load.inject_sensor_glitch(90.0)
         emu.op()
         status = emu.get_status()
-        assert status["LNA_status"] == "update"
-        assert status["LNA_T_now"] == pytest.approx(90.0)
-        assert status["LNA_sensor_rejects"] == 1
+        assert status["LOAD_status"] == "update"
+        assert status["LOAD_T_now"] == pytest.approx(90.0)
+        assert status["LOAD_sensor_rejects"] == 1
         # Control held the last good reference — the raw value is
         # reported, never acted on.
-        assert emu.lna.T_now == pytest.approx(25.0)
+        assert emu.load.T_now == pytest.approx(25.0)
 
     def test_installed_default_true_and_in_status(self):
-        """init_single_tempctrl() defaults installed=true; tempctrl_status
-        reports LNA_installed / LOAD_installed on every tick."""
+        """LoadHeaterState defaults installed=true; tempctrl_status
+        reports LOAD_installed on every tick."""
         emu = TempCtrlEmulator()
-        assert emu.lna.installed is True
         assert emu.load.installed is True
         status = emu.get_status()
-        assert status["LNA_installed"] is True
         assert status["LOAD_installed"] is True
 
     def test_installed_parse_via_int(self):
         """tempctrl.c: item_json->valueint ? true : false — a JSON string
         like "false" has valueint 0, so it uninstalls (cJSON parity)."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_installed": 0})
-        assert emu.lna.installed is False
-        emu.server({"LNA_installed": 1})
-        assert emu.lna.installed is True
-        emu.server({"LNA_installed": "false"})
-        assert emu.lna.installed is False
+        emu.server({"LOAD_installed": 0})
+        assert emu.load.installed is False
+        emu.server({"LOAD_installed": 1})
         assert emu.load.installed is True
+        emu.server({"LOAD_installed": "false"})
+        assert emu.load.installed is False
 
     def test_uninstalled_channel_skips_sampling_and_drive(self):
-        """tempctrl_update_sensor_drive: an uninstalled channel returns
-        before temp_sensor_read — its ADC input is never mux-selected
-        (the potmon crosstalk lesson) — and never drives: data_invalid
-        every cycle, controller state reset, drive forced to 0."""
+        """load_heater_update: an uninstalled channel skips the read and
+        never drives: data_invalid every cycle, controller state reset,
+        drive forced off."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
+        emu.server({"LOAD_enable": True, "LOAD_temp_target": 50.0})
         for _ in range(2):  # two-to-anchor, then control engages
             emu.op()
-        assert emu.lna.drive != 0.0
-        emu.server({"LNA_installed": 0})
+        assert emu.load.active is True
+        emu.server({"LOAD_installed": 0})
         emu.op()
-        assert emu.lna.drive == 0.0
-        assert emu.lna.data_invalid is True
+        assert emu.load.active is False
+        assert emu.load.data_invalid is True
         status = emu.get_status()
-        assert status["LNA_status"] == "error"
-        assert status["LNA_T_now"] is None
-        # LOAD is untouched — still sampling normally.
-        assert status["LOAD_status"] == "update"
+        assert status["LOAD_status"] == "error"
+        assert status["LOAD_T_now"] is None
 
     def test_uninstalled_drops_anchor_reinstall_reseeds(self):
         """Uninstalling drops the rate anchor (it is only valid across
         continuous good data); re-install re-seeds two-to-anchor before
         control resumes, mirroring recovery from a plausibility outage."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": True, "LNA_temp_target": 50.0})
+        emu.server({"LOAD_enable": True, "LOAD_temp_target": 50.0})
         for _ in range(2):
             emu.op()
-        assert emu.lna.rate_ref_valid is True
-        emu.server({"LNA_installed": 0})
+        assert emu.load.rate_ref_valid is True
+        emu.server({"LOAD_installed": 0})
         emu.op()
-        assert emu.lna.rate_ref_valid is False
-        emu.server({"LNA_installed": 1})
+        assert emu.load.rate_ref_valid is False
+        emu.server({"LOAD_installed": 1})
         emu.op()  # candidate seed only — control still gated
-        assert emu.lna.drive == 0.0
+        assert emu.load.active is False
         emu.op()  # anchor confirmed — control resumes
-        assert emu.lna.drive != 0.0
+        assert emu.load.active is True
 
     def test_uninstall_preserves_latches_enable_ack_clears(self):
         """Uninstalling is not a trip ack: sticky latches survive it and
-        clear only via *_enable=true (tempctrl_apply_enable)."""
+        clear only via LOAD_enable=true (load_heater_apply_enable)."""
         emu = TempCtrlEmulator()
-        emu.server({"LNA_enable": True})
+        emu.server({"LOAD_enable": True})
         for _ in range(2):
             emu.op()
-        emu.lna.inject_sensor_glitch(1000.0, count=MAX_REJECTS)
+        emu.load.inject_sensor_glitch(1000.0, count=MAX_REJECTS)
         for _ in range(MAX_REJECTS):
             emu.op()
-        assert emu.lna.sensor_tripped is True
-        emu.server({"LNA_installed": 0})
+        assert emu.load.sensor_tripped is True
+        emu.server({"LOAD_installed": 0})
         emu.op()
-        assert emu.lna.sensor_tripped is True
-        emu.server({"LNA_enable": True})
-        assert emu.lna.sensor_tripped is False
+        assert emu.load.sensor_tripped is True
+        emu.server({"LOAD_enable": True})
+        assert emu.load.sensor_tripped is False
 
 
 # ---------------------------------------------------------------------------

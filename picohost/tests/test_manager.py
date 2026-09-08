@@ -31,7 +31,7 @@ from picohost.manager import (
 from picohost.testing import (
     DummyPicoIMU,
     DummyPicoMotor,
-    DummyPicoPeltier,
+    DummyPicoTempCtrl,
     DummyPicoRFSwitch,
 )
 
@@ -147,12 +147,12 @@ class TestRouteCommand:
                 pico, "rfswitch", {"action": "definitely_not_a_method"}
             )
 
-    def test_peltier_set_temperature(self, mgr):
-        pico = _attach(mgr, "tempctrl", DummyPicoPeltier)
+    def test_tempctrl_set_temperature(self, mgr):
+        pico = _attach(mgr, "tempctrl", DummyPicoTempCtrl)
         result = mgr._route_command(
             pico,
             "tempctrl",
-            {"action": "set_temperature", "T_LNA": 25.0, "LNA_hyst": 0.5},
+            {"action": "set_temperature", "T_LOAD": 25.0, "LOAD_hyst": 0.5},
         )
         assert result["action"] == "set_temperature"
         assert result["result"] is None

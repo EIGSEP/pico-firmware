@@ -12,7 +12,7 @@ Multi-application firmware for Raspberry Pi Pico 2 (RP2350) that implements hard
 - **JSON command protocol** - Control devices via USB serial at 115200 baud
 - **6 integrated applications**:
   - Motor control (stepper motors)
-  - Temperature controller (Peltier elements)
+  - Temperature controller (LOAD channel: FET heater, on/off hysteresis)
   - Potentiometer position monitoring
   - IMU sensor interface (BNO08x)
   - Lidar sensor interface
@@ -154,7 +154,7 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 | DIP Code | Binary | App ID | Application | Description |
 |----------|--------|--------|-------------|-------------|
 | 0 | 000 | `APP_MOTOR` | Motor control | Stepper motors for AZ/EL axes |
-| 1 | 001 | `APP_TEMPCTRL` | Temperature controller | Peltier control for LNA & LOAD |
+| 1 | 001 | `APP_TEMPCTRL` | Temperature controller | LOAD channel: FET heater, on/off hysteresis |
 | 2 | 010 | `APP_POTMON` | Potentiometer monitor | AZ/EL position feedback |
 | 3 | 011 | `APP_IMU_EL` | IMU (elevation) | BNO08x on elevation axis |
 | 4 | 100 | `APP_LIDAR` | Lidar | Distance measurement |
@@ -164,14 +164,21 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
-Two independent Peltier control channels, each with an ADC thermistor divider and an H-bridge motor driver. The divider is wired `3.3V -> 10.68k fixed resistor -> ADC pin -> thermistor -> GND`, with the carrier board adding a 4.7k pull-up from each ADC node to 3.3V. The thermistor is a Vishay NTCLE100E3103 (10k NTC, B25/85 = 3977K); firmware converts resistance to temperature with the datasheet's 4-coefficient extended Steinhart-Hart fit (`temp_simple.h`), valid over the part's -40..+125 °C range.
+A single LOAD channel: an NTC thermistor divider driving a low-side N-FET
+heater (on/off hysteresis control — there is no PI loop and no reverse
+(cooling) direction). The divider is wired `3.3V -> thermistor -> ADC pin
+-> 10k pull-up -> GND`. The thermistor is a 30k NTC (Beta=3943); firmware
+converts resistance to temperature with the Beta equation (`tempctrl.c`),
+matched to this part's own characterization rather than the shared
+Vishay/Steinhart-Hart fit `temp_simple.h` uses elsewhere.
 
-| Channel | Temp Sensor GPIO | PWM GPIO | Dir Pin 1 GPIO | Dir Pin 2 GPIO | PIO |
-|---------|-----------------|----------|---------------|---------------|-----|
-| **LNA** | 27 | 8 | 10 | 12 | PIO0 |
-| **LOAD** | 26 | 9 | 11 | 13 | PIO1 |
+| Channel | Temp Sensor GPIO | FET Gate GPIO |
+|---------|-------------------|----------------|
+| **LOAD** | 26 (ADC0) | 17 |
 
-JSON protocol keys use `LNA_` and `LOAD_` prefixes (e.g. `LNA_temp_target`, `LOAD_enable`). Status includes per-channel temperature plus thermistor diagnostics (`LNA_voltage`, `LNA_resistance`, `LOAD_voltage`, `LOAD_resistance`).
+JSON protocol keys use the `LOAD_` prefix (e.g. `LOAD_temp_target`,
+`LOAD_enable`). Status includes temperature plus thermistor diagnostics
+(`LOAD_voltage`, `LOAD_resistance`).
 
 ### Potentiometer Wiring (APP_POTMON)
 

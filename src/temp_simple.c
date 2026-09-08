@@ -1,7 +1,6 @@
 #include "temp_simple.h"
 #include "hardware/adc.h"
 #include "pico/stdlib.h"
-#include <math.h>
 
 #define THERMISTOR_ADC_SAMPLES 16
 
@@ -33,95 +32,4 @@ float adc_read_avg_voltage(uint adc_input) {
 
     float counts = (float)total / (float)THERMISTOR_ADC_SAMPLES;
     return counts * THERMISTOR_SUPPLY_VOLTS / THERMISTOR_ADC_MAX_COUNTS;
-}
-
-static bool temp_sensor_voltage_to_temperature(float voltage,
-                                               float *resistance,
-                                               float *temperature) {
-    if (!isfinite(voltage) ||
-        voltage <= 0.0f ||
-        voltage >= THERMISTOR_SUPPLY_VOLTS) {
-        return false;
-    }
-
-    float r_thermistor = THERMISTOR_TOP_OHMS
-        * voltage / (THERMISTOR_SUPPLY_VOLTS - voltage);
-    if (!isfinite(r_thermistor) || r_thermistor <= 0.0f) {
-        return false;
-    }
-
-    float log_r = logf(r_thermistor / THERMISTOR_REF_OHMS);
-    float log_r_sq = log_r * log_r;
-    float inverse_kelvin = THERMISTOR_SH_A1
-        + THERMISTOR_SH_B1 * log_r
-        + THERMISTOR_SH_C1 * log_r_sq
-        + THERMISTOR_SH_D1 * log_r_sq * log_r;
-    if (!isfinite(inverse_kelvin) || inverse_kelvin <= 0.0f) {
-        return false;
-    }
-
-    // NTCLE100E3 operating range (and the fit's validity): -40..+125 C.
-    float temp_c = 1.0f / inverse_kelvin - 273.15f;
-    if (!isfinite(temp_c) || temp_c < -40.0f || temp_c > 125.0f) {
-        return false;
-    }
-
-    *resistance = r_thermistor;
-    *temperature = temp_c;
-    return true;
-}
-
-void temp_sensor_init(TempSensor *sensor, uint gpio_pin) {
-    sensor->gpio_pin = gpio_pin;
-    sensor->adc_input = 0;
-    sensor->temperature = 0.0f;
-    sensor->voltage = 0.0f;
-    sensor->resistance = 0.0f;
-    sensor->last_sample_time = 0;
-    sensor->adc_configured = false;
-    sensor->read_error = false;
-
-    if (!adc_channel_init(gpio_pin, &sensor->adc_input)) {
-        sensor->read_error = true;
-        return;
-    }
-    sensor->adc_configured = true;
-}
-
-bool temp_sensor_read(TempSensor *sensor) {
-    if (!sensor->adc_configured) {
-        sensor->read_error = true;
-        return false;
-    }
-
-    float voltage = adc_read_avg_voltage(sensor->adc_input);
-    // Store the measured voltage unconditionally: when the plausibility
-    // conversion below fails, the railed/implausible voltage is exactly
-    // the field diagnostic (≈supply → open thermistor, ≈0 → short), so
-    // it must reach status output instead of freezing at last-good.
-    sensor->voltage = voltage;
-    float resistance = 0.0f;
-    float temperature = 0.0f;
-    if (!temp_sensor_voltage_to_temperature(voltage, &resistance, &temperature)) {
-        sensor->read_error = true;
-        return false;
-    }
-
-    sensor->resistance = resistance;
-    sensor->temperature = temperature;
-    sensor->last_sample_time = to_ms_since_boot(get_absolute_time());
-    sensor->read_error = false;
-    return true;
-}
-
-float temp_sensor_get_temp(TempSensor *sensor) {
-    return sensor->temperature;
-}
-
-uint32_t temp_sensor_get_sample_time(TempSensor *sensor) {
-    return sensor->last_sample_time;
-}
-
-bool temp_sensor_has_error(TempSensor *sensor) {
-    return sensor->read_error;
 }

@@ -15,7 +15,7 @@ from conftest import wait_for_condition, wait_for_settle
 from picohost.testing import (
     DummyPicoMotor,
     DummyPicoRFSwitch,
-    DummyPicoPeltier,
+    DummyPicoTempCtrl,
     DummyPicoIMU,
     DummyPicoPotentiometer,
     DummyPicoLidar,
@@ -33,33 +33,13 @@ MOTOR_FIELDS = {
     "el_target_pos",
 }
 
+# LOAD is a single low-side FET heater (on/off hysteresis, no PI loop),
+# so it has no cooling_enabled/clamp/Kp/Ki/integral fields.
 TEMPCTRL_FIELDS = {
     "sensor_name",
     "app_id",
     "watchdog_tripped",
     "watchdog_timeout_ms",
-    "LNA_status",
-    "LNA_T_now",
-    "LNA_voltage",
-    "LNA_resistance",
-    "LNA_timestamp",
-    "LNA_T_target",
-    "LNA_drive_level",
-    "LNA_installed",
-    "LNA_enabled",
-    "LNA_active",
-    "LNA_sensor_tripped",
-    "LNA_sensor_rejects",
-    "LNA_stall_tripped",
-    "LNA_runaway_tripped",
-    "LNA_cooling_enabled",
-    "LNA_hysteresis",
-    "LNA_clamp",
-    "LNA_Kp",
-    "LNA_Ki",
-    "LNA_integral",
-    # LOAD is a single low-side FET heater (on/off hysteresis, no PI
-    # loop), so unlike LNA it has no cooling_enabled/clamp/Kp/Ki/integral.
     "LOAD_status",
     "LOAD_T_now",
     "LOAD_voltage",
@@ -136,8 +116,8 @@ def rfswitch():
 
 
 @pytest.fixture
-def peltier():
-    p = DummyPicoPeltier("/dev/dummy")
+def tempctrl():
+    p = DummyPicoTempCtrl("/dev/dummy")
     _wait_for_first_status(p)
     yield p
     p.disconnect()
@@ -226,32 +206,33 @@ class TestRFSwitchIntegration:
         )
 
 
-# --- Peltier ---
+# --- TempCtrl ---
 
 
-class TestPeltierIntegration:
-    def test_status_fields(self, peltier):
-        """Peltier emulator populates all status fields via reader thread."""
-        assert set(peltier.last_status.keys()) == TEMPCTRL_FIELDS
-        assert peltier.last_status["sensor_name"] == "tempctrl"
+class TestTempCtrlIntegration:
+    def test_status_fields(self, tempctrl):
+        """TempCtrl emulator populates all status fields via reader thread."""
+        assert set(tempctrl.last_status.keys()) == TEMPCTRL_FIELDS
+        assert tempctrl.last_status["sensor_name"] == "tempctrl"
 
-    def test_command_round_trip(self, peltier):
-        """Temperature control converges to target through serial pipeline."""
-        cadence = peltier.EMULATOR_CADENCE_MS
-        peltier.set_temperature(T_LNA=35.0)
-        peltier.set_clamp(
-            LNA=0.6
-        )  # explicit: default 0.2 would need ~3x the cycles
-        peltier.set_enable(LNA=True)
-        # 10°C delta, drive clamped at 0.6, drift 0.05/op -> ~0.03°C/op
-        # ~333 ops to converge + margin for hysteresis settling
-        settled = wait_for_settle(
-            lambda: round(peltier.last_status.get("LNA_T_now", 0), 1),
-            cadence_ms=cadence,
-            max_cycles=500,
-            stable_count=5,
-        )
-        assert abs(settled - 35.0) <= 0.5
+    def test_command_round_trip(self, tempctrl):
+        """Temperature control converges to within hysteresis of target
+        through the serial pipeline.
+
+        LOAD is a single FET heater under on/off hysteresis (no PI, no
+        fixed equilibrium point), so "converged" means settling inside
+        the hysteresis band around the target rather than a single
+        stable reading.
+        """
+        cadence = tempctrl.EMULATOR_CADENCE_MS
+        tempctrl.set_temperature(T_LOAD=35.0, LOAD_hyst=0.5)
+        tempctrl.set_enable(LOAD=True)
+
+        def _converged():
+            t = tempctrl.last_status.get("LOAD_T_now")
+            return t is not None and abs(t - 35.0) <= 1.0
+
+        wait_for_condition(_converged, cadence_ms=cadence, max_cycles=200)
 
 
 # --- IMU ---
@@ -308,22 +289,17 @@ class TestMotorIntegrationTypes:
         assert isinstance(s["el_target_pos"], int)
 
 
-# --- Peltier ---
+# --- TempCtrl ---
 
 
-class TestPeltierIntegrationTypes:
-    def test_status_types(self, peltier):
-        """Verify peltier status value types through serial pipeline."""
-        s = peltier.last_status
+class TestTempCtrlIntegrationTypes:
+    def test_status_types(self, tempctrl):
+        """Verify tempctrl status value types through serial pipeline."""
+        s = tempctrl.last_status
         assert isinstance(s["sensor_name"], str)
         assert isinstance(s["app_id"], int)
         # Booleans
         for key in (
-            "LNA_installed",
-            "LNA_enabled",
-            "LNA_active",
-            "LNA_sensor_tripped",
-            "LNA_runaway_tripped",
             "LOAD_installed",
             "LOAD_enabled",
             "LOAD_active",
@@ -335,14 +311,6 @@ class TestPeltierIntegrationTypes:
             )
         # Floats
         for key in (
-            "LNA_T_now",
-            "LNA_voltage",
-            "LNA_resistance",
-            "LNA_T_target",
-            "LNA_drive_level",
-            "LNA_hysteresis",
-            "LNA_clamp",
-            "LNA_timestamp",
             "LOAD_T_now",
             "LOAD_voltage",
             "LOAD_resistance",
@@ -402,13 +370,13 @@ class TestRFSwitchIntegrationTypes:
         assert isinstance(s["sw_state"], int)
 
 
-# --- Peltier Watchdog ---
+# --- TempCtrl Watchdog ---
 
 
-class TestPeltierWatchdog:
+class TestTempCtrlWatchdog:
     def test_keepalive_prevents_watchdog(self):
         """Keepalive commands prevent the watchdog from tripping."""
-        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
+        p = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0.2)
         try:
             p.set_watchdog_timeout(500)
             time.sleep(1.0)
@@ -418,7 +386,7 @@ class TestPeltierWatchdog:
 
     def test_watchdog_trips_without_keepalive(self):
         """Without keepalive, the watchdog trip flag gates drive off."""
-        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        p = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
             cadence = p.EMULATOR_CADENCE_MS
             p.set_watchdog_timeout(200)
@@ -456,44 +424,33 @@ class TestRedisIntegration:
         names = [name for name, _ in received]
         assert "potmon" in names
 
-    def test_peltier_publishes_two_streams_per_tick(self):
-        """PicoPeltier splits its combined firmware tick into LNA and LOAD."""
+    def test_tempctrl_publishes_one_stream_per_tick(self):
+        """PicoTempCtrl republishes its combined firmware tick as tempctrl_load."""
         received = []
 
         class FakeMetadataWriter:
             def add(self, name, data):
                 received.append((name, dict(data)))
 
-        peltier = DummyPicoPeltier(
+        tempctrl = DummyPicoTempCtrl(
             "/dev/dummy", metadata_writer=FakeMetadataWriter()
         )
-        cadence = peltier.EMULATOR_CADENCE_MS
+        cadence = tempctrl.EMULATOR_CADENCE_MS
         wait_for_condition(
             lambda: any(n == "tempctrl_load" for n, _ in received),
             cadence_ms=cadence,
         )
-        peltier.disconnect()
+        tempctrl.disconnect()
         names = [name for name, _ in received]
-        assert "tempctrl_lna" in names
         assert "tempctrl_load" in names
         # No legacy "tempctrl" entries should leak through.
         assert "tempctrl" not in names
-        # Each tick must publish exactly one entry per stream; check the
-        # tail of the buffer to avoid races on disconnect timing.
-        last_two = received[-2:]
-        last_names = sorted(n for n, _ in last_two)
-        assert last_names == ["tempctrl_lna", "tempctrl_load"]
-        lna_entry = next(
-            d for n, d in reversed(received) if n == "tempctrl_lna"
-        )
         load_entry = next(
             d for n, d in reversed(received) if n == "tempctrl_load"
         )
-        assert lna_entry["sensor_name"] == "tempctrl_lna"
         assert load_entry["sensor_name"] == "tempctrl_load"
-        assert "status" in lna_entry and "status" in load_entry
-        assert "T_now" in lna_entry and "T_now" in load_entry
-        assert "watchdog_timeout_ms" in lna_entry
+        assert "status" in load_entry
+        assert "T_now" in load_entry
         assert "watchdog_timeout_ms" in load_entry
 
 
@@ -585,29 +542,27 @@ class TestConvergenceTiming:
         )
         assert settled == 999
 
-    def test_peltier_convergence_bounded(self):
-        """Temperature converges within a cycle count derived from the model.
+    def test_tempctrl_convergence_bounded(self):
+        """Temperature converges to within hysteresis of target within a
+        generous cycle bound.
 
-        With default gains (Kp=0.2, Ki=0) and clamp set to 0.6 the
-        controller is pure proportional, so drive saturates at the clamp
-        until T_delta drops below clamp/Kp = 3°C. THERMAL_DRIFT_RATE=0.05
-        gives 0.03°C per clamped op; a 10°C move (25→35) needs ~233 ops
-        at saturation plus a P-controlled tail into the deadband. Allow
-        500 ops.
+        LOAD is a single FET heater under on/off hysteresis (heating rate
+        LOAD_THERMAL_DRIFT_PER_OP=0.05/op, op() runs at ~1kHz in the
+        emulator thread), so a 10°C move (25→35) converges in well under
+        a second of wall time. Allow 200 status cadence cycles (10s at
+        50ms cadence) for scheduling margin.
         """
-        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0.2)
+        p = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0.2)
         try:
             cadence = p.EMULATOR_CADENCE_MS
-            p.set_temperature(T_LNA=35.0)
-            p.set_clamp(LNA=0.6)
-            p.set_enable(LNA=True)
-            settled = wait_for_settle(
-                lambda: round(p.last_status.get("LNA_T_now", 0), 1),
-                cadence_ms=cadence,
-                max_cycles=500,
-                stable_count=5,
-            )
-            assert abs(settled - 35.0) <= 0.5
+            p.set_temperature(T_LOAD=35.0, LOAD_hyst=0.5)
+            p.set_enable(LOAD=True)
+
+            def _converged():
+                t = p.last_status.get("LOAD_T_now")
+                return t is not None and abs(t - 35.0) <= 1.0
+
+            wait_for_condition(_converged, cadence_ms=cadence, max_cycles=200)
         finally:
             p.disconnect()
 
@@ -617,7 +572,7 @@ class TestConvergenceTiming:
         With 200ms timeout and 50ms cadence, the watchdog should trip
         within ~4-8 emulator cycles (200ms / ~1ms loop + cadence jitter).
         """
-        p = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        p = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
             cadence = p.EMULATOR_CADENCE_MS
             p.set_watchdog_timeout(200)

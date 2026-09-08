@@ -1,7 +1,7 @@
 """
 Unit tests for the picohost base classes.
 
-Tests PicoDevice, PicoMotor, PicoRFSwitch, and PicoPeltier through their
+Tests PicoDevice, PicoMotor, PicoRFSwitch, and PicoTempCtrl through their
 DummyPico* wrappers, which use MockSerial + emulators instead of real hardware.
 """
 
@@ -14,7 +14,7 @@ from picohost.testing import (
     DummyPicoDevice,
     DummyPicoMotor,
     DummyPicoRFSwitch,
-    DummyPicoPeltier,
+    DummyPicoTempCtrl,
     DummyPicoLidar,
 )
 
@@ -613,419 +613,207 @@ class TestMotorRedisHandler:
             motor.disconnect()
 
 
-class TestPicoPeltier:
-    """Test PicoPeltier commands via DummyPicoPeltier (with emulator)."""
-
-    def test_set_temperature_channel_lna(self):
-        """Setting LNA channel target updates emulator status."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.last_status.get("LNA_T_target")
-        peltier.set_temperature(T_LNA=25.5, LNA_hyst=0.5)
-        assert wait_for_settle(
-            lambda: peltier.last_status.get("LNA_T_target"),
-            initial=before,
-            cadence_ms=cadence,
-            max_cycles=10,
-        ) == pytest.approx(25.5)
-        assert peltier.last_status.get("LNA_hysteresis") == pytest.approx(0.5)
-        peltier.disconnect()
+class TestPicoTempCtrl:
+    """Test PicoTempCtrl commands via DummyPicoTempCtrl (with emulator)."""
 
     def test_set_temperature_channel_load(self):
         """Setting LOAD channel target updates emulator status."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.last_status.get("LOAD_hysteresis")
-        peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0)
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
+        cadence = tempctrl.EMULATOR_CADENCE_MS
+        before = tempctrl.last_status.get("LOAD_hysteresis")
+        tempctrl.set_temperature(T_LOAD=30.0, LOAD_hyst=1.0)
         assert wait_for_settle(
-            lambda: peltier.last_status.get("LOAD_hysteresis"),
+            lambda: tempctrl.last_status.get("LOAD_hysteresis"),
             initial=before,
             cadence_ms=cadence,
             max_cycles=10,
         ) == pytest.approx(1.0)
-        assert peltier.last_status.get("LOAD_T_target") == pytest.approx(30.0)
-        peltier.disconnect()
-
-    def test_set_temperature_both_channels(self):
-        """Setting both channels in one call updates both in emulator."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.last_status.get("LNA_T_target")
-        peltier.set_temperature(
-            T_LNA=28.0, LNA_hyst=0.3, T_LOAD=32.0, LOAD_hyst=0.8
+        assert tempctrl.last_status.get("LOAD_T_target") == pytest.approx(
+            30.0
         )
-        assert wait_for_settle(
-            lambda: peltier.last_status.get("LNA_T_target"),
-            initial=before,
-            cadence_ms=cadence,
-            max_cycles=10,
-        ) == pytest.approx(28.0)
-        assert peltier.last_status.get("LOAD_T_target") == pytest.approx(32.0)
-        peltier.disconnect()
+        tempctrl.disconnect()
 
-    def test_enable_channels(self):
-        """set_enable() updates the enabled flags in emulator status."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        peltier.set_enable(LNA=True, LOAD=True)
+    def test_enable_channel(self):
+        """set_enable() updates the enabled flag in emulator status."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
+        cadence = tempctrl.EMULATOR_CADENCE_MS
+        tempctrl.set_enable(LOAD=True)
         wait_for_condition(
-            lambda: peltier.last_status.get("LNA_enabled") is True,
+            lambda: tempctrl.last_status.get("LOAD_enabled") is True,
             cadence_ms=cadence,
         )
-        assert peltier.last_status.get("LOAD_enabled") is True
-        peltier.disconnect()
+        tempctrl.disconnect()
 
-    def test_disable_channels(self):
-        """Disabling channels is reflected in emulator status."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        peltier.set_enable(LNA=False, LOAD=False)
+    def test_disable_channel(self):
+        """Disabling the channel is reflected in emulator status."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
+        cadence = tempctrl.EMULATOR_CADENCE_MS
+        tempctrl.set_enable(LOAD=False)
         wait_for_condition(
-            lambda: peltier.last_status.get("LNA_enabled") is False,
+            lambda: tempctrl.last_status.get("LOAD_enabled") is False,
             cadence_ms=cadence,
         )
-        assert peltier.last_status.get("LOAD_enabled") is False
-        peltier.disconnect()
+        tempctrl.disconnect()
 
     def test_status_has_tempctrl_fields(self):
-        """Peltier status should contain all tempctrl fields from the emulator."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        """TempCtrl status should contain all LOAD fields from the emulator."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         wait_for_condition(
-            lambda: peltier.last_status.get("sensor_name") == "tempctrl",
-            cadence_ms=peltier.EMULATOR_CADENCE_MS,
+            lambda: tempctrl.last_status.get("sensor_name") == "tempctrl",
+            cadence_ms=tempctrl.EMULATOR_CADENCE_MS,
         )
-        for key in (
-            "LNA_T_now",
-            "LOAD_T_now",
-            "LNA_drive_level",
-            "LOAD_drive_level",
-            "LNA_Kp",
-            "LNA_Ki",
-            "LNA_integral",
-        ):
-            assert key in peltier.last_status, f"Missing key: {key}"
-        peltier.disconnect()
-
-    def test_set_gains_round_trip(self):
-        """set_gains() updates emulator Kp/Ki and surfaces in status.
-
-        LOAD is a single low-side FET heater (on/off hysteresis), not a
-        PI loop, so firmware silently ignores LOAD_Kp/LOAD_Ki — no
-        "LOAD_Kp" key is ever published (see PicoPeltier._LOAD_HEATER_FIELDS).
-        """
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        before = peltier.last_status.get("LNA_Kp")
-        peltier.set_gains(LNA_Kp=0.4, LNA_Ki=0.02)
-        assert wait_for_settle(
-            lambda: peltier.last_status.get("LNA_Kp"),
-            initial=before,
-            cadence_ms=cadence,
-            max_cycles=10,
-        ) == pytest.approx(0.4)
-        assert peltier.last_status.get("LNA_Ki") == pytest.approx(0.02)
-        assert "LOAD_Kp" not in peltier.last_status
-        peltier.disconnect()
-
-    def test_reset_integral_sends_only_selected_channels(self):
-        """reset_integral() sends an *_integral_reset only for chosen channels."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
-        try:
-            sent = []
-            original = peltier.send_command
-
-            def spy(cmd):
-                sent.append(dict(cmd))
-                return original(cmd)
-
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.reset_integral(LNA=True)
-            assert sent[-1] == {"LNA_integral_reset": True}
-            peltier.reset_integral(LNA=True, LOAD=True)
-            assert sent[-1] == {
-                "LNA_integral_reset": True,
-                "LOAD_integral_reset": True,
-            }
-            before = len(sent)
-            peltier.reset_integral()  # default: both False → no-op
-            assert len(sent) == before
-        finally:
-            peltier.disconnect()
+        for key in ("LOAD_T_now", "LOAD_drive_level", "LOAD_hysteresis"):
+            assert key in tempctrl.last_status, f"Missing key: {key}"
+        tempctrl.disconnect()
 
     def test_set_installed_round_trip(self):
-        """set_installed() updates the emulator installed flags in status."""
-        peltier = DummyPicoPeltier("/dev/dummy")
-        cadence = peltier.EMULATOR_CADENCE_MS
-        peltier.set_installed(LNA=False)
-        wait_for_condition(
-            lambda: peltier.last_status.get("LNA_installed") is False,
-            cadence_ms=cadence,
+        """set_installed() updates the emulator installed flag in status."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
+        cadence = tempctrl.EMULATOR_CADENCE_MS
+        before = tempctrl.last_status.get("LOAD_installed")
+        tempctrl.set_installed(LOAD=False)
+        assert (
+            wait_for_settle(
+                lambda: tempctrl.last_status.get("LOAD_installed"),
+                initial=before,
+                cadence_ms=cadence,
+                max_cycles=10,
+            )
+            is False
         )
-        assert peltier.last_status.get("LOAD_installed") is True
-        peltier.disconnect()
+        tempctrl.disconnect()
 
     def test_set_installed_type_check(self):
-        """Non-bool raises TypeError, matching set_cooling_enabled."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        """Non-bool raises TypeError."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
             with pytest.raises(TypeError):
-                peltier.set_installed(LNA=1)
-            with pytest.raises(TypeError):
-                peltier.set_installed(LOAD="false")
+                tempctrl.set_installed(LOAD="false")
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_set_installed_partial_no_command(self):
-        """set_installed() with both args None must not touch the wire
-        or the replay cache — matches set_cooling_enabled."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        """set_installed() with LOAD=None must not touch the wire or the
+        replay cache."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
             sent = []
-            original = peltier.send_command
+            original = tempctrl.send_command
 
             def spy(cmd):
                 sent.append(dict(cmd))
                 return original(cmd)
 
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.set_installed()
+            tempctrl.send_command = spy  # type: ignore[method-assign]
+            tempctrl.set_installed()
             assert sent == []
-            assert peltier._last_installed == {}
+            assert tempctrl._last_installed == {}
         finally:
-            peltier.disconnect()
-
-    def test_reset_integral_not_cached_for_replay(self):
-        """One-shot command; firmware reset clears the integral implicitly."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
-        try:
-            peltier.reset_integral(LNA=True, LOAD=True)
-            sent = []
-            original = peltier.send_command
-
-            def spy(cmd):
-                sent.append(dict(cmd))
-                return original(cmd)
-
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.on_reconnect()
-            for payload in sent:
-                assert "LNA_integral_reset" not in payload
-                assert "LOAD_integral_reset" not in payload
-        finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
 
-class TestPicoPeltierReconnectReplay:
+class TestPicoTempCtrlReconnectReplay:
     """Cache last-applied config in setters; replay in on_reconnect.
 
     A serial-link drop on EIGSEP picos is our proxy for "firmware may
     have rebooted" (hard watchdog, brownout, picotool re-flash all drop
-    USB CDC). ``on_reconnect`` replays cached setpoints/clamps/enable
-    flags so the firmware doesn't silently resume at defaults.
+    USB CDC). ``on_reconnect`` replays cached setpoints/enable flags so
+    the firmware doesn't silently resume at defaults.
     """
 
     def test_fresh_instance_has_empty_cache(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            assert peltier._last_watchdog_timeout_ms is None
-            assert peltier._last_installed == {}
-            assert peltier._last_clamp == {}
-            assert peltier._last_cooling == {}
-            assert peltier._last_gains == {}
-            assert peltier._last_temperature == {}
-            assert peltier._last_enable is None
+            assert tempctrl._last_watchdog_timeout_ms is None
+            assert tempctrl._last_installed == {}
+            assert tempctrl._last_temperature == {}
+            assert tempctrl._last_enable is None
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_setters_populate_cache(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            peltier.set_watchdog_timeout(15000)
-            peltier.set_installed(LNA=False, LOAD=True)
-            peltier.set_clamp(LNA=0.5, LOAD=0.6)
-            peltier.set_cooling_enabled(LNA=False, LOAD=True)
-            peltier.set_gains(LNA_Kp=0.3, LNA_Ki=0.02, LOAD_Kp=0.25)
-            peltier.set_temperature(T_LNA=25.0, LNA_hyst=0.3)
-            peltier.set_enable(LNA=True, LOAD=False)
-            assert peltier._last_watchdog_timeout_ms == 15000
-            assert peltier._last_installed == {
-                "LNA_installed": False,
-                "LOAD_installed": True,
-            }
-            assert peltier._last_clamp == {
-                "LNA_clamp": 0.5,
-                "LOAD_clamp": 0.6,
-            }
-            assert peltier._last_cooling == {
-                "LNA_cooling_enabled": False,
-                "LOAD_cooling_enabled": True,
-            }
-            assert peltier._last_gains == {
-                "LNA_Kp": 0.3,
-                "LNA_Ki": 0.02,
-                "LOAD_Kp": 0.25,
-            }
-            assert peltier._last_temperature == {
-                "LNA_temp_target": 25.0,
-                "LNA_hysteresis": 0.3,
-            }
-            assert peltier._last_enable == {
-                "LNA_enable": True,
-                "LOAD_enable": False,
-            }
-        finally:
-            peltier.disconnect()
-
-    def test_partial_updates_merge_across_channels(self):
-        """Setting one channel, then the other, keeps both in the cache.
-
-        Firmware holds per-channel state independently, so a replay must
-        restore both channels even if the host only ever set them in
-        separate calls.
-        """
-        peltier = DummyPicoPeltier("/dev/dummy")
-        try:
-            peltier.set_clamp(LNA=0.4)
-            peltier.set_clamp(LOAD=0.7)
-            assert peltier._last_clamp == {
-                "LNA_clamp": 0.4,
-                "LOAD_clamp": 0.7,
-            }
-            peltier.set_temperature(T_LNA=20.0, LNA_hyst=0.2)
-            peltier.set_temperature(T_LOAD=30.0, LOAD_hyst=0.5)
-            assert peltier._last_temperature == {
-                "LNA_temp_target": 20.0,
-                "LNA_hysteresis": 0.2,
+            tempctrl.set_watchdog_timeout(15000)
+            tempctrl.set_installed(LOAD=True)
+            tempctrl.set_temperature(T_LOAD=30.0, LOAD_hyst=0.5)
+            tempctrl.set_enable(LOAD=False)
+            assert tempctrl._last_watchdog_timeout_ms == 15000
+            assert tempctrl._last_installed == {"LOAD_installed": True}
+            assert tempctrl._last_temperature == {
                 "LOAD_temp_target": 30.0,
                 "LOAD_hysteresis": 0.5,
             }
+            assert tempctrl._last_enable == {"LOAD_enable": False}
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_on_reconnect_replays_in_safe_order(self):
-        """watchdog → installed → clamp → cooling_enabled → gains →
-        temperature → enable.
+        """watchdog → installed → temperature → enable.
 
-        installed lands right after the watchdog so an uninstalled
-        channel is gated (no sampling, no drive) before any
-        drive-producing config arrives — firmware reboots to
-        installed=true defaults. cooling_enabled lands between clamp
-        and gains so the asymmetric-clamp safety setting is in place
-        before any drive can result from the next setpoint. Gains land
-        before temperature so the channel is fully tuned the instant it
-        goes active. Disables keepalive so the spy only sees replay
-        traffic — the background ``{}`` keepalive is tested
-        independently.
+        installed lands right after the watchdog so a descoped channel
+        is gated (no sampling, no drive) before any drive-producing
+        config arrives — firmware reboots to installed=true by default.
+        Disables keepalive so the spy only sees replay traffic — the
+        background ``{}`` keepalive is tested independently.
         """
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        tempctrl = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
-            peltier.set_watchdog_timeout(15000)
-            peltier.set_installed(LNA=False, LOAD=True)
-            peltier.set_clamp(LNA=0.5, LOAD=0.6)
-            peltier.set_cooling_enabled(LNA=False, LOAD=True)
-            peltier.set_gains(LNA_Kp=0.25, LNA_Ki=0.01)
-            peltier.set_temperature(
-                T_LNA=25.0, LNA_hyst=0.3, T_LOAD=28.0, LOAD_hyst=0.4
-            )
-            peltier.set_enable(LNA=True, LOAD=False)
+            tempctrl.set_watchdog_timeout(15000)
+            tempctrl.set_installed(LOAD=True)
+            tempctrl.set_temperature(T_LOAD=28.0, LOAD_hyst=0.4)
+            tempctrl.set_enable(LOAD=False)
 
             sent = []
-            original = peltier.send_command
+            original = tempctrl.send_command
 
             def spy(cmd):
                 sent.append(dict(cmd))
                 return original(cmd)
 
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.on_reconnect()
+            tempctrl.send_command = spy  # type: ignore[method-assign]
+            tempctrl.on_reconnect()
 
             assert sent == [
                 {"watchdog_timeout_ms": 15000},
-                {"LNA_installed": False, "LOAD_installed": True},
-                {"LNA_clamp": 0.5, "LOAD_clamp": 0.6},
-                {
-                    "LNA_cooling_enabled": False,
-                    "LOAD_cooling_enabled": True,
-                },
-                {"LNA_Kp": 0.25, "LNA_Ki": 0.01},
-                {
-                    "LNA_temp_target": 25.0,
-                    "LNA_hysteresis": 0.3,
-                    "LOAD_temp_target": 28.0,
-                    "LOAD_hysteresis": 0.4,
-                },
-                {"LNA_enable": True, "LOAD_enable": False},
+                {"LOAD_installed": True},
+                {"LOAD_temp_target": 28.0, "LOAD_hysteresis": 0.4},
+                {"LOAD_enable": False},
             ]
         finally:
-            peltier.disconnect()
-
-    def test_set_cooling_enabled_partial_no_command(self):
-        """``set_cooling_enabled()`` with both args None must not touch
-        the wire or the replay cache — matches the shape shared by
-        ``set_temperature`` / ``set_clamp`` / ``set_gains`` / and
-        ``reset_integral``."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
-        try:
-            sent = []
-            original = peltier.send_command
-
-            def spy(cmd):
-                sent.append(dict(cmd))
-                return original(cmd)
-
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.set_cooling_enabled()
-            assert sent == []
-            assert peltier._last_cooling == {}
-        finally:
-            peltier.disconnect()
-
-    def test_set_cooling_enabled_round_trip(self):
-        """Single-channel set forwards just that channel and updates the
-        cache; second call on the other channel merges into the cache."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
-        try:
-            peltier.set_cooling_enabled(LNA=False)
-            assert peltier._last_cooling == {"LNA_cooling_enabled": False}
-            peltier.set_cooling_enabled(LOAD=True)
-            assert peltier._last_cooling == {
-                "LNA_cooling_enabled": False,
-                "LOAD_cooling_enabled": True,
-            }
-        finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_on_reconnect_skips_unset_groups(self):
         """Groups never configured by the host aren't replayed."""
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        tempctrl = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
-            peltier.set_clamp(LNA=0.5)
+            tempctrl.set_installed(LOAD=True)
 
             sent = []
-            original = peltier.send_command
+            original = tempctrl.send_command
 
             def spy(cmd):
                 sent.append(dict(cmd))
                 return original(cmd)
 
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier.on_reconnect()
+            tempctrl.send_command = spy  # type: ignore[method-assign]
+            tempctrl.on_reconnect()
 
-            assert sent == [{"LNA_clamp": 0.5}]
+            assert sent == [{"LOAD_installed": True}]
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_on_reconnect_restarts_keepalive(self):
         """Keepalive thread is re-armed even if no config was ever set."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            peltier._keepalive_running = False
-            peltier._keepalive_thread = None
-            peltier.on_reconnect()
-            assert peltier._keepalive_running is True
-            assert peltier._keepalive_thread is not None
+            tempctrl._keepalive_running = False
+            tempctrl._keepalive_thread = None
+            tempctrl.on_reconnect()
+            assert tempctrl._keepalive_running is True
+            assert tempctrl._keepalive_thread is not None
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_reader_thread_self_heal_replays_config(self):
         """Reader-thread reconnect replays cached config, not just reopen.
@@ -1036,41 +824,45 @@ class TestPicoPeltierReconnectReplay:
         than PicoManager's health check was silently left at firmware
         defaults.
         """
-        peltier = DummyPicoPeltier("/dev/dummy", keepalive_interval=0)
+        tempctrl = DummyPicoTempCtrl("/dev/dummy", keepalive_interval=0)
         try:
-            peltier.set_watchdog_timeout(15000)
-            peltier.set_clamp(LNA=0.5, LOAD=0.6)
-            peltier.set_enable(LNA=True, LOAD=False)
+            tempctrl.set_watchdog_timeout(15000)
+            tempctrl.set_temperature(T_LOAD=30.0, LOAD_hyst=0.6)
+            tempctrl.set_enable(LOAD=False)
 
             sent = []
-            original = peltier.send_command
+            original = tempctrl.send_command
 
             def spy(cmd):
                 sent.append(dict(cmd))
                 return original(cmd)
 
-            peltier.send_command = spy  # type: ignore[method-assign]
-            peltier._open_serial = lambda: True  # type: ignore[method-assign]
+            tempctrl.send_command = spy  # type: ignore[method-assign]
+            tempctrl._open_serial = lambda: True  # type: ignore[method-assign]
 
             # _attempt_reopen is exactly what the reader thread calls on
             # a drop (see base.py::_reader_thread_func).
-            assert peltier._attempt_reopen() is True
+            assert tempctrl._attempt_reopen() is True
 
             assert {"watchdog_timeout_ms": 15000} in sent
-            assert {"LNA_clamp": 0.5, "LOAD_clamp": 0.6} in sent
-            assert {"LNA_enable": True, "LOAD_enable": False} in sent
+            assert {
+                "LOAD_temp_target": 30.0,
+                "LOAD_hysteresis": 0.6,
+            } in sent
+            assert {"LOAD_enable": False} in sent
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
 
-class TestPicoPeltierRedisHandler:
-    """Verify _peltier_redis_handler fans the firmware tick into two streams.
+class TestPicoTempCtrlRedisHandler:
+    """Verify _tempctrl_redis_handler republishes the firmware tick as the
+    single ``tempctrl_load`` stream.
 
     The firmware emits one combined dict per status tick (sensor_name
-    "tempctrl", flat LNA_*/LOAD_* fields, device-wide watchdog_*). The
-    handler must publish two streams ("tempctrl_lna" and "tempctrl_load"),
-    each carrying a top-level ``status`` derived from the matching
-    ``{channel}_status`` and the device-wide watchdog fields duplicated.
+    "tempctrl", flat LOAD_* fields, device-wide watchdog_*). The handler
+    must publish the ``tempctrl_load`` stream carrying a top-level
+    ``status`` derived from ``LOAD_status`` and the device-wide watchdog
+    fields duplicated.
     """
 
     _SCALAR_TYPES = (str, int, float, bool, type(None))
@@ -1080,35 +872,12 @@ class TestPicoPeltierRedisHandler:
         "app_id": 1,
         "watchdog_tripped": False,
         "watchdog_timeout_ms": 30000,
-        # Device-payload presence flags (never copied into the published
-        # streams; an explicit False suppresses that channel's stream).
-        "LNA_installed": True,
+        # Device-payload presence flag (never copied into the published
+        # stream; an explicit False suppresses the stream).
         "LOAD_installed": True,
-        "LNA_status": "update",
-        "LNA_T_now": 25.4,
-        "LNA_voltage": 2.51,
-        "LNA_resistance": 37200.0,
-        "LNA_timestamp": 750.0,
-        "LNA_T_target": 25.0,
-        "LNA_drive_level": 0.42,
-        "LNA_enabled": True,
-        "LNA_active": True,
-        "LNA_sensor_tripped": False,
-        "LNA_sensor_rejects": 1,
-        "LNA_stall_tripped": False,
-        "LNA_runaway_tripped": False,
-        "LNA_cooling_enabled": True,
-        "LNA_hysteresis": 0.5,
-        "LNA_clamp": 0.8,
-        "LNA_Kp": 0.2,
-        "LNA_Ki": 0.01,
-        "LNA_integral": 1.25,
         # LOAD models an invalid-data cycle (railed divider): status error,
         # null T_now/resistance, voltage live at the rail for open-vs-short
         # diagnosis. Trip flags stay False — data validity is not a latch.
-        # LOAD is a single low-side FET heater (on/off hysteresis, no PI
-        # loop), so unlike LNA there is no cooling_enabled/clamp/Kp/Ki/
-        # integral — firmware never sends those fields for this channel.
         "LOAD_status": "error",
         "LOAD_T_now": None,
         "LOAD_voltage": 3.3,
@@ -1125,7 +894,7 @@ class TestPicoPeltierRedisHandler:
         "LOAD_hysteresis": 0.5,
     }
 
-    _EXPECTED_LNA_KEYS = {
+    _EXPECTED_LOAD_KEYS = {
         "sensor_name",
         "app_id",
         "status",
@@ -1143,174 +912,142 @@ class TestPicoPeltierRedisHandler:
         "sensor_rejects",
         "stall_tripped",
         "runaway_tripped",
-        "cooling_enabled",
         "hysteresis",
-        "clamp",
-        "Kp",
-        "Ki",
-        "integral",
     }
 
-    # LOAD has no PI/bidirectional-drive fields (cooling_enabled, clamp,
-    # Kp, Ki, integral) — it's a single FET heater under on/off hysteresis.
-    _EXPECTED_LOAD_KEYS = _EXPECTED_LNA_KEYS - {
-        "cooling_enabled",
-        "clamp",
-        "Kp",
-        "Ki",
-        "integral",
-    }
-
-    def _capture_all(self, peltier, data):
+    def _capture_all(self, tempctrl, data):
         captured = []
-        peltier._base_redis_handler = (
+        tempctrl._base_redis_handler = (
             lambda d: captured.append(dict(d))  # type: ignore[method-assign]
         )
-        peltier._peltier_redis_handler(data)
+        tempctrl._tempctrl_redis_handler(data)
         return captured
 
-    def test_publishes_two_streams_per_tick(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+    def test_publishes_one_stream_per_tick(self):
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            published = self._capture_all(peltier, self._SAMPLE)
-            assert len(published) == 2
-            names = [p["sensor_name"] for p in published]
-            assert names == ["tempctrl_lna", "tempctrl_load"]
+            published = self._capture_all(tempctrl, self._SAMPLE)
+            assert len(published) == 1
+            assert published[0]["sensor_name"] == "tempctrl_load"
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_channel_status_derived_from_prefixed_status(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            lna, load = self._capture_all(peltier, self._SAMPLE)
-            assert lna["status"] == "update"
+            (load,) = self._capture_all(tempctrl, self._SAMPLE)
             assert load["status"] == "error"
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_channel_fields_have_prefix_stripped(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            lna, load = self._capture_all(peltier, self._SAMPLE)
-            assert lna["T_now"] == pytest.approx(25.4)
-            assert lna["voltage"] == pytest.approx(2.51)
-            assert lna["resistance"] == pytest.approx(37200.0)
-            assert lna["drive_level"] == pytest.approx(0.42)
-            assert lna["active"] is True
-            assert lna["sensor_tripped"] is False
-            assert lna["sensor_rejects"] == 1
-            assert lna["runaway_tripped"] is False
+            (load,) = self._capture_all(tempctrl, self._SAMPLE)
             assert load["T_now"] is None
             assert load["resistance"] is None
             assert load["voltage"] == pytest.approx(3.3)
             assert load["active"] is False
             assert load["sensor_tripped"] is False
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_watchdog_fields_duplicated(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            lna, load = self._capture_all(peltier, self._SAMPLE)
-            for entry in (lna, load):
-                assert entry["watchdog_tripped"] is False
-                assert entry["watchdog_timeout_ms"] == 30000
-                assert entry["app_id"] == 1
+            (load,) = self._capture_all(tempctrl, self._SAMPLE)
+            assert load["watchdog_tripped"] is False
+            assert load["watchdog_timeout_ms"] == 30000
+            assert load["app_id"] == 1
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_published_shape_stable_across_channel_state(self):
-        """Each stream exposes a stable key set regardless of values —
-        LNA and LOAD have different key sets (different actuators: a
-        Peltier under PI control vs. a single FET heater), but each is
-        internally stable."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        """The stream exposes a stable key set regardless of values."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            lna, load = self._capture_all(peltier, self._SAMPLE)
-            assert set(lna) == self._EXPECTED_LNA_KEYS
+            (load,) = self._capture_all(tempctrl, self._SAMPLE)
             assert set(load) == self._EXPECTED_LOAD_KEYS
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_published_dict_is_scalar_only(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            for entry in self._capture_all(peltier, self._SAMPLE):
+            for entry in self._capture_all(tempctrl, self._SAMPLE):
                 for k, v in entry.items():
                     assert isinstance(v, self._SCALAR_TYPES), (
                         f"field {k!r} has non-scalar type {type(v).__name__}"
                     )
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_uninstalled_channel_stream_suppressed(self):
-        """A channel whose {prefix}_installed is False publishes nothing:
-        the descoped-hardware contract is clean stream absence downstream
-        (no column in corr files, no staleness warnings), not a
+        """A channel whose LOAD_installed is False publishes nothing: the
+        descoped-hardware contract is clean stream absence downstream (no
+        column in corr files, no staleness warnings), not a
         permanently-errored stream."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             data = dict(self._SAMPLE)
-            data["LNA_installed"] = False
-            published = self._capture_all(peltier, data)
-            assert [p["sensor_name"] for p in published] == ["tempctrl_load"]
+            data["LOAD_installed"] = False
+            published = self._capture_all(tempctrl, data)
+            assert published == []
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
-    def test_missing_installed_flags_publish_both(self):
-        """Fail-safe polarity: only an explicit False suppresses a
-        stream. A payload without the flags (pre-installed-flag
-        firmware) publishes both, so a firmware field-drop bug can
-        never silently look like 'uninstalled'."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+    def test_missing_installed_flag_publishes(self):
+        """Fail-safe polarity: only an explicit False suppresses the
+        stream. A payload without the flag (pre-installed-flag firmware)
+        still publishes, so a firmware field-drop bug can never silently
+        look like 'uninstalled'."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             data = {
                 k: v
                 for k, v in self._SAMPLE.items()
-                if k not in ("LNA_installed", "LOAD_installed")
+                if k != "LOAD_installed"
             }
-            published = self._capture_all(peltier, data)
+            published = self._capture_all(tempctrl, data)
             assert [p["sensor_name"] for p in published] == [
-                "tempctrl_lna",
-                "tempctrl_load",
+                "tempctrl_load"
             ]
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
-    def test_installed_flag_not_in_published_streams(self):
+    def test_installed_flag_not_in_published_stream(self):
         """installed is a device-payload flag, not a stream field — the
-        published per-channel shape is unchanged (consumer schemas and
-        golden fixtures stay untouched)."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        published shape is unchanged (consumer schemas and golden
+        fixtures stay untouched)."""
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            for entry in self._capture_all(peltier, self._SAMPLE):
+            for entry in self._capture_all(tempctrl, self._SAMPLE):
                 assert "installed" not in entry
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_handler_does_not_mutate_input(self):
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             data = dict(self._SAMPLE)
             original = dict(self._SAMPLE)
-            self._capture_all(peltier, data)
+            self._capture_all(tempctrl, data)
             assert data == original
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
     def test_missing_fields_publish_none(self):
         """Channel status absent from the source dict publishes None."""
-        peltier = DummyPicoPeltier("/dev/dummy")
+        tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             partial = {"sensor_name": "tempctrl", "app_id": 1}
-            lna, load = self._capture_all(peltier, partial)
-            assert lna["status"] is None
+            (load,) = self._capture_all(tempctrl, partial)
             assert load["status"] is None
-            assert lna["T_now"] is None
-            assert lna["watchdog_tripped"] is None
-            assert lna["watchdog_timeout_ms"] is None
+            assert load["T_now"] is None
+            assert load["watchdog_tripped"] is None
+            assert load["watchdog_timeout_ms"] is None
         finally:
-            peltier.disconnect()
+            tempctrl.disconnect()
 
 
 class TestLidarRedisHandler:

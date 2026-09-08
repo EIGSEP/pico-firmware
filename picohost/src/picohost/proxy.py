@@ -18,8 +18,8 @@ Usage::
     sw.send_command("switch", state="RFANT")   # routed via PicoManager
     sw.is_available                             # True if heartbeat alive
 
-    peltier = PicoProxy("tempctrl", transport)
-    peltier.send_command("set_temperature", T_LNA=25, T_LOAD=25)
+    heater = PicoProxy("tempctrl", transport)
+    heater.send_command("set_temperature", T_LOAD=25)
 """
 
 import json

@@ -9,7 +9,7 @@ __version__ = version("picohost")
 from .base import (
     PicoDevice,
     PicoRFSwitch,
-    PicoPeltier,
+    PicoTempCtrl,
     PicoIMU,
     PicoLidar,
     PicoPotentiometer,
@@ -24,7 +24,7 @@ __all__ = [
     "PicoDevice",
     "PicoMotor",
     "PicoRFSwitch",
-    "PicoPeltier",
+    "PicoTempCtrl",
     "PicoIMU",
     "PicoLidar",
     "PicoPotentiometer",

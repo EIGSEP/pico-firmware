@@ -30,7 +30,7 @@ from picohost.keys import (
 from picohost.manager import HEARTBEAT_TTL, PicoManager
 from picohost.testing import (
     DummyPicoMotor,
-    DummyPicoPeltier,
+    DummyPicoTempCtrl,
     DummyPicoRFSwitch,
 )
 
@@ -227,8 +227,8 @@ class TestCommandRelay:
         )
         assert settled == 300
 
-    def test_peltier_target_set(self, mgr):
-        pico = _attach(mgr, "tempctrl", DummyPicoPeltier)
+    def test_tempctrl_target_set(self, mgr):
+        pico = _attach(mgr, "tempctrl", DummyPicoTempCtrl)
         wait_for_condition(
             lambda: pico.last_status_time is not None,
             cadence_ms=CADENCE_MS,
@@ -240,15 +240,15 @@ class TestCommandRelay:
                 "cmd": json.dumps(
                     {
                         "action": "set_temperature",
-                        "T_LNA": 30.0,
-                        "LNA_hyst": 0.5,
+                        "T_LOAD": 30.0,
+                        "LOAD_hyst": 0.5,
                     }
                 ),
                 "source": "test",
             },
         )
         wait_for_condition(
-            lambda: pico.last_status.get("LNA_T_target") == 30.0,
+            lambda: pico.last_status.get("LOAD_T_target") == 30.0,
             cadence_ms=CADENCE_MS,
             max_cycles=10,
         )

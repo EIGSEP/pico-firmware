@@ -47,7 +47,7 @@ from .base import (
     PicoDevice,
     PicoIMU,
     PicoLidar,
-    PicoPeltier,
+    PicoTempCtrl,
     PicoPotentiometer,
     PicoRFSwitch,
 )
@@ -86,7 +86,7 @@ APP_IDS = {v: k for k, v in APP_NAMES.items()}
 # Map device name to picohost class.
 PICO_CLASSES = {
     "motor": PicoMotor,
-    "tempctrl": PicoPeltier,
+    "tempctrl": PicoTempCtrl,
     "potmon": PicoPotentiometer,
     "imu_el": PicoIMU,
     "lidar": PicoLidar,

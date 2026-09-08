@@ -640,14 +640,17 @@ class PicoRFSwitch(PicoDevice):
         self.logger.info(f"Switched to {state}.")
 
 
-class PicoPeltier(PicoDevice):
-    """Specialized class for Peltier temperature control Pico devices.
+class PicoTempCtrl(PicoDevice):
+    """Specialized class for the LOAD temperature-control Pico device.
 
-    Sends periodic keepalive commands to prevent the firmware communication
-    watchdog from tripping and disabling the peltiers. Caches the last
-    config pushed by each setter and replays it in :meth:`on_reconnect`
-    so a pico reboot (brownout, firmware watchdog, picotool re-flash)
-    doesn't leave the firmware running on defaults.
+    LOAD is a single low-side N-FET heater driven by on/off hysteresis
+    control against an NTC thermistor — there is no PI loop and no
+    reverse (cooling) direction. Sends periodic keepalive commands to
+    prevent the firmware communication watchdog from tripping and
+    disabling the heater. Caches the last config pushed by each setter
+    and replays it in :meth:`on_reconnect` so a pico reboot (brownout,
+    firmware watchdog, picotool re-flash) doesn't leave the firmware
+    running on defaults.
     """
 
     def __init__(
@@ -683,9 +686,6 @@ class PicoPeltier(PicoDevice):
         self._keepalive_interval = keepalive_interval
         self._last_watchdog_timeout_ms = None
         self._last_installed = {}
-        self._last_clamp = {}
-        self._last_cooling = {}
-        self._last_gains = {}
         self._last_temperature = {}
         self._last_enable = None
         super().__init__(
@@ -698,35 +698,11 @@ class PicoPeltier(PicoDevice):
         )
         if self.redis_handler is not None:
             self._base_redis_handler = self.redis_handler
-            self.redis_handler = self._peltier_redis_handler
+            self.redis_handler = self._tempctrl_redis_handler
         self._start_keepalive()
 
-    _PELTIER_CHANNEL_FIELDS = (
-        "T_now",
-        "voltage",
-        "resistance",
-        "timestamp",
-        "T_target",
-        "drive_level",
-        "enabled",
-        "active",
-        "sensor_tripped",
-        "sensor_rejects",
-        "stall_tripped",
-        "runaway_tripped",
-        "cooling_enabled",
-        "hysteresis",
-        "clamp",
-        "Kp",
-        "Ki",
-        "integral",
-    )
-    # LOAD is a single low-side FET heater (on/off hysteresis), not a
-    # Peltier under PI control, so it has no clamp/Kp/Ki/integral/
-    # cooling_enabled — those are PI/bidirectional-drive concepts a
-    # single FET doesn't have. See LoadHeater in tempctrl.h /
-    # eigsep_observing.io._LOAD_HEATER_SCHEMA for the field set this
-    # mirrors.
+    # See LoadHeater in tempctrl.h / eigsep_observing.io._LOAD_HEATER_SCHEMA
+    # for the field set this mirrors.
     _LOAD_HEATER_FIELDS = (
         "T_now",
         "voltage",
@@ -742,17 +718,10 @@ class PicoPeltier(PicoDevice):
         "runaway_tripped",
         "hysteresis",
     )
-    _PELTIER_STREAMS = (
-        ("LNA", "tempctrl_lna", _PELTIER_CHANNEL_FIELDS),
-        ("LOAD", "tempctrl_load", _LOAD_HEATER_FIELDS),
-    )
 
-    # The union of _PELTIER_CHANNEL_FIELDS and _LOAD_HEATER_FIELDS the
-    # firmware emits as KV_FLOAT (src/tempctrl.c status tick) — keep in
-    # sync when adding channel fields. Coerced under their published
-    # (unprefixed) names, i.e. after the LNA_/LOAD_ fan-out. A field only
-    # LNA publishes (e.g. "clamp") is a harmless no-op key for the LOAD
-    # entry, which never has it.
+    # The fields the firmware emits as KV_FLOAT (src/tempctrl.c status
+    # tick) — keep in sync when adding fields. Coerced under their
+    # published (unprefixed) names, i.e. after the LOAD_ fan-out.
     _REDIS_FLOAT_FIELDS = (
         "T_now",
         "voltage",
@@ -761,54 +730,41 @@ class PicoPeltier(PicoDevice):
         "T_target",
         "drive_level",
         "hysteresis",
-        "clamp",
-        "Kp",
-        "Ki",
-        "integral",
     )
 
-    def _peltier_redis_handler(self, data):
-        """Fan out the combined tempctrl status dict into two Redis streams.
+    def _tempctrl_redis_handler(self, data):
+        """Republish the firmware's ``LOAD_*``-prefixed status dict as the
+        ``tempctrl_load`` Redis stream.
 
-        The firmware emits one combined message per status tick with
-        ``LNA_*`` / ``LOAD_*`` prefixed fields plus the device-wide
-        watchdog state. We publish two streams (``tempctrl_lna``,
-        ``tempctrl_load``), each matching the standard one-stream-per-
-        sensor schema with a top-level ``status`` derived from the
-        channel's ``LNA_status`` / ``LOAD_status``. The device-wide
-        watchdog fields are duplicated into both streams; both come from
-        the same firmware tick so a momentary tick-to-tick disagreement
-        is harmless. LNA and LOAD publish different field sets (LOAD has
-        no PI/clamp/cooling_enabled fields — see _LOAD_HEATER_FIELDS)
-        since they're physically different actuators (Peltier vs. a
-        single FET heater), not just different tuning of the same thing.
+        The firmware emits one message per status tick with ``LOAD_*``
+        prefixed fields plus the device-wide watchdog state; this strips
+        the prefix and matches the standard one-stream-per-sensor schema
+        with a top-level ``status`` derived from ``LOAD_status``.
         """
         app_id = data.get("app_id")
         watchdog_tripped = data.get("watchdog_tripped")
         watchdog_timeout_ms = data.get("watchdog_timeout_ms")
-        for prefix, stream, fields in self._PELTIER_STREAMS:
-            # Descoped hardware publishes nothing: a channel marked not
-            # installed is absent downstream (no corr-file column, no
-            # staleness warnings) instead of streaming status="error"
-            # forever off its dead thermistor divider. Fail-safe
-            # polarity: only an explicit False suppresses — a payload
-            # missing the flag (pre-installed-flag firmware) publishes
-            # both, so a firmware field-drop bug can never silently
-            # masquerade as "uninstalled". The flag itself is never
-            # copied into the stream (not in `fields`), so the published
-            # per-channel shape is unchanged.
-            if data.get(f"{prefix}_installed") is False:
-                continue
-            out = {
-                "sensor_name": stream,
-                "app_id": app_id,
-                "status": data.get(f"{prefix}_status"),
-                "watchdog_tripped": watchdog_tripped,
-                "watchdog_timeout_ms": watchdog_timeout_ms,
-            }
-            for k in fields:
-                out[k] = data.get(f"{prefix}_{k}")
-            self._base_redis_handler(out)
+        # Descoped hardware publishes nothing: a channel marked not
+        # installed is absent downstream (no corr-file column, no
+        # staleness warnings) instead of streaming status="error"
+        # forever off its dead thermistor divider. Fail-safe polarity:
+        # only an explicit False suppresses — a payload missing the flag
+        # (pre-installed-flag firmware) still publishes, so a firmware
+        # field-drop bug can never silently masquerade as "uninstalled".
+        # The flag itself is never copied into the stream (not in
+        # _LOAD_HEATER_FIELDS), so the published shape is unchanged.
+        if data.get("LOAD_installed") is False:
+            return
+        out = {
+            "sensor_name": "tempctrl_load",
+            "app_id": app_id,
+            "status": data.get("LOAD_status"),
+            "watchdog_tripped": watchdog_tripped,
+            "watchdog_timeout_ms": watchdog_timeout_ms,
+        }
+        for k in self._LOAD_HEATER_FIELDS:
+            out[k] = data.get(f"LOAD_{k}")
+        self._base_redis_handler(out)
 
     def _start_keepalive(self):
         """Start the background keepalive thread (idempotent)."""
@@ -855,16 +811,12 @@ class PicoPeltier(PicoDevice):
         (hard watchdog, brownout, picotool re-flash via BOOTSEL) drops
         USB CDC, so reader-thread reconnect coincides with the firmware
         coming up at defaults. Replay whatever the host most recently
-        pushed in a safe order: watchdog → installed → clamp →
-        cooling_enabled → gains → temperature → enable. installed lands
-        right after the watchdog so a descoped channel is gated (no
-        sampling, no drive) before any drive-producing config arrives —
-        the firmware reboots to installed=true defaults. cooling_enabled
-        lands between clamp and gains so the asymmetric-clamp safety
-        setting is in place before any drive can result from the next
-        setpoint. Gains land before temperature so the channel is fully
-        tuned the instant it goes active. Keepalive starts last so the
-        firmware watchdog is configured before we start pinging it.
+        pushed in a safe order: watchdog → installed → temperature →
+        enable. installed lands right after the watchdog so a descoped
+        channel is gated (no sampling, no drive) before any
+        drive-producing config arrives — the firmware reboots to
+        installed=true by default. Keepalive starts last so the firmware
+        watchdog is configured before we start pinging it.
         """
         if self._last_watchdog_timeout_ms is not None:
             self.send_command(
@@ -872,12 +824,6 @@ class PicoPeltier(PicoDevice):
             )
         if self._last_installed:
             self.send_command(dict(self._last_installed))
-        if self._last_clamp:
-            self.send_command(dict(self._last_clamp))
-        if self._last_cooling:
-            self.send_command(dict(self._last_cooling))
-        if self._last_gains:
-            self.send_command(dict(self._last_gains))
         if self._last_temperature:
             self.send_command(dict(self._last_temperature))
         if self._last_enable is not None:
@@ -886,7 +832,7 @@ class PicoPeltier(PicoDevice):
 
     @property
     def watchdog_tripped(self):
-        """Whether the firmware watchdog has tripped and disabled the peltiers."""
+        """Whether the firmware watchdog has tripped and disabled the heater."""
         return self.last_status.get("watchdog_tripped", False)
 
     def set_watchdog_timeout(self, timeout_ms):
@@ -907,25 +853,19 @@ class PicoPeltier(PicoDevice):
         self.send_command({"watchdog_timeout_ms": timeout_ms})
         self._last_watchdog_timeout_ms = timeout_ms
 
-    def set_installed(self, LNA=None, LOAD=None):
-        """Mark a channel's hardware module present/absent.
+    def set_installed(self, LOAD=None):
+        """Mark the LOAD module hardware present/absent.
 
         ``False`` descopes the channel: firmware never samples its
-        thermistor (the ADC input is never mux-selected, so it cannot
-        crosstalk into the other channel) and never drives it, and the
-        redis fan-out suppresses its stream entirely — clean absence
-        downstream instead of a permanent ``status="error"`` stream
-        from a disconnected divider. Distinct from :meth:`set_enable`
-        (drive intent for present hardware). Not a trip ack: sticky
-        latches survive uninstall and clear only via ``set_enable``.
-        Firmware default after reboot is ``True`` (both installed);
-        cached for replay on reconnect.
+        thermistor and never drives it, and the redis fan-out suppresses
+        its stream entirely — clean absence downstream instead of a
+        permanent ``status="error"`` stream from a disconnected divider.
+        Distinct from :meth:`set_enable` (drive intent for present
+        hardware). Not a trip ack: sticky latches survive uninstall and
+        clear only via ``set_enable``. Firmware default after reboot is
+        ``True``; cached for replay on reconnect.
         """
         cmd = {}
-        if LNA is not None:
-            if not isinstance(LNA, bool):
-                raise TypeError("LNA must be a bool or None")
-            cmd["LNA_installed"] = LNA
         if LOAD is not None:
             if not isinstance(LOAD, bool):
                 raise TypeError("LOAD must be a bool or None")
@@ -934,14 +874,9 @@ class PicoPeltier(PicoDevice):
             self.send_command(cmd)
             self._last_installed.update(cmd)
 
-    def set_temperature(
-        self, T_LNA=None, LNA_hyst=0.5, T_LOAD=None, LOAD_hyst=0.5
-    ):
+    def set_temperature(self, T_LOAD=None, LOAD_hyst=0.5):
         """Set target temperature."""
         cmd = {}
-        if T_LNA is not None:
-            cmd["LNA_temp_target"] = T_LNA
-            cmd["LNA_hysteresis"] = LNA_hyst
         if T_LOAD is not None:
             cmd["LOAD_temp_target"] = T_LOAD
             cmd["LOAD_hysteresis"] = LOAD_hyst
@@ -949,97 +884,11 @@ class PicoPeltier(PicoDevice):
             self.send_command(cmd)
             self._last_temperature.update(cmd)
 
-    def set_enable(self, LNA=True, LOAD=True):
+    def set_enable(self, LOAD=True):
         """Enable temperature control."""
-        cmd = {"LNA_enable": LNA, "LOAD_enable": LOAD}
+        cmd = {"LOAD_enable": LOAD}
         self.send_command(cmd)
         self._last_enable = cmd
-
-    def set_clamp(self, LNA=None, LOAD=None):
-        """Set maximum drive level [0.0, 1.0], 0.2 default.
-
-        LOAD is a single low-side FET heater (on/off hysteresis, no PWM
-        duty to clamp) — firmware silently ignores ``LOAD_clamp``. Kept
-        here as a no-op rather than raising, so a caller that applies the
-        same settings to both channels doesn't need a LOAD special case.
-        """
-        cmd = {}
-        if LNA is not None:
-            cmd["LNA_clamp"] = LNA
-        if LOAD is not None:
-            cmd["LOAD_clamp"] = LOAD
-        if cmd:
-            self.send_command(cmd)
-            self._last_clamp.update(cmd)
-
-    def set_cooling_enabled(self, LNA=None, LOAD=None):
-        """Allow/forbid negative (cooling) drive per channel.
-
-        ``False`` clamps drive to ``[0, +clamp]`` instead of
-        ``[-clamp, +clamp]`` firmware-side — the cooling-mode
-        thermal-runaway guard. Firmware default after reboot is
-        ``True`` (symmetric); deployments that cannot dissipate
-        Peltier heat should explicitly set this ``False`` on the
-        affected channel. Cached for replay on reconnect.
-
-        LOAD is a single low-side FET heater — it has no reverse
-        (cooling) direction to forbid, so firmware silently ignores
-        ``LOAD_cooling_enabled``. Kept here as a no-op rather than
-        raising, so a caller that applies the same settings to both
-        channels doesn't need a LOAD special case.
-        """
-        cmd = {}
-        if LNA is not None:
-            if not isinstance(LNA, bool):
-                raise TypeError("LNA must be a bool or None")
-            cmd["LNA_cooling_enabled"] = LNA
-        if LOAD is not None:
-            if not isinstance(LOAD, bool):
-                raise TypeError("LOAD must be a bool or None")
-            cmd["LOAD_cooling_enabled"] = LOAD
-        if cmd:
-            self.send_command(cmd)
-            self._last_cooling.update(cmd)
-
-    def set_gains(self, LNA_Kp=None, LNA_Ki=None, LOAD_Kp=None, LOAD_Ki=None):
-        """Set PI gains per channel.
-
-        Ki defaults to 0 in firmware, so the controller runs as pure
-        proportional + deadband until a host opts in. Cached for replay
-        on reconnect (firmware resets gains to defaults on reboot).
-
-        LOAD is a single low-side FET heater under on/off hysteresis
-        control, not a PI loop — firmware silently ignores
-        ``LOAD_Kp``/``LOAD_Ki``. Kept here as a no-op rather than
-        raising, so a caller that applies the same settings to both
-        channels doesn't need a LOAD special case.
-        """
-        cmd = {}
-        if LNA_Kp is not None:
-            cmd["LNA_Kp"] = LNA_Kp
-        if LNA_Ki is not None:
-            cmd["LNA_Ki"] = LNA_Ki
-        if LOAD_Kp is not None:
-            cmd["LOAD_Kp"] = LOAD_Kp
-        if LOAD_Ki is not None:
-            cmd["LOAD_Ki"] = LOAD_Ki
-        if cmd:
-            self.send_command(cmd)
-            self._last_gains.update(cmd)
-
-    def reset_integral(self, LNA=False, LOAD=False):
-        """Clear the PI integrator on the selected channel(s).
-
-        One-shot — not cached for replay (firmware reset clears the
-        integral implicitly).
-        """
-        cmd = {}
-        if LNA:
-            cmd["LNA_integral_reset"] = True
-        if LOAD:
-            cmd["LOAD_integral_reset"] = True
-        if cmd:
-            self.send_command(cmd)
 
 
 class PicoIMU(PicoDevice):

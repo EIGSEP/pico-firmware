@@ -3,7 +3,7 @@ import time
 from .base import (
     PicoDevice,
     PicoRFSwitch,
-    PicoPeltier,
+    PicoTempCtrl,
     PicoIMU,
     PicoLidar,
     PicoPotentiometer,
@@ -80,7 +80,7 @@ class DummyPicoRFSwitch(DummyPicoDevice, PicoRFSwitch):
         )
 
 
-class DummyPicoPeltier(DummyPicoDevice, PicoPeltier):
+class DummyPicoTempCtrl(DummyPicoDevice, PicoTempCtrl):
     EMULATOR_CLASS = TempCtrlEmulator
     EMULATOR_CADENCE_MS = 50.0
 

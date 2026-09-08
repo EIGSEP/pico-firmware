@@ -66,17 +66,17 @@ with PicoMotor("/dev/ttyACM0") as motor:
 ### Temperature Control
 
 ```python
-from picohost import PicoPeltier
+from picohost import PicoTempCtrl
 
-# Connect to temperature controller (DIP switch set to 001)
-with PicoPeltier("/dev/ttyACM0") as peltier:
-    # Set temperature to 25C on channel 1
-    peltier.set_temperature(25.0, channel=1)
-    peltier.enable(channel=1)
-    
+# Connect to temperature controller (DIP switch set to 001).
+# LOAD is a single low-side FET heater under on/off hysteresis control.
+with PicoTempCtrl("/dev/ttyACM0") as heater:
+    heater.set_temperature(T_LOAD=25.0)
+    heater.set_enable(LOAD=True)
+
     # Get current temperature readings
-    status = peltier.get_status()
-    print(f"Current temp: {status.get('temperature', 'N/A')}°C")
+    status = heater.get_status()
+    print(f"Current temp: {status.get('LOAD_T_now', 'N/A')}°C")
 ```
 
 ### RF Switch Control
@@ -110,7 +110,7 @@ The base class provides core functionality:
 
 **Currently implemented:**
 - **PicoMotor** - Stepper motor control (APP_MOTOR = 0)
-- **PicoPeltier** - Temperature control (APP_TEMPCTRL = 1)
+- **PicoTempCtrl** - Temperature control, LOAD channel only (APP_TEMPCTRL = 1)
 - **PicoRFSwitch** - RF switch control (APP_RFSWITCH = 5)
 
 **Firmware-only applications (no Python class yet):**
@@ -200,7 +200,7 @@ __all__.append("MyDevice")
 The firmware implements a multi-app dispatch system where DIP switches (GPIO 2,3,4) select which application runs:
 
 - **APP_MOTOR (0)** - Stepper motor control
-- **APP_TEMPCTRL (1)** - Temperature control with Peltier elements
+- **APP_TEMPCTRL (1)** - Temperature control (LOAD channel: FET heater, on/off hysteresis)
 - **APP_TEMPMON (2)** - Temperature monitoring only
 - **APP_IMU_EL (3)** - IMU sensor (elevation / board)
 - **APP_LIDAR (4)** - Lidar sensor interface  
@@ -220,7 +220,7 @@ Set GPIO pins 2, 3, 4 to select the application before powering on:
 | DIP (2,3,4) | Binary | App ID | Application | Python Class |
 |-------------|--------|--------|-------------|---------------|
 | 000 | 0 | APP_MOTOR | Motor control | PicoMotor |
-| 001 | 1 | APP_TEMPCTRL | Temperature controller | PicoPeltier |
+| 001 | 1 | APP_TEMPCTRL | Temperature controller | PicoTempCtrl |
 | 010 | 2 | APP_TEMPMON | Temperature monitor | *None* |
 | 011 | 3 | APP_IMU_EL | IMU sensor (elevation) | *None* |
 | 100 | 4 | APP_LIDAR | Lidar sensor | *None* |

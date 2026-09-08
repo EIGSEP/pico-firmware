@@ -23,7 +23,7 @@ from picohost.emulators.base import PicoEmulator
 from picohost.testing import (
     DummyPicoIMU,
     DummyPicoLidar,
-    DummyPicoPeltier,
+    DummyPicoTempCtrl,
     DummyPicoPotentiometer,
     DummyPicoRFSwitch,
 )
@@ -40,7 +40,7 @@ class FakeMetadataWriter:
 # Emulator-less dummies: the handler-chain tests below drive
 # dev.redis_handler() directly with firmware-shaped payloads, so a live
 # emulator would only interleave unrelated entries into the writer.
-class _QuietPeltier(DummyPicoPeltier):
+class _QuietTempCtrl(DummyPicoTempCtrl):
     def _make_emulator(self):
         return None
 
@@ -172,8 +172,8 @@ def _tempctrl_payload():
     routinely whole-valued KV_FLOAT collapsed to int, as cJSON emits.
 
     LOAD is a single low-side FET heater (on/off hysteresis, no PI
-    loop), so unlike LNA it has no cooling_enabled/clamp/Kp/Ki/integral
-    fields at all — firmware never sends them for this channel.
+    loop), so it has no cooling_enabled/clamp/Kp/Ki/integral fields at
+    all — firmware never sends them.
     """
     payload = {
         "sensor_name": "tempctrl",
@@ -181,32 +181,22 @@ def _tempctrl_payload():
         "watchdog_tripped": False,
         "watchdog_timeout_ms": 30000,
     }
-    for ch in ("LNA", "LOAD"):
-        payload.update(
-            {
-                f"{ch}_status": "update",
-                f"{ch}_T_now": 29.87,
-                f"{ch}_voltage": 1.234,
-                f"{ch}_resistance": 10234.5,
-                f"{ch}_timestamp": 1234,  # uint32 cast: whole on every tick
-                f"{ch}_T_target": 30,
-                f"{ch}_drive_level": 0,
-                f"{ch}_installed": True,
-                f"{ch}_enabled": True,
-                f"{ch}_active": False,
-                f"{ch}_sensor_tripped": False,
-                f"{ch}_stall_tripped": False,
-                f"{ch}_runaway_tripped": False,
-                f"{ch}_hysteresis": 1,
-            }
-        )
     payload.update(
         {
-            "LNA_cooling_enabled": False,
-            "LNA_clamp": 1,
-            "LNA_Kp": 2,
-            "LNA_Ki": 0,
-            "LNA_integral": 0,
+            "LOAD_status": "update",
+            "LOAD_T_now": 29.87,
+            "LOAD_voltage": 1.234,
+            "LOAD_resistance": 10234.5,
+            "LOAD_timestamp": 1234,  # uint32 cast: whole on every tick
+            "LOAD_T_target": 30,
+            "LOAD_drive_level": 0,
+            "LOAD_installed": True,
+            "LOAD_enabled": True,
+            "LOAD_active": False,
+            "LOAD_sensor_tripped": False,
+            "LOAD_stall_tripped": False,
+            "LOAD_runaway_tripped": False,
+            "LOAD_hysteresis": 1,
         }
     )
     return payload
@@ -222,15 +212,11 @@ TEMPCTRL_FLOAT_FIELDS = (
     "hysteresis",
 )
 
-# LNA-only: PI/bidirectional-drive fields LOAD (a single FET heater, on/off
-# hysteresis) doesn't have.
-TEMPCTRL_LNA_ONLY_FLOAT_FIELDS = ("clamp", "Kp", "Ki", "integral")
-
 
 class TestDeviceHandlersCoerce:
-    def test_peltier_streams_publish_floats(self):
+    def test_tempctrl_stream_publishes_floats(self):
         writer = FakeMetadataWriter()
-        dev = _QuietPeltier(
+        dev = _QuietTempCtrl(
             "/dev/dummy", metadata_writer=writer, keepalive_interval=0
         )
         try:
@@ -238,7 +224,7 @@ class TestDeviceHandlersCoerce:
         finally:
             dev.disconnect()
         published = dict(writer.received)
-        assert set(published) == {"tempctrl_lna", "tempctrl_load"}
+        assert set(published) == {"tempctrl_load"}
         for stream, data in published.items():
             for key in TEMPCTRL_FLOAT_FIELDS:
                 assert isinstance(data[key], float), f"{stream}:{key}"
@@ -247,9 +233,6 @@ class TestDeviceHandlersCoerce:
             assert isinstance(data["watchdog_timeout_ms"], int)
             assert data["enabled"] is True
             assert data["status"] == "update"
-        for key in TEMPCTRL_LNA_ONLY_FLOAT_FIELDS:
-            assert isinstance(published["tempctrl_lna"][key], float), key
-            assert key not in published["tempctrl_load"]
 
     def test_imu_publishes_floats(self):
         writer = FakeMetadataWriter()
@@ -346,23 +329,22 @@ class TestDeviceHandlersCoerce:
 # --- 4. End-to-end: emulator collapse -> parse -> coerce -> publish ---
 
 
-def test_dummy_peltier_round_trip_publishes_floats():
-    """Full-pipeline #148 regression. The tempctrl emulator's defaults
-    (T_target=30.0, Ki=0.0, integral=0.0) are exactly the whole values
-    that cJSON collapses; after the round trip they must still publish
-    as floats."""
+def test_dummy_tempctrl_round_trip_publishes_floats():
+    """Full-pipeline #148 regression. The tempctrl emulator's default
+    T_target=30.0 is exactly the whole value that cJSON collapses; after
+    the round trip it must still publish as a float."""
     writer = FakeMetadataWriter()
-    dev = DummyPicoPeltier(
+    dev = DummyPicoTempCtrl(
         "/dev/dummy", metadata_writer=writer, keepalive_interval=0
     )
     try:
         wait_for_condition(
-            lambda: any(n == "tempctrl_lna" for n, _ in writer.received),
+            lambda: any(n == "tempctrl_load" for n, _ in writer.received),
             cadence_ms=dev.EMULATOR_CADENCE_MS,
         )
     finally:
         dev.disconnect()
-    data = next(d for n, d in writer.received if n == "tempctrl_lna")
+    data = next(d for n, d in writer.received if n == "tempctrl_load")
     assert data["T_target"] == 30.0
-    for key in ("T_target", "Ki", "integral", "drive_level"):
+    for key in ("T_target", "drive_level"):
         assert isinstance(data[key], float), key
