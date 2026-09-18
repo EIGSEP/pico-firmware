@@ -197,6 +197,18 @@ def _tempctrl_payload():
             "LOAD_stall_tripped": False,
             "LOAD_runaway_tripped": False,
             "LOAD_hysteresis": 1,
+            # LNA1/LNA2: read-only thermistors, whole-valued to exercise
+            # the same int->float coercion as LOAD's fields.
+            "LNA1_status": "update",
+            "LNA1_T_now": 24,
+            "LNA1_voltage": 1,
+            "LNA1_resistance": 32000,
+            "LNA1_timestamp": 1234,
+            "LNA2_status": "update",
+            "LNA2_T_now": 26,
+            "LNA2_voltage": 1,
+            "LNA2_resistance": 30500,
+            "LNA2_timestamp": 1234,
         }
     )
     return payload
@@ -212,6 +224,10 @@ TEMPCTRL_FLOAT_FIELDS = (
     "hysteresis",
 )
 
+# LNA1/LNA2 publish the same field names as LOAD but without the
+# control-only ones (no T_target/drive_level/hysteresis to report).
+LNA_FLOAT_FIELDS = ("T_now", "voltage", "resistance", "timestamp")
+
 
 class TestDeviceHandlersCoerce:
     def test_tempctrl_stream_publishes_floats(self):
@@ -224,14 +240,25 @@ class TestDeviceHandlersCoerce:
         finally:
             dev.disconnect()
         published = dict(writer.received)
-        assert set(published) == {"tempctrl_load"}
-        for stream, data in published.items():
-            for key in TEMPCTRL_FLOAT_FIELDS:
+        assert set(published) == {
+            "tempctrl_load",
+            "tempctrl_lna1",
+            "tempctrl_lna2",
+        }
+        load = published["tempctrl_load"]
+        for key in TEMPCTRL_FLOAT_FIELDS:
+            assert isinstance(load[key], float), f"tempctrl_load:{key}"
+        # Non-float fields keep their firmware types.
+        assert load["watchdog_tripped"] is False
+        assert isinstance(load["watchdog_timeout_ms"], int)
+        assert load["enabled"] is True
+        assert load["status"] == "update"
+        for stream in ("tempctrl_lna1", "tempctrl_lna2"):
+            data = published[stream]
+            for key in LNA_FLOAT_FIELDS:
                 assert isinstance(data[key], float), f"{stream}:{key}"
-            # Non-float fields keep their firmware types.
             assert data["watchdog_tripped"] is False
             assert isinstance(data["watchdog_timeout_ms"], int)
-            assert data["enabled"] is True
             assert data["status"] == "update"
 
     def test_imu_publishes_floats(self):

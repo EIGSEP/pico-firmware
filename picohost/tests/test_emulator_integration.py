@@ -55,6 +55,16 @@ TEMPCTRL_FIELDS = {
     "LOAD_stall_tripped",
     "LOAD_runaway_tripped",
     "LOAD_hysteresis",
+    "LNA1_status",
+    "LNA1_T_now",
+    "LNA1_voltage",
+    "LNA1_resistance",
+    "LNA1_timestamp",
+    "LNA2_status",
+    "LNA2_T_now",
+    "LNA2_voltage",
+    "LNA2_resistance",
+    "LNA2_timestamp",
 }
 
 IMU_FIELDS = {

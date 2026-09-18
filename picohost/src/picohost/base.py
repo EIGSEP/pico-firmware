@@ -641,7 +641,8 @@ class PicoRFSwitch(PicoDevice):
 
 
 class PicoTempCtrl(PicoDevice):
-    """Specialized class for the LOAD temperature-control Pico device.
+    """Specialized class for the tempctrl Pico device: the LOAD
+    temperature-control channel plus two read-only LNA thermistors.
 
     LOAD is a single low-side N-FET heater driven by on/off hysteresis
     control against an NTC thermistor — there is no PI loop and no
@@ -651,6 +652,12 @@ class PicoTempCtrl(PicoDevice):
     and replays it in :meth:`on_reconnect` so a pico reboot (brownout,
     firmware watchdog, picotool re-flash) doesn't leave the firmware
     running on defaults.
+
+    LNA1/LNA2 are plain thermistor readouts on two of the LNAs — no
+    heater, no target/hysteresis, no enable, no trip latches, and
+    (unlike LOAD) no ``installed`` descope flag, so they always
+    publish. There is nothing to command for them: no setters, no
+    reconnect replay.
     """
 
     def __init__(
@@ -719,9 +726,22 @@ class PicoTempCtrl(PicoDevice):
         "hysteresis",
     )
 
+    # See LnaThermistor in tempctrl.h / eigsep_observing.io._LNA_THERM_SCHEMA
+    # for the field set this mirrors. Same field names for both channels —
+    # only the stream name (and firmware prefix) differs.
+    _LNA_THERM_FIELDS = (
+        "T_now",
+        "voltage",
+        "resistance",
+        "timestamp",
+    )
+
     # The fields the firmware emits as KV_FLOAT (src/tempctrl.c status
     # tick) — keep in sync when adding fields. Coerced under their
-    # published (unprefixed) names, i.e. after the LOAD_ fan-out.
+    # published (unprefixed) names, i.e. after the LOAD_/LNA1_/LNA2_
+    # fan-out. LOAD and the two LNA channels share the same published
+    # field names (T_now/voltage/resistance/timestamp), so one list
+    # covers all three; T_target/drive_level/hysteresis are LOAD-only.
     _REDIS_FLOAT_FIELDS = (
         "T_now",
         "voltage",
@@ -733,13 +753,15 @@ class PicoTempCtrl(PicoDevice):
     )
 
     def _tempctrl_redis_handler(self, data):
-        """Republish the firmware's ``LOAD_*``-prefixed status dict as the
-        ``tempctrl_load`` Redis stream.
+        """Republish the firmware's prefixed status dict as three Redis
+        streams: ``tempctrl_load``, ``tempctrl_lna1``, ``tempctrl_lna2``.
 
-        The firmware emits one message per status tick with ``LOAD_*``
-        prefixed fields plus the device-wide watchdog state; this strips
-        the prefix and matches the standard one-stream-per-sensor schema
-        with a top-level ``status`` derived from ``LOAD_status``.
+        The firmware emits one message per status tick with ``LOAD_*`` /
+        ``LNA1_*`` / ``LNA2_*`` prefixed fields plus the device-wide
+        watchdog state; this strips each prefix and republishes under
+        the standard one-stream-per-sensor schema, each with a
+        top-level ``status`` derived from that channel's own
+        ``*_status`` field.
         """
         app_id = data.get("app_id")
         watchdog_tripped = data.get("watchdog_tripped")
@@ -753,18 +775,33 @@ class PicoTempCtrl(PicoDevice):
         # field-drop bug can never silently masquerade as "uninstalled".
         # The flag itself is never copied into the stream (not in
         # _LOAD_HEATER_FIELDS), so the published shape is unchanged.
-        if data.get("LOAD_installed") is False:
-            return
-        out = {
-            "sensor_name": "tempctrl_load",
-            "app_id": app_id,
-            "status": data.get("LOAD_status"),
-            "watchdog_tripped": watchdog_tripped,
-            "watchdog_timeout_ms": watchdog_timeout_ms,
-        }
-        for k in self._LOAD_HEATER_FIELDS:
-            out[k] = data.get(f"LOAD_{k}")
-        self._base_redis_handler(out)
+        # LNA1/LNA2 have no installed flag at all — they always publish.
+        if data.get("LOAD_installed") is not False:
+            out = {
+                "sensor_name": "tempctrl_load",
+                "app_id": app_id,
+                "status": data.get("LOAD_status"),
+                "watchdog_tripped": watchdog_tripped,
+                "watchdog_timeout_ms": watchdog_timeout_ms,
+            }
+            for k in self._LOAD_HEATER_FIELDS:
+                out[k] = data.get(f"LOAD_{k}")
+            self._base_redis_handler(out)
+
+        for prefix, stream_name in (
+            ("LNA1", "tempctrl_lna1"),
+            ("LNA2", "tempctrl_lna2"),
+        ):
+            lna_out = {
+                "sensor_name": stream_name,
+                "app_id": app_id,
+                "status": data.get(f"{prefix}_status"),
+                "watchdog_tripped": watchdog_tripped,
+                "watchdog_timeout_ms": watchdog_timeout_ms,
+            }
+            for k in self._LNA_THERM_FIELDS:
+                lna_out[k] = data.get(f"{prefix}_{k}")
+            self._base_redis_handler(lna_out)
 
     def _start_keepalive(self):
         """Start the background keepalive thread (idempotent)."""

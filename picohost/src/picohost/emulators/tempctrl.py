@@ -33,7 +33,7 @@ LOAD_COOLING_PER_OP = 0.01
 
 def _load_thermistor_resistance(temp_c):
     """Beta-equation forward fit: temperature (deg C) -> ohms. Inverse of
-    load_thermistor_voltage_to_temperature() in tempctrl.c."""
+    thermistor_voltage_to_temperature() in tempctrl.c."""
     kelvin = temp_c + 273.15
     return LOAD_THERM_R0_OHMS * math.exp(
         LOAD_THERM_BETA_KELVIN * (1.0 / kelvin - 1.0 / LOAD_THERM_T0_KELVIN)
@@ -48,7 +48,9 @@ def _load_thermistor_voltage(resistance):
     )
 
 
-def _set_load_thermistor_diagnostics(lh, temp_c):
+def _set_thermistor_diagnostics(lh, temp_c):
+    """Derive (resistance, voltage) from temp_c for any channel using the
+    shared Beta-equation characterization (LOAD, LNA1, LNA2 alike)."""
     lh.resistance = _load_thermistor_resistance(temp_c)
     lh.voltage = _load_thermistor_voltage(lh.resistance)
 
@@ -133,7 +135,7 @@ class LoadHeaterState:
         # Test hook: skip the thermal model even while active, so the
         # stall guard can be exercised deterministically.
         self.thermal_frozen = False
-        _set_load_thermistor_diagnostics(self, self.T_now)
+        _set_thermistor_diagnostics(self, self.T_now)
 
     def inject_sensor_glitch(self, value, count=1):
         """Queue ``count`` bogus raw sensor readings of ``value``.
@@ -148,6 +150,26 @@ class LoadHeaterState:
         gates drive until the host acks with ``LOAD_enable=true``.
         """
         self._glitch_queue.extend([float(value)] * count)
+
+
+class LnaThermistorState:
+    """Models the LnaThermistor struct from tempctrl.h: read-only
+    thermistor telemetry, no control logic (no target, no drive, no
+    trip latches, no rate guard — those exist to protect a heater drive
+    loop, which this channel doesn't have)."""
+
+    def __init__(self):
+        self.T_now = 25.0
+        self.voltage = 0.0
+        self.resistance = 0.0
+        # Per-cycle data validity (NOT a latch, mirrors data_invalid in
+        # tempctrl.h). True at boot: no sample taken yet.
+        self.data_invalid = True
+        self.timestamp = 0.0
+        # Mirrors a railed-divider plausibility failure. Self-clears
+        # into data_invalid on every tick.
+        self._sensor_error = False
+        _set_thermistor_diagnostics(self, self.T_now)
 
 
 # Mirrors TEMPCTRL_STALL_WINDOW_MS / TEMPCTRL_STALL_MIN_DELTA in tempctrl.h.
@@ -168,6 +190,8 @@ class TempCtrlEmulator(PicoEmulator):
 
     def __init__(self, app_id=1, **kwargs):
         self.load = LoadHeaterState()
+        self.lna1 = LnaThermistorState()
+        self.lna2 = LnaThermistorState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
@@ -179,6 +203,8 @@ class TempCtrlEmulator(PicoEmulator):
 
     def init(self):
         self.load = LoadHeaterState()
+        self.lna1 = LnaThermistorState()
+        self.lna2 = LnaThermistorState()
         self.watchdog_timeout_ms = 30000
         self.watchdog_tripped = False
         self._last_cmd_time = time.time()
@@ -221,8 +247,8 @@ class TempCtrlEmulator(PicoEmulator):
             # Firmware clamps negatives to 0 (see tempctrl.c watchdog parse).
             self.watchdog_timeout_ms = 0 if val < 0 else val
 
-    def inject_sensor_error(self, error=True):
-        """Simulate a plausibility failure on the LOAD channel.
+    def inject_sensor_error(self, error=True, channel="LOAD"):
+        """Simulate a plausibility failure on one channel.
 
         Models a railed divider (open/short thermistor): the conversion
         fails, so the cycle reports invalid data. Sets both the underlying
@@ -231,9 +257,18 @@ class TempCtrlEmulator(PicoEmulator):
         immediately. op() then keeps ``data_invalid`` in sync with the
         sensor state on every tick (mirroring firmware's per-cycle
         recompute), so a recovered fault self-clears.
+
+        Parameters
+        ----------
+        channel : {"LOAD", "LNA1", "LNA2"}
+            Which channel's thermistor to fail. Default "LOAD" matches
+            this method's pre-LNA behavior.
         """
-        self.load._sensor_error = error
-        self.load.data_invalid = error
+        state = {"LOAD": self.load, "LNA1": self.lna1, "LNA2": self.lna2}[
+            channel
+        ]
+        state._sensor_error = error
+        state.data_invalid = error
 
     def _load_drive_allowed(self, lh):
         """Mirror load_heater_drive_allowed() from tempctrl.c."""
@@ -273,7 +308,7 @@ class TempCtrlEmulator(PicoEmulator):
             lh.seed_pending = False
             return False, False
         raw = lh._glitch_queue.pop(0) if lh._glitch_queue else lh.T_now
-        _set_load_thermistor_diagnostics(lh, raw)
+        _set_thermistor_diagnostics(lh, raw)
         lh.temperature = raw
         if not lh.rate_ref_valid:
             if not lh.seed_pending:
@@ -400,6 +435,21 @@ class TempCtrlEmulator(PicoEmulator):
             elif lh.T_now > LOAD_AMBIENT_C:
                 lh.T_now = max(LOAD_AMBIENT_C, lh.T_now - LOAD_COOLING_PER_OP)
 
+    def _update_lna_channel(self, lt):
+        """Mirror lna_thermistor_update() from tempctrl.c: plain sample +
+        report, no control logic, no rate guard. Tests drive the
+        reported value by setting ``lt.T_now`` directly before calling
+        ``op()`` (there is no thermal model to override, unlike LOAD)."""
+        if lt._sensor_error:
+            # Railed divider: voltage pinned to supply, temperature/
+            # resistance hold last-good — mirrors _read_load_sensor.
+            lt.voltage = THERMISTOR_SUPPLY_VOLTS
+            lt.data_invalid = True
+            return
+        _set_thermistor_diagnostics(lt, lt.T_now)
+        lt.data_invalid = False
+        lt.timestamp = self._ms_since_boot()
+
     def op(self):
         # Communication watchdog: trip the app-wide flag if no command has
         # arrived within the timeout. `enabled` is host intent and stays
@@ -410,6 +460,8 @@ class TempCtrlEmulator(PicoEmulator):
                 self.watchdog_tripped = True
 
         self._update_load_channel(self.load)
+        self._update_lna_channel(self.lna1)
+        self._update_lna_channel(self.lna2)
 
     def get_status(self):
         # Status reports DATA EXISTENCE ONLY: "error" means the cycle
@@ -428,7 +480,7 @@ class TempCtrlEmulator(PicoEmulator):
         # 0.0 otherwise (there is no PWM duty to report). Mirrors
         # tempctrl_status's load_drive_level in tempctrl.c.
         load_drive_level = 1.0 if self.load.active else 0.0
-        return {
+        out = {
             "sensor_name": "tempctrl",
             "app_id": self.app_id,
             "watchdog_tripped": self.watchdog_tripped,
@@ -453,3 +505,14 @@ class TempCtrlEmulator(PicoEmulator):
             "LOAD_runaway_tripped": self.load.runaway_tripped,
             "LOAD_hysteresis": self.load.hysteresis,
         }
+        # LNA1/LNA2: same "error" iff no measurement this cycle" status
+        # semantics as LOAD, no control state to report alongside it.
+        for prefix, lt in (("LNA1", self.lna1), ("LNA2", self.lna2)):
+            out[f"{prefix}_status"] = "error" if lt.data_invalid else "update"
+            out[f"{prefix}_T_now"] = None if lt.data_invalid else lt.T_now
+            out[f"{prefix}_voltage"] = lt.voltage
+            out[f"{prefix}_resistance"] = (
+                None if lt.data_invalid else lt.resistance
+            )
+            out[f"{prefix}_timestamp"] = lt.timestamp
+        return out

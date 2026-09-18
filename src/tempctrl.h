@@ -16,6 +16,14 @@
 #define TEMP_SENSOR_LOAD_PIN    26
 #define LOAD_FET_PIN             17  // low-side N-FET gate (active high)
 
+// LNA thermistor channels — read-only telemetry, no control logic (no
+// FET, no target/hysteresis, no rate/stall/runaway guards). Physically
+// the same NTC part and Beta-equation characterization as LOAD (see
+// LOAD_THERM_* below); update these independently if a different part
+// is used for either channel.
+#define LNA1_THERM_PIN          27
+#define LNA2_THERM_PIN          28
+
 // LOAD's thermistor is a different physical part than the onboard PCB
 // thermistor temp_simple.c is calibrated for (Vishay NTCLE100E3103 behind a
 // 10.68k/4.7k Thevenin divider) — a 30 kOhm NTC behind a plain 10k pull-up
@@ -32,7 +40,7 @@
 // control loop failed to prevent overheating). Not firmware-enforced on
 // the setpoint itself — setpoint sanity is a host-side concern — but is
 // documented here as the margin the ceiling assumes.
-#define LOAD_MAX_SAFE_TEMP_C         100.0f
+#define LOAD_MAX_SAFE_TEMP_C         110.0f
 #define LOAD_DEFAULT_HYSTERESIS_C    2.0f
 
 // Sensor sampling cadence. tempctrl_op() runs on every main-loop pass, but
@@ -52,7 +60,7 @@
 // healthy run rolls the window forward long before reaching the trip
 // threshold.
 #define TEMPCTRL_STALL_WINDOW_MS   120000
-#define TEMPCTRL_STALL_MIN_DELTA   0.3f
+#define TEMPCTRL_STALL_MIN_DELTA   0.1f
 
 // Runaway guard: a channel that is actively driving (FET on) but whose
 // temperature moves the wrong direction (falls while heating) is
@@ -149,6 +157,23 @@ typedef struct {
     bool stall_tripped;
     bool runaway_tripped;
 } LoadHeater;
+
+// Read-only thermistor channel: samples + reports T_now via the shared
+// Beta-equation conversion, no heater, no control loop, no host-facing
+// settings (nothing to command — see LNA1_THERM_PIN / LNA2_THERM_PIN).
+typedef struct {
+    uint adc_input;
+    bool adc_configured;
+
+    float T_now;
+    float voltage;
+    float resistance;
+    // True when this sample cycle produced no measurement (plausibility
+    // failure or ADC not configured) — same per-cycle (not latched)
+    // semantics as LoadHeater.data_invalid.
+    bool data_invalid;
+    uint32_t last_sample_time;  // ms since boot of last plausible sample
+} LnaThermistor;
 
 // Standard app interface functions
 void tempctrl_init(uint8_t app_id);

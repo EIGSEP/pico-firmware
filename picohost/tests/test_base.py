@@ -855,14 +855,16 @@ class TestPicoTempCtrlReconnectReplay:
 
 
 class TestPicoTempCtrlRedisHandler:
-    """Verify _tempctrl_redis_handler republishes the firmware tick as the
-    single ``tempctrl_load`` stream.
+    """Verify _tempctrl_redis_handler republishes the firmware tick as
+    three streams: ``tempctrl_load``, ``tempctrl_lna1``, ``tempctrl_lna2``.
 
     The firmware emits one combined dict per status tick (sensor_name
-    "tempctrl", flat LOAD_* fields, device-wide watchdog_*). The handler
-    must publish the ``tempctrl_load`` stream carrying a top-level
-    ``status`` derived from ``LOAD_status`` and the device-wide watchdog
-    fields duplicated.
+    "tempctrl", flat LOAD_*/LNA1_*/LNA2_* fields, device-wide
+    watchdog_*). The handler must publish each channel's stream
+    carrying a top-level ``status`` derived from that channel's own
+    ``*_status`` field and the device-wide watchdog fields duplicated.
+    LNA1/LNA2 have no ``installed`` flag (no descope concept — see
+    tempctrl.h) and no control state (no target/drive/trip fields).
     """
 
     _SCALAR_TYPES = (str, int, float, bool, type(None))
@@ -873,7 +875,7 @@ class TestPicoTempCtrlRedisHandler:
         "watchdog_tripped": False,
         "watchdog_timeout_ms": 30000,
         # Device-payload presence flag (never copied into the published
-        # stream; an explicit False suppresses the stream).
+        # stream; an explicit False suppresses the LOAD stream only).
         "LOAD_installed": True,
         # LOAD models an invalid-data cycle (railed divider): status error,
         # null T_now/resistance, voltage live at the rail for open-vs-short
@@ -892,6 +894,17 @@ class TestPicoTempCtrlRedisHandler:
         "LOAD_stall_tripped": False,
         "LOAD_runaway_tripped": False,
         "LOAD_hysteresis": 0.5,
+        # LNA1/LNA2: read-only, plausible readings.
+        "LNA1_status": "update",
+        "LNA1_T_now": 24.5,
+        "LNA1_voltage": 1.2,
+        "LNA1_resistance": 32000.0,
+        "LNA1_timestamp": 750.0,
+        "LNA2_status": "update",
+        "LNA2_T_now": 26.1,
+        "LNA2_voltage": 1.1,
+        "LNA2_resistance": 30500.0,
+        "LNA2_timestamp": 750.0,
     }
 
     _EXPECTED_LOAD_KEYS = {
@@ -915,6 +928,18 @@ class TestPicoTempCtrlRedisHandler:
         "hysteresis",
     }
 
+    _EXPECTED_LNA_KEYS = {
+        "sensor_name",
+        "app_id",
+        "status",
+        "watchdog_tripped",
+        "watchdog_timeout_ms",
+        "T_now",
+        "voltage",
+        "resistance",
+        "timestamp",
+    }
+
     def _capture_all(self, tempctrl, data):
         captured = []
         tempctrl._base_redis_handler = (
@@ -923,51 +948,88 @@ class TestPicoTempCtrlRedisHandler:
         tempctrl._tempctrl_redis_handler(data)
         return captured
 
-    def test_publishes_one_stream_per_tick(self):
+    @staticmethod
+    def _by_name(published, name):
+        (entry,) = [p for p in published if p["sensor_name"] == name]
+        return entry
+
+    def test_publishes_one_stream_per_channel_per_tick(self):
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             published = self._capture_all(tempctrl, self._SAMPLE)
-            assert len(published) == 1
-            assert published[0]["sensor_name"] == "tempctrl_load"
+            assert {p["sensor_name"] for p in published} == {
+                "tempctrl_load",
+                "tempctrl_lna1",
+                "tempctrl_lna2",
+            }
+            assert len(published) == 3
         finally:
             tempctrl.disconnect()
 
     def test_channel_status_derived_from_prefixed_status(self):
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            (load,) = self._capture_all(tempctrl, self._SAMPLE)
-            assert load["status"] == "error"
+            published = self._capture_all(tempctrl, self._SAMPLE)
+            assert self._by_name(published, "tempctrl_load")["status"] == (
+                "error"
+            )
+            assert self._by_name(published, "tempctrl_lna1")["status"] == (
+                "update"
+            )
+            assert self._by_name(published, "tempctrl_lna2")["status"] == (
+                "update"
+            )
         finally:
             tempctrl.disconnect()
 
     def test_channel_fields_have_prefix_stripped(self):
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            (load,) = self._capture_all(tempctrl, self._SAMPLE)
+            published = self._capture_all(tempctrl, self._SAMPLE)
+            load = self._by_name(published, "tempctrl_load")
             assert load["T_now"] is None
             assert load["resistance"] is None
             assert load["voltage"] == pytest.approx(3.3)
             assert load["active"] is False
             assert load["sensor_tripped"] is False
+            lna1 = self._by_name(published, "tempctrl_lna1")
+            assert lna1["T_now"] == pytest.approx(24.5)
+            assert lna1["voltage"] == pytest.approx(1.2)
+            assert lna1["resistance"] == pytest.approx(32000.0)
+            lna2 = self._by_name(published, "tempctrl_lna2")
+            assert lna2["T_now"] == pytest.approx(26.1)
         finally:
             tempctrl.disconnect()
 
     def test_watchdog_fields_duplicated(self):
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            (load,) = self._capture_all(tempctrl, self._SAMPLE)
-            assert load["watchdog_tripped"] is False
-            assert load["watchdog_timeout_ms"] == 30000
-            assert load["app_id"] == 1
+            published = self._capture_all(tempctrl, self._SAMPLE)
+            for name in ("tempctrl_load", "tempctrl_lna1", "tempctrl_lna2"):
+                entry = self._by_name(published, name)
+                assert entry["watchdog_tripped"] is False
+                assert entry["watchdog_timeout_ms"] == 30000
+                assert entry["app_id"] == 1
         finally:
             tempctrl.disconnect()
 
     def test_published_shape_stable_across_channel_state(self):
-        """The stream exposes a stable key set regardless of values."""
+        """Each stream exposes a stable key set regardless of values."""
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
-            (load,) = self._capture_all(tempctrl, self._SAMPLE)
-            assert set(load) == self._EXPECTED_LOAD_KEYS
+            published = self._capture_all(tempctrl, self._SAMPLE)
+            assert (
+                set(self._by_name(published, "tempctrl_load"))
+                == self._EXPECTED_LOAD_KEYS
+            )
+            assert (
+                set(self._by_name(published, "tempctrl_lna1"))
+                == self._EXPECTED_LNA_KEYS
+            )
+            assert (
+                set(self._by_name(published, "tempctrl_lna2"))
+                == self._EXPECTED_LNA_KEYS
+            )
         finally:
             tempctrl.disconnect()
 
@@ -982,25 +1044,29 @@ class TestPicoTempCtrlRedisHandler:
         finally:
             tempctrl.disconnect()
 
-    def test_uninstalled_channel_stream_suppressed(self):
-        """A channel whose LOAD_installed is False publishes nothing: the
-        descoped-hardware contract is clean stream absence downstream (no
-        column in corr files, no staleness warnings), not a
-        permanently-errored stream."""
+    def test_uninstalled_load_suppressed_lna_still_publishes(self):
+        """A channel whose LOAD_installed is False publishes nothing for
+        LOAD: the descoped-hardware contract is clean stream absence
+        downstream (no column in corr files, no staleness warnings), not
+        a permanently-errored stream. LNA1/LNA2 have no installed concept
+        and must keep publishing regardless of LOAD's state."""
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             data = dict(self._SAMPLE)
             data["LOAD_installed"] = False
             published = self._capture_all(tempctrl, data)
-            assert published == []
+            assert {p["sensor_name"] for p in published} == {
+                "tempctrl_lna1",
+                "tempctrl_lna2",
+            }
         finally:
             tempctrl.disconnect()
 
     def test_missing_installed_flag_publishes(self):
         """Fail-safe polarity: only an explicit False suppresses the
-        stream. A payload without the flag (pre-installed-flag firmware)
-        still publishes, so a firmware field-drop bug can never silently
-        look like 'uninstalled'."""
+        LOAD stream. A payload without the flag (pre-installed-flag
+        firmware) still publishes, so a firmware field-drop bug can
+        never silently look like 'uninstalled'."""
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             data = {
@@ -1009,9 +1075,11 @@ class TestPicoTempCtrlRedisHandler:
                 if k != "LOAD_installed"
             }
             published = self._capture_all(tempctrl, data)
-            assert [p["sensor_name"] for p in published] == [
-                "tempctrl_load"
-            ]
+            assert {p["sensor_name"] for p in published} == {
+                "tempctrl_load",
+                "tempctrl_lna1",
+                "tempctrl_lna2",
+            }
         finally:
             tempctrl.disconnect()
 
@@ -1037,15 +1105,18 @@ class TestPicoTempCtrlRedisHandler:
             tempctrl.disconnect()
 
     def test_missing_fields_publish_none(self):
-        """Channel status absent from the source dict publishes None."""
+        """Channel status absent from the source dict publishes None,
+        for every channel."""
         tempctrl = DummyPicoTempCtrl("/dev/dummy")
         try:
             partial = {"sensor_name": "tempctrl", "app_id": 1}
-            (load,) = self._capture_all(tempctrl, partial)
-            assert load["status"] is None
-            assert load["T_now"] is None
-            assert load["watchdog_tripped"] is None
-            assert load["watchdog_timeout_ms"] is None
+            published = self._capture_all(tempctrl, partial)
+            for name in ("tempctrl_load", "tempctrl_lna1", "tempctrl_lna2"):
+                entry = self._by_name(published, name)
+                assert entry["status"] is None
+                assert entry["T_now"] is None
+                assert entry["watchdog_tripped"] is None
+                assert entry["watchdog_timeout_ms"] is None
         finally:
             tempctrl.disconnect()
 

@@ -206,11 +206,28 @@ class TestTempCtrlEmulator:
             "LOAD_stall_tripped",
             "LOAD_runaway_tripped",
             "LOAD_hysteresis",
+            # LNA1/LNA2: read-only thermistors, no control state.
+            "LNA1_status",
+            "LNA1_T_now",
+            "LNA1_voltage",
+            "LNA1_resistance",
+            "LNA1_timestamp",
+            "LNA2_status",
+            "LNA2_T_now",
+            "LNA2_voltage",
+            "LNA2_resistance",
+            "LNA2_timestamp",
         }
         assert set(status.keys()) == expected_keys
         assert status["LOAD_status"] == "update"
         assert 0.0 < status["LOAD_voltage"] < 3.3
         assert status["LOAD_resistance"] > 0.0
+        assert status["LNA1_status"] == "update"
+        assert 0.0 < status["LNA1_voltage"] < 3.3
+        assert status["LNA1_resistance"] > 0.0
+        assert status["LNA2_status"] == "update"
+        assert 0.0 < status["LNA2_voltage"] < 3.3
+        assert status["LNA2_resistance"] > 0.0
 
 
 class TestTempCtrlWatchdog:

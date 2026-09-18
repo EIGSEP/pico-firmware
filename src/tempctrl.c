@@ -6,8 +6,10 @@
 #include <string.h>
 #include <math.h>
 
-// Static instance
+// Static instances
 static LoadHeater load_heater;
+static LnaThermistor lna1;
+static LnaThermistor lna2;
 
 // Communication watchdog state (app-level)
 static absolute_time_t last_cmd_time;
@@ -27,12 +29,18 @@ static void load_heater_check_stall(LoadHeater *);
 static void load_heater_apply_enable(LoadHeater *, bool);
 static bool load_heater_drive_allowed(const LoadHeater *);
 static bool load_heater_read(LoadHeater *);
-static bool load_thermistor_voltage_to_temperature(float voltage,
-                                                    float *resistance,
-                                                    float *temperature);
+static bool thermistor_voltage_to_temperature(float voltage,
+                                               float *resistance,
+                                               float *temperature);
+
+// LNA thermistor channels: read-only, no control logic.
+static void lna_thermistor_init(LnaThermistor *, uint gpio_pin);
+static void lna_thermistor_update(LnaThermistor *);
 
 void tempctrl_init(uint8_t app_id) {
     load_heater_init(&load_heater, LOAD_FET_PIN, TEMP_SENSOR_LOAD_PIN);
+    lna_thermistor_init(&lna1, LNA1_THERM_PIN);
+    lna_thermistor_init(&lna2, LNA2_THERM_PIN);
     last_cmd_time = get_absolute_time();
     next_sensor_sample = get_absolute_time();  // first op tick samples
 }
@@ -95,10 +103,21 @@ void tempctrl_status(uint8_t app_id) {
        otherwise (there is no PWM duty to report). */
     const float load_drive_level = load_heater.active ? 1.0f : 0.0f;
 
-    /* 19 KV pairs: 4 device-wide + 15 LOAD. send_json silently truncates
-       if the count argument disagrees with the actual entries — re-count
-       when editing. */
-    send_json(19,
+    /* LNA1/LNA2 are read-only thermistor channels: no target, no drive,
+       no trip latches — same "error" iff no measurement this cycle"
+       status semantics as LOAD, just without any control state to
+       report alongside it. */
+    const char *status_lna1 = lna1.data_invalid ? "error" : "update";
+    const float T_lna1 = lna1.data_invalid ? NAN : lna1.T_now;
+    const float R_lna1 = lna1.data_invalid ? NAN : lna1.resistance;
+    const char *status_lna2 = lna2.data_invalid ? "error" : "update";
+    const float T_lna2 = lna2.data_invalid ? NAN : lna2.T_now;
+    const float R_lna2 = lna2.data_invalid ? NAN : lna2.resistance;
+
+    /* 29 KV pairs: 4 device-wide + 15 LOAD + 5 LNA1 + 5 LNA2. send_json
+       silently truncates if the count argument disagrees with the
+       actual entries — re-count when editing. */
+    send_json(29,
         KV_STR, "sensor_name", "tempctrl",
         KV_INT, "app_id", app_id,
         KV_BOOL, "watchdog_tripped", watchdog_tripped,
@@ -117,7 +136,17 @@ void tempctrl_status(uint8_t app_id) {
         KV_INT, "LOAD_sensor_rejects", load_heater.sensor_rejects,
         KV_BOOL, "LOAD_stall_tripped", load_heater.stall_tripped,
         KV_BOOL, "LOAD_runaway_tripped", load_heater.runaway_tripped,
-        KV_FLOAT, "LOAD_hysteresis", load_heater.hysteresis
+        KV_FLOAT, "LOAD_hysteresis", load_heater.hysteresis,
+        KV_STR, "LNA1_status", status_lna1,
+        KV_FLOAT, "LNA1_T_now", T_lna1,
+        KV_FLOAT, "LNA1_voltage", lna1.voltage,
+        KV_FLOAT, "LNA1_resistance", R_lna1,
+        KV_FLOAT, "LNA1_timestamp", (double)lna1.last_sample_time,
+        KV_STR, "LNA2_status", status_lna2,
+        KV_FLOAT, "LNA2_T_now", T_lna2,
+        KV_FLOAT, "LNA2_voltage", lna2.voltage,
+        KV_FLOAT, "LNA2_resistance", R_lna2,
+        KV_FLOAT, "LNA2_timestamp", (double)lna2.last_sample_time
     );
 }
 
@@ -142,20 +171,22 @@ void tempctrl_op(uint8_t app_id) {
     next_sensor_sample = make_timeout_time_ms(TEMPCTRL_SAMPLE_MS);
 
     load_heater_update(&load_heater);
+    lna_thermistor_update(&lna1);
+    lna_thermistor_update(&lna2);
 }
 
 // ---------------------------------------------------------------------
-// LOAD channel: analog NTC thermistor (30k, Beta=3943, plain 10k pull-up
-// to 3V3) + single low-side FET heater. Reuses the shared ADC sampling
-// helpers from temp_simple.c (adc_channel_init / adc_read_avg_voltage —
-// generic, no thermistor-specific constants), but has its own
-// voltage->temperature conversion (Beta equation) matched to this
-// thermistor's own characterization.
+// Shared thermistor conversion: 30k NTC, Beta=3943, plain 10k pull-up to
+// 3V3 — used by LOAD and both LNA channels alike (see LOAD_THERM_* in
+// tempctrl.h; update those constants if an LNA channel ever uses a
+// different physical part). Reuses the shared ADC sampling helpers from
+// temp_simple.c (adc_channel_init / adc_read_avg_voltage — generic, no
+// thermistor-specific constants).
 // ---------------------------------------------------------------------
 
-static bool load_thermistor_voltage_to_temperature(float voltage,
-                                                    float *resistance,
-                                                    float *temperature) {
+static bool thermistor_voltage_to_temperature(float voltage,
+                                               float *resistance,
+                                               float *temperature) {
     if (!isfinite(voltage) ||
         voltage <= 0.0f ||
         voltage >= THERMISTOR_SUPPLY_VOLTS) {
@@ -336,8 +367,8 @@ static bool load_heater_read(LoadHeater *lh) {
 
     float resistance = 0.0f;
     float temperature = 0.0f;
-    if (!load_thermistor_voltage_to_temperature(voltage, &resistance,
-                                                 &temperature)) {
+    if (!thermistor_voltage_to_temperature(voltage, &resistance,
+                                            &temperature)) {
         return false;
     }
 
@@ -438,4 +469,47 @@ static void load_heater_update(LoadHeater *lh) {
         lh->stall_window_active = false;
         lh->runaway_strikes = 0;
     }
+}
+
+// ---------------------------------------------------------------------
+// LNA thermistor channels: read-only telemetry, no control logic. No
+// rate guard / stall / runaway checks — those exist to protect a heater
+// drive loop, which these channels don't have.
+// ---------------------------------------------------------------------
+
+static void lna_thermistor_init(LnaThermistor *lt, uint gpio_pin) {
+    lt->adc_configured = adc_channel_init(gpio_pin, &lt->adc_input);
+    lt->T_now = 0.0f;
+    lt->voltage = 0.0f;
+    lt->resistance = 0.0f;
+    // No sample taken yet, so there is no valid temperature to report;
+    // the first op tick samples before the first status message fires.
+    lt->data_invalid = true;
+    lt->last_sample_time = 0;
+}
+
+// One sample tick: read the thermistor and report the plausible
+// conversion directly (no rate-guard/anchor scheme — nothing downstream
+// depends on a filtered reference the way LOAD's control loop does).
+static void lna_thermistor_update(LnaThermistor *lt) {
+    if (!lt->adc_configured) {
+        lt->data_invalid = true;
+        return;
+    }
+
+    float voltage = adc_read_avg_voltage(lt->adc_input);
+    lt->voltage = voltage;
+
+    float resistance = 0.0f;
+    float temperature = 0.0f;
+    if (!thermistor_voltage_to_temperature(voltage, &resistance,
+                                            &temperature)) {
+        lt->data_invalid = true;
+        return;
+    }
+
+    lt->resistance = resistance;
+    lt->T_now = temperature;
+    lt->last_sample_time = to_ms_since_boot(get_absolute_time());
+    lt->data_invalid = false;
 }
