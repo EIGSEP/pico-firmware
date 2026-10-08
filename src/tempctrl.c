@@ -176,9 +176,10 @@ void tempctrl_op(uint8_t app_id) {
 }
 
 // ---------------------------------------------------------------------
-// Shared thermistor conversion: 30k NTC, Beta=3943, plain 10k pull-up to
-// 3V3 — used by LOAD and both LNA channels alike (see LOAD_THERM_* in
-// tempctrl.h; update those constants if an LNA channel ever uses a
+// Shared thermistor conversion: YSI 44909 30k NTC, Steinhart-Hart, plain
+// 10k pull-up to 3V3 — used by LOAD and both LNA channels alike (see
+// LOAD_THERM_* in tempctrl.h; update those constants if an LNA channel
+// ever uses a
 // different physical part). Reuses the shared ADC sampling helpers from
 // temp_simple.c (adc_channel_init / adc_read_avg_voltage — generic, no
 // thermistor-specific constants).
@@ -199,9 +200,10 @@ static bool thermistor_voltage_to_temperature(float voltage,
         return false;
     }
 
-    float inverse_kelvin = (1.0f / LOAD_THERM_T0_KELVIN)
-        + (1.0f / LOAD_THERM_BETA_KELVIN)
-          * logf(r_thermistor / LOAD_THERM_R0_OHMS);
+    float log_r = logf(r_thermistor);
+    float inverse_kelvin = LOAD_THERM_SH_A
+        + LOAD_THERM_SH_B * log_r
+        + LOAD_THERM_SH_C * log_r * log_r * log_r;
     if (!isfinite(inverse_kelvin) || inverse_kelvin <= 0.0f) {
         return false;
     }

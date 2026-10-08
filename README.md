@@ -166,11 +166,17 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 
 A single LOAD channel: an NTC thermistor divider driving a low-side N-FET
 heater (on/off hysteresis control — there is no PI loop and no reverse
-(cooling) direction). The divider is wired `3.3V -> thermistor -> ADC pin
--> 10k pull-up -> GND`. The thermistor is a 30k NTC (Beta=3943); firmware
-converts resistance to temperature with the Beta equation (`tempctrl.c`),
-matched to this part's own characterization rather than the shared
-Vishay/Steinhart-Hart fit `temp_simple.h` uses elsewhere.
+(cooling) direction). The divider is wired `3.3V -> 10k pull-up -> ADC pin
+-> thermistor -> GND` (thermistor on the low side; firmware computes
+R = 10k * V / (3.3 - V)). Use a 0.1% pull-up. An optional series resistor
+between the divider node and the ADC pin, with a capacitor from the pin to
+AGND, filters without affecting the conversion. The thermistor is a YSI
+44909 (30k at 25 C, YSI curve H, rated -55..+90 C continuous); firmware
+converts resistance to temperature with a Steinhart-Hart fit to YSI's
+published table (`LOAD_THERM_SH_*` in `tempctrl.h`, max residual 0.019 K
+over 0..110 C), separate from the Vishay fit `temp_simple.h` uses
+elsewhere. The two LNA thermistor channels (GPIO 27, 28) use the same part,
+divider and conversion.
 
 | Channel | Temp Sensor GPIO | FET Gate GPIO |
 |---------|-------------------|----------------|

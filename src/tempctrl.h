@@ -18,7 +18,7 @@
 
 // LNA thermistor channels — read-only telemetry, no control logic (no
 // FET, no target/hysteresis, no rate/stall/runaway guards). Physically
-// the same NTC part and Beta-equation characterization as LOAD (see
+// the same NTC part and Steinhart-Hart characterization as LOAD (see
 // LOAD_THERM_* below); update these independently if a different part
 // is used for either channel.
 #define LNA1_THERM_PIN          27
@@ -26,13 +26,21 @@
 
 // LOAD's thermistor is a different physical part than the onboard PCB
 // thermistor temp_simple.c is calibrated for (Vishay NTCLE100E3103 behind a
-// 10.68k/4.7k Thevenin divider) — a 30 kOhm NTC behind a plain 10k pull-up
-// to 3V3. Deliberately independent constants; do not merge with
-// THERMISTOR_* in temp_simple.h.
+// 10.68k/4.7k Thevenin divider): a YSI 44909 (space-qualified 44008,
+// 30 kOhm at 25 C, YSI curve H) wired `3V3 -[10k]- ADC pin -[NTC]- GND`.
+// Deliberately independent constants; do not merge with THERMISTOR_* in
+// temp_simple.h.
+//
+// Steinhart-Hart, 1/T = A + B ln(R) + C ln(R)^3 (T in K, R in ohms),
+// least-squares fit to YSI's published 30 kOhm curve-H R-T table over
+// 0..110 C (1998 YSI catalog, Technical Information section): max fit
+// residual 0.019 K. Part interchangeability is +/-0.2 C over 0..70 C;
+// rated continuous range -55..+90 C. Use a 0.1% pull-up: a 1% pull-up
+// error is a 0.25-0.35 K temperature error over 25..97 C.
 #define LOAD_THERM_PULLUP_OHMS      10000.0f
-#define LOAD_THERM_R0_OHMS          30000.0f
-#define LOAD_THERM_T0_KELVIN        298.15f   // 25 C
-#define LOAD_THERM_BETA_KELVIN      3943.0f
+#define LOAD_THERM_SH_A             9.362744897e-04f
+#define LOAD_THERM_SH_B             2.209138866e-04f
+#define LOAD_THERM_SH_C             1.280636863e-07f
 
 // Absolute safety ceiling, independent of whatever target/hysteresis the
 // host has configured: a plausible, rate-guard-anchored reading at or
@@ -159,7 +167,7 @@ typedef struct {
 } LoadHeater;
 
 // Read-only thermistor channel: samples + reports T_now via the shared
-// Beta-equation conversion, no heater, no control loop, no host-facing
+// Steinhart-Hart conversion, no heater, no control loop, no host-facing
 // settings (nothing to command — see LNA1_THERM_PIN / LNA2_THERM_PIN).
 typedef struct {
     uint adc_input;

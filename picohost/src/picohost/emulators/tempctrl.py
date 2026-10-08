@@ -13,12 +13,13 @@ DT_PER_SAMPLE_S = 0.2
 # Thermistor divider constants, mirroring temp_simple.h.
 THERMISTOR_SUPPLY_VOLTS = 3.3
 
-# LOAD channel thermistor: a 30k NTC (Beta=3943) behind a plain 10k
-# pull-up to 3V3. Mirrors LOAD_THERM_* in tempctrl.h.
+# LOAD channel thermistor: a YSI 44909 30k NTC behind a plain 10k
+# pull-up to 3V3, Steinhart-Hart characterized
+# (1/T = A + B ln R + C ln^3 R). Mirrors LOAD_THERM_* in tempctrl.h.
 LOAD_THERM_PULLUP_OHMS = 10000.0
-LOAD_THERM_R0_OHMS = 30000.0
-LOAD_THERM_T0_KELVIN = 298.15  # 25 C
-LOAD_THERM_BETA_KELVIN = 3943.0
+LOAD_THERM_SH_A = 9.362744897e-04
+LOAD_THERM_SH_B = 2.209138866e-04
+LOAD_THERM_SH_C = 1.280636863e-07
 LOAD_MAX_SAFE_TEMP_C = 100.0
 LOAD_DEFAULT_HYSTERESIS_C = 2.0
 
@@ -32,12 +33,15 @@ LOAD_COOLING_PER_OP = 0.01
 
 
 def _load_thermistor_resistance(temp_c):
-    """Beta-equation forward fit: temperature (deg C) -> ohms. Inverse of
-    thermistor_voltage_to_temperature() in tempctrl.c."""
-    kelvin = temp_c + 273.15
-    return LOAD_THERM_R0_OHMS * math.exp(
-        LOAD_THERM_BETA_KELVIN * (1.0 / kelvin - 1.0 / LOAD_THERM_T0_KELVIN)
+    """Inverse Steinhart-Hart: temperature (deg C) -> ohms. Closed-form
+    inverse of thermistor_voltage_to_temperature() in tempctrl.c."""
+    x = (LOAD_THERM_SH_A - 1.0 / (temp_c + 273.15)) / LOAD_THERM_SH_C
+    y = math.sqrt(
+        (LOAD_THERM_SH_B / (3.0 * LOAD_THERM_SH_C)) ** 3 + x * x / 4.0
     )
+    # y > |x|/2, so both cube-root arguments are positive.
+    third = 1.0 / 3.0
+    return math.exp((y - x / 2.0) ** third - (y + x / 2.0) ** third)
 
 
 def _load_thermistor_voltage(resistance):
@@ -50,7 +54,7 @@ def _load_thermistor_voltage(resistance):
 
 def _set_thermistor_diagnostics(lh, temp_c):
     """Derive (resistance, voltage) from temp_c for any channel using the
-    shared Beta-equation characterization (LOAD, LNA1, LNA2 alike)."""
+    shared Steinhart-Hart characterization (LOAD, LNA1, LNA2 alike)."""
     lh.resistance = _load_thermistor_resistance(temp_c)
     lh.voltage = _load_thermistor_voltage(lh.resistance)
 
