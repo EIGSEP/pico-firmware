@@ -18,7 +18,9 @@
     ((THERMISTOR_FIXED_OHMS * THERMISTOR_BOARD_PULLUP_OHMS) / \
      (THERMISTOR_FIXED_OHMS + THERMISTOR_BOARD_PULLUP_OHMS))
 
-// Vishay NTCLE100E3103 NTC, 10 kOhm at 25 C, B25/85 = 3977 K.
+// Vishay NTCLE100E3103 NTC, 10 kOhm at 25 C, B25/85 = 3977 K
+// (ordered as NTCLE100E3103HB0, 3% tolerance; datasheet in
+// docs/NTCLE100E3-Datasheet.pdf).
 // Extended Steinhart-Hart fit from the datasheet (document 29049,
 // "Mat A" coefficient row), specified for -40..+125 C:
 //   1/T = A1 + B1 ln(R/Rref) + C1 ln^2(R/Rref) + D1 ln^3(R/Rref)
