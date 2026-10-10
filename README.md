@@ -162,6 +162,32 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 | 6 | 110 | `APP_IMU_AZ` | IMU (azimuth) | BNO08x on azimuth axis |
 | 7 | 111 | — | Reserved | — |
 
+### Power Order (all apps)
+
+**Never leave a Pico running with its output pins wired into an unpowered
+board.** A Pico output driven high into an unpowered chip feeds current through
+that chip's input protection diode into its supply rail, so the pin tries to
+power the whole board. Left that way, the pin's output driver is damaged: it can
+still drive high but can no longer pull low. In October 2026 this destroyed
+GP8/GP12/GP14 on an RF-switch Pico left running into an unpowered switch board
+(the board then read the wrong paths, because those address lines could not
+return low).
+
+- Power the external board **before or together with** the Pico; power both
+  down together.
+- Put **1–4.7 kΩ in series** with each Pico logic output that drives another
+  board (RF-switch address lines GP8/10/12/14/15, the potmon SP1 termination
+  line GP27). It limits back-feed to about a milliamp and does not affect
+  logic-level inputs.
+- The boot defaults help but do not protect: the RF-switch Pico boots with all
+  address lines low (`RFANT`) and potmon boots with GP27 low (SP1 SHORT), so a
+  freshly booted Pico does not back-feed — but a board that loses power while a
+  non-default state is held is back-fed until the Pico is stopped.
+- A Pico suspected of this damage: command a high then a low state with the
+  board **unplugged** and measure the pins. A healthy pin reads ~0 V when low;
+  ~2.2–2.3 V means the low-side driver is gone (the RP2350 pad floats there).
+  Retire or label the Pico.
+
 ### Temperature Controller Wiring (APP_TEMPCTRL)
 
 A single LOAD channel: an NTC thermistor divider driving a low-side N-FET
@@ -243,6 +269,7 @@ The RF switch PCB holds the signal-path lookup table in two AT28BV64B EEPROMs dr
 | Thermistor 1 | 27 (ADC1) | `volt_therm1` |
 | Thermistor 2 | 28 (ADC2) | `volt_therm2` |
 
+- ⚠️ **Power order**: power the switch board before the Pico, and never leave the Pico running into an unpowered board — see [Power Order](#power-order-all-apps). Series resistors (1–4.7 kΩ) on GP8/10/12/14/15 are recommended.
 - Addresses ≥ 16 are unused on the chips and rejected by the firmware. Path name → address mapping lives in `PicoRFSwitch.PATHS` (picohost) and the `rf_path_t` enum in `src/rfswitch.h`.
 - **Table source of truth**: the [eeprom_api](https://github.com/EIGSEP/eeprom_api) repo — `program_paths/program_paths.c` defines and burns the table; the seated chips are the physical ground truth (`test_paths.uf2` read-back verifies them).
 - **Burned-table version**: eeprom_api commit `8681ed8`. Update this hash whenever the chips are reburned and re-verified.
