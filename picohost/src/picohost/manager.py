@@ -50,6 +50,7 @@ from .base import (
     PicoTempCtrl,
     PicoPotentiometer,
     PicoRFSwitch,
+    PicoSimpleTherm,
 )
 from .buses import (
     CurrentCalStore,
@@ -78,6 +79,7 @@ APP_NAMES = {
     4: "lidar",
     5: "rfswitch",
     6: "imu_az",
+    7: "simple_therm",
 }
 
 # Inverse mapping: name -> app_id
@@ -92,6 +94,7 @@ PICO_CLASSES = {
     "lidar": PicoLidar,
     "imu_az": PicoIMU,
     "rfswitch": PicoRFSwitch,
+    "simple_therm": PicoSimpleTherm,
 }
 
 # Timing

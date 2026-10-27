@@ -1365,3 +1365,31 @@ class PicoPotentiometer(PicoDevice):
             m, b = cal
             result[key] = m * v + b
         return result
+
+
+class PicoSimpleTherm(PicoDevice):
+    """Status-only thermistor logger (src/simple_therm.c, APP_SIMPLE_THERM).
+
+    Reports three thermistor channels (GPIO 26-28 / ADC0-2) as
+    ``therm{i}_T`` (deg C), ``therm{i}_voltage`` and
+    ``therm{i}_resistance``, plus the on-die temperature ``die_T``. An
+    open/shorted divider reports ``None`` temperature and resistance.
+    There are no commands; the base class publishes every status packet
+    to ``stream:simple_therm`` when a ``metadata_writer`` is given.
+    """
+
+    NUM_CHANNELS = 3
+
+    # Firmware KV_FLOAT fields (src/simple_therm.c status tick).
+    _REDIS_FLOAT_FIELDS = tuple(
+        f"therm{i}_{field}"
+        for i in range(NUM_CHANNELS)
+        for field in ("T", "voltage", "resistance")
+    ) + ("die_T",)
+
+    def read_temperatures(self):
+        """Latest per-channel temperatures (deg C, ``None`` if invalid)."""
+        return [
+            self.last_status.get(f"therm{i}_T")
+            for i in range(self.NUM_CHANNELS)
+        ]

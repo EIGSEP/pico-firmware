@@ -160,7 +160,7 @@ GPIO pins 20 (DIP0), 21 (DIP1), 22 (DIP2) select the active application at boot:
 | 4 | 100 | `APP_LIDAR` | Lidar | Distance measurement |
 | 5 | 101 | `APP_RFSWITCH` | RF switch | Signal path switching |
 | 6 | 110 | `APP_IMU_AZ` | IMU (azimuth) | BNO08x on azimuth axis |
-| 7 | 111 | — | Reserved | — |
+| 7 | 111 | `APP_SIMPLE_THERM` | Thermistor logger | ADC0-2 thermistors + die temp, status-only |
 
 ### Power Order (all apps)
 

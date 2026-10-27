@@ -99,6 +99,7 @@ class TestAppMappings:
             4: "lidar",
             5: "rfswitch",
             6: "imu_az",
+            7: "simple_therm",
         }
 
     def test_app_ids_inverse(self):

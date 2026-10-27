@@ -5,6 +5,7 @@ from .imu import ImuEmulator
 from .lidar import LidarEmulator
 from .potmon import PotMonEmulator
 from .rfswitch import RFSwitchEmulator
+from .simple_therm import SimpleThermEmulator
 
 __all__ = [
     "PicoEmulator",
@@ -14,4 +15,5 @@ __all__ = [
     "LidarEmulator",
     "PotMonEmulator",
     "RFSwitchEmulator",
+    "SimpleThermEmulator",
 ]
