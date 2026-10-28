@@ -24,23 +24,28 @@
 #define LNA1_THERM_PIN          27
 #define LNA2_THERM_PIN          28
 
-// LOAD's thermistor is a different physical part than the onboard PCB
-// thermistor temp_simple.c is calibrated for (Vishay NTCLE100E3103 behind a
-// 10.68k/4.7k Thevenin divider): a YSI 44909 (space-qualified 44008,
-// 30 kOhm at 25 C, YSI curve H) wired `3V3 -[10k]- ADC pin -[NTC]- GND`.
+// LOAD (and LNA1/LNA2) thermistor: Vishay NTCLE100E3103HB0, 10 kOhm at
+// 25 C (+/-3 %), B25/85 = 3977 K (+/-0.75 %), rated -40..+125 C
+// continuous; wired `3V3 -[10.01k fixed]- ADC pin -[NTC]- GND`.
 // Deliberately independent constants; do not merge with THERMISTOR_* in
-// temp_simple.h.
+// temp_simple.h (a different divider).
 //
-// Steinhart-Hart, 1/T = A + B ln(R) + C ln(R)^3 (T in K, R in ohms),
-// least-squares fit to YSI's published 30 kOhm curve-H R-T table over
-// 0..110 C (1998 YSI catalog, Technical Information section): max fit
-// residual 0.019 K. Part interchangeability is +/-0.2 C over 0..70 C;
-// rated continuous range -55..+90 C. Use a 0.1% pull-up: a 1% pull-up
-// error is a 0.25-0.35 K temperature error over 25..97 C.
-#define LOAD_THERM_PULLUP_OHMS      10000.0f
-#define LOAD_THERM_SH_A             9.362744897e-04f
-#define LOAD_THERM_SH_B             2.209138866e-04f
-#define LOAD_THERM_SH_C             1.280636863e-07f
+// Vishay's extended Steinhart-Hart (NTCLE100E3 datasheet, document 29049,
+// "parameter for determining nominal resistance values", row 9,
+// B25/85 = 3977 K):
+//   1/T = A1 + B1 ln(R/Rref) + C1 ln^2(R/Rref) + D1 ln^3(R/Rref)
+// with T in kelvin and Rref = R25 = 10 kOhm. Vishay quotes it as agreeing
+// with the nominal R-T curve to 0.005 C over 25..125 C (0.015 C over
+// -40..25 C). Absolute accuracy is set by the part tolerance: +/-3 % on
+// R25 is about +/-0.7 C at 25 C. LOAD_THERM_PULLUP_OHMS is the fixed
+// resistor's value (10.01 kOhm); a 1 % error in it is a ~0.2-0.5 C
+// temperature error over 25..90 C.
+#define LOAD_THERM_PULLUP_OHMS      10010.0f
+#define LOAD_THERM_REF_OHMS         10000.0f
+#define LOAD_THERM_SH_A1            3.354016e-3f
+#define LOAD_THERM_SH_B1            2.569850e-4f
+#define LOAD_THERM_SH_C1            2.620131e-6f
+#define LOAD_THERM_SH_D1            6.383091e-8f
 
 // Absolute safety ceiling, independent of whatever target/hysteresis the
 // host has configured: a plausible, rate-guard-anchored reading at or

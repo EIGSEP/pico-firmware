@@ -13,13 +13,18 @@ DT_PER_SAMPLE_S = 0.2
 # Thermistor divider constants, mirroring temp_simple.h.
 THERMISTOR_SUPPLY_VOLTS = 3.3
 
-# LOAD channel thermistor: a YSI 44909 30k NTC behind a plain 10k
-# pull-up to 3V3, Steinhart-Hart characterized
-# (1/T = A + B ln R + C ln^3 R). Mirrors LOAD_THERM_* in tempctrl.h.
-LOAD_THERM_PULLUP_OHMS = 10000.0
-LOAD_THERM_SH_A = 9.362744897e-04
-LOAD_THERM_SH_B = 2.209138866e-04
-LOAD_THERM_SH_C = 1.280636863e-07
+# LOAD channel thermistor: a Vishay NTCLE100E3103 10k NTC (B25/85 =
+# 3977 K) behind a 10.01k pull-up to 3V3. Mirrors LOAD_THERM_* in
+# tempctrl.h. The emulator needs temperature -> resistance, so it uses
+# Vishay's forward formula from the same datasheet row,
+#   R = Rref * exp(A + B/T + C/T^2 + D/T^3),
+# which agrees with the firmware's inverse (A1..D1) to <= 0.015 C.
+LOAD_THERM_PULLUP_OHMS = 10010.0
+LOAD_THERM_REF_OHMS = 10000.0
+LOAD_THERM_FWD_A = -14.6337
+LOAD_THERM_FWD_B = 4791.842
+LOAD_THERM_FWD_C = -115334.0
+LOAD_THERM_FWD_D = -3.730535e6
 LOAD_MAX_SAFE_TEMP_C = 100.0
 LOAD_DEFAULT_HYSTERESIS_C = 2.0
 
@@ -33,15 +38,15 @@ LOAD_COOLING_PER_OP = 0.01
 
 
 def _load_thermistor_resistance(temp_c):
-    """Inverse Steinhart-Hart: temperature (deg C) -> ohms. Closed-form
-    inverse of thermistor_voltage_to_temperature() in tempctrl.c."""
-    x = (LOAD_THERM_SH_A - 1.0 / (temp_c + 273.15)) / LOAD_THERM_SH_C
-    y = math.sqrt(
-        (LOAD_THERM_SH_B / (3.0 * LOAD_THERM_SH_C)) ** 3 + x * x / 4.0
+    """Vishay forward formula: temperature (deg C) -> ohms. Inverse (to
+    <= 0.015 C) of thermistor_voltage_to_temperature() in tempctrl.c."""
+    t = temp_c + 273.15
+    return LOAD_THERM_REF_OHMS * math.exp(
+        LOAD_THERM_FWD_A
+        + LOAD_THERM_FWD_B / t
+        + LOAD_THERM_FWD_C / t**2
+        + LOAD_THERM_FWD_D / t**3
     )
-    # y > |x|/2, so both cube-root arguments are positive.
-    third = 1.0 / 3.0
-    return math.exp((y - x / 2.0) ** third - (y + x / 2.0) ** third)
 
 
 def _load_thermistor_voltage(resistance):
