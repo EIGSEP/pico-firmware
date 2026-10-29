@@ -19,6 +19,7 @@ from picohost.testing import (
     DummyPicoIMU,
     DummyPicoPotentiometer,
     DummyPicoLidar,
+    DummyPicoLnaMon,
 )
 
 # Expected field sets from C firmware send_json calls
@@ -360,6 +361,32 @@ class TestLidarIntegration:
         assert isinstance(s["status"], str)
         assert isinstance(s["app_id"], int)
         assert isinstance(s["distance_m"], (int, float))
+
+
+# --- LnaMon ---
+
+
+class TestLnaMonIntegration:
+    def test_status_fields(self):
+        """LNA monitor emulator populates all lnamon.c send_json fields."""
+        mon = DummyPicoLnaMon("/dev/dummy")
+        try:
+            wait_for_condition(
+                lambda: len(mon.last_status) > 0,
+                cadence_ms=mon.EMULATOR_CADENCE_MS,
+            )
+            s = mon.last_status
+            assert set(s) == {
+                "sensor_name",
+                "app_id",
+                "status",
+                "lna_adc_voltage",
+                "lna_rail_voltage",
+            }
+            assert s["sensor_name"] == "lnamon"
+            assert s["app_id"] == 7
+        finally:
+            mon.disconnect()
 
 
 # --- RFSwitch ---

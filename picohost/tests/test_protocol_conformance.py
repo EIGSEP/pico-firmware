@@ -19,6 +19,7 @@ from picohost.emulators import (
     LidarEmulator,
     PotMonEmulator,
     RFSwitchEmulator,
+    LnaMonEmulator,
 )
 from picohost.emulators.tempctrl import MAX_REJECTS
 
@@ -75,6 +76,7 @@ class TestBaseProtocol:
             LidarEmulator,
             PotMonEmulator,
             RFSwitchEmulator,
+            LnaMonEmulator,
         ):
             kwargs = {"settle_ms": 0} if Cls is RFSwitchEmulator else {}
             emu = Cls(**kwargs)
@@ -97,6 +99,7 @@ class TestBaseProtocol:
             LidarEmulator(),
             PotMonEmulator(),
             RFSwitchEmulator(settle_ms=0),
+            LnaMonEmulator(),
         ]
         for emu in emulators:
             before = emu.get_status()
@@ -543,3 +546,51 @@ class TestRFSwitchProtocol:
         emu = RFSwitchEmulator(settle_ms=30)
         emu.server({"sw_state": 7})
         assert emu.get_status()["sw_state"] == emu.SW_STATE_UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# LNA rail monitor protocol (src/lnamon.c)
+# ---------------------------------------------------------------------------
+
+
+class TestLnaMonProtocol:
+    """Protocol conformance tests for APP_LNAMON (app_id=7)."""
+
+    def test_sensor_name(self):
+        assert LnaMonEmulator().get_status()["sensor_name"] == "lnamon"
+
+    def test_app_id(self):
+        assert LnaMonEmulator().get_status()["app_id"] == 7
+
+    def test_no_commands_accepted(self):
+        """lnamon_server is a no-op."""
+        emu = LnaMonEmulator()
+        emu.op()
+        before = emu.get_status()
+        emu.server({"lna_rail_voltage": 0.0})
+        assert emu.get_status() == before
+
+    def test_voltages_are_float(self):
+        """lnamon.c reports both voltages as KV_FLOAT."""
+        emu = LnaMonEmulator()
+        emu.op()
+        status = emu.get_status()
+        assert isinstance(status["lna_adc_voltage"], float)
+        assert isinstance(status["lna_rail_voltage"], float)
+
+    def test_rail_is_adc_times_divider_gain(self):
+        """lnamon.c: Vrail = Vadc * (R1 + R2) / R2 with R1=51k, R2=75.1k."""
+        emu = LnaMonEmulator()
+        emu.op()
+        status = emu.get_status()
+        assert status["lna_rail_voltage"] == pytest.approx(
+            status["lna_adc_voltage"] * 126.1 / 75.1
+        )
+
+    def test_nominal_rail_reading(self):
+        """A 5.0V rail reads ~2.98V at the pin and ~5.0V after scaling."""
+        emu = LnaMonEmulator(rail_voltage=5.0)
+        emu.op()
+        status = emu.get_status()
+        assert status["lna_adc_voltage"] == pytest.approx(2.978, abs=0.03)
+        assert status["lna_rail_voltage"] == pytest.approx(5.0, abs=0.05)

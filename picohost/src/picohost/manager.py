@@ -47,6 +47,7 @@ from .base import (
     PicoDevice,
     PicoIMU,
     PicoLidar,
+    PicoLnaMon,
     PicoTempCtrl,
     PicoPotentiometer,
     PicoRFSwitch,
@@ -78,6 +79,7 @@ APP_NAMES = {
     4: "lidar",
     5: "rfswitch",
     6: "imu_az",
+    7: "lnamon",
 }
 
 # Inverse mapping: name -> app_id
@@ -92,6 +94,7 @@ PICO_CLASSES = {
     "lidar": PicoLidar,
     "imu_az": PicoIMU,
     "rfswitch": PicoRFSwitch,
+    "lnamon": PicoLnaMon,
 }
 
 # Timing

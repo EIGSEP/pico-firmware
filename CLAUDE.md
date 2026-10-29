@@ -153,6 +153,7 @@ The firmware implements a multi-app dispatch system in `src/main.c`:
   - `src/imu.c` - IMU sensor interface (APP_IMU_EL = 3, APP_IMU_AZ = 6)
   - `src/lidar.c` - Lidar sensor interface (APP_LIDAR = 4)
   - `src/rfswitch.c` - RF switch control (APP_RFSWITCH = 5)
+  - `src/lnamon.c` - LNA 5V supply-rail monitor on GP27/ADC1 (APP_LNAMON = 7)
 - **Shared Utilities**:
   - `src/temp_simple.c` - ADC thermistor helper used by tempctrl
 - **Command Protocol**: JSON-based via `lib/eigsep_command/` using cJSON library
@@ -246,7 +247,7 @@ The boundary between `picohost` and the sister `eigsep_observing` repo is drawn 
 - USB serial devices enumerate as PICO_000, PICO_001, etc. based on unique board ID
 - Automated tests use firmware emulators (no hardware needed); hardware testing uses scripts in `picohost/scripts/`
 - Apps use a command/response architecture with JSON protocol
-- Currently 7 apps are integrated (0-6), with slot 7 reserved for future use
+- All 8 DIP slots (0-7) are assigned
 - All firmware apps are in `src/` directory and fully integrated
 - Status reporting occurs every 200ms (`STATUS_CADENCE_MS`)
 - LED blinks as a heartbeat indicator during operation

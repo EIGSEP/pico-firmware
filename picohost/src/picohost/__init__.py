@@ -12,6 +12,7 @@ from .base import (
     PicoTempCtrl,
     PicoIMU,
     PicoLidar,
+    PicoLnaMon,
     PicoPotentiometer,
 )
 from .motor import PicoMotor
@@ -27,6 +28,7 @@ __all__ = [
     "PicoTempCtrl",
     "PicoIMU",
     "PicoLidar",
+    "PicoLnaMon",
     "PicoPotentiometer",
     "PicoManager",
     "PicoProxy",

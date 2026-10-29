@@ -19,6 +19,7 @@
 #define APP_LIDAR       4
 #define APP_RFSWITCH    5
 #define APP_IMU_AZ      6  // emulator: imu
+#define APP_LNAMON      7
 
 // status reporting cadence
 #define STATUS_CADENCE_MS 200

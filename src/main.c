@@ -14,6 +14,7 @@
 #include "imu.h"
 #include "lidar.h"
 #include "currentmon.h"
+#include "lnamon.h"
 
 
 // Read 3-bit DIP switch code
@@ -90,6 +91,7 @@ int main(void) {
             lidar_init(app_id);
             currentmon_init();
             break;
+        case APP_LNAMON: lnamon_init(app_id); break;
         default: break;
     }
    
@@ -117,6 +119,7 @@ int main(void) {
                     case APP_IMU_EL:
                     case APP_IMU_AZ: imu_server(app_id, line); break;
                     case APP_LIDAR: lidar_server(app_id, line); break;
+                    case APP_LNAMON: lnamon_server(app_id, line); break;
                     default:
                         send_json(2,
                             KV_STR, "status", "error",
@@ -157,6 +160,7 @@ int main(void) {
                 // keep sampling independent of lidar's I2C health.
                 currentmon_op();
                 break;
+            case APP_LNAMON: lnamon_op(app_id); break;
             default:
                 break;
         }
@@ -174,6 +178,7 @@ int main(void) {
                 case APP_IMU_EL:
                 case APP_IMU_AZ: imu_status(app_id); break;
                 case APP_LIDAR: lidar_status(app_id); break;
+                case APP_LNAMON: lnamon_status(app_id); break;
                 default:
                     send_json(2,
                         KV_STR, "status", "error",

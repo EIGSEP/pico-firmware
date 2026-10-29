@@ -1144,6 +1144,19 @@ class PicoLidar(PicoDevice):
             )
 
 
+class PicoLnaMon(PicoDevice):
+    """LNA 5V supply-rail monitor (src/lnamon.c).
+
+    The firmware reads the rail through a 51k/75.1k (DMM-measured) divider
+    on GP27/ADC1 and
+    reports both the raw ADC-pin voltage and the rail voltage it derives
+    from the divider ratio.
+    """
+
+    # Firmware KV_FLOAT fields (src/lnamon.c status tick).
+    _REDIS_FLOAT_FIELDS = ("lna_adc_voltage", "lna_rail_voltage")
+
+
 #: ADC reference voltage for the pot wiper. Mirrors firmware POTMON_VREF
 #: (src/potmon.h); the wiper spans ~0..POT_VREF, so the ADC rails
 #: approximate the pot's electrical ends.

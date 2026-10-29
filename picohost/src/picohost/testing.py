@@ -6,6 +6,7 @@ from .base import (
     PicoTempCtrl,
     PicoIMU,
     PicoLidar,
+    PicoLnaMon,
     PicoPotentiometer,
 )
 from .motor import PicoMotor
@@ -16,6 +17,7 @@ from .emulators import (
     LidarEmulator,
     PotMonEmulator,
     RFSwitchEmulator,
+    LnaMonEmulator,
 )
 
 
@@ -97,4 +99,9 @@ class DummyPicoLidar(DummyPicoDevice, PicoLidar):
 
 class DummyPicoPotentiometer(DummyPicoDevice, PicoPotentiometer):
     EMULATOR_CLASS = PotMonEmulator
+    EMULATOR_CADENCE_MS = 50.0
+
+
+class DummyPicoLnaMon(DummyPicoDevice, PicoLnaMon):
+    EMULATOR_CLASS = LnaMonEmulator
     EMULATOR_CADENCE_MS = 50.0
