@@ -18,6 +18,15 @@
 // Vrail = Vadc * (R1 + R2) / R2
 #define LNAMON_DIVIDER_GAIN     ((LNAMON_R1_OHMS + LNAMON_R2_OHMS) / LNAMON_R2_OHMS)
 
+// Linear correction applied to the divider-scaled rail voltage:
+// Vrail = LNAMON_CAL_GAIN * (Vadc * LNAMON_DIVIDER_GAIN) + LNAMON_CAL_OFFSET.
+// Least-squares fit against a DMM at the supply terminals (4.57, 5.19,
+// 5.50V; residuals <= 2.2mV). Absorbs ADC gain/offset error, the actual
+// ADC_VREF (3.27V measured vs the nominal LNAMON_VREF), and resistor
+// tolerance. lna_adc_voltage is reported uncorrected so the cal can be redone.
+#define LNAMON_CAL_GAIN         1.01164f
+#define LNAMON_CAL_OFFSET       (-0.03222f)
+
 #define LNAMON_ADC_BITS         12
 #define LNAMON_ADC_MAX          ((1 << LNAMON_ADC_BITS) - 1)
 #define LNAMON_VREF             3.3f

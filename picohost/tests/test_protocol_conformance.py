@@ -578,19 +578,20 @@ class TestLnaMonProtocol:
         assert isinstance(status["lna_adc_voltage"], float)
         assert isinstance(status["lna_rail_voltage"], float)
 
-    def test_rail_is_adc_times_divider_gain(self):
-        """lnamon.c: Vrail = Vadc * (R1 + R2) / R2 with R1=51k, R2=75.1k."""
+    def test_rail_is_calibrated_divider_scaling(self):
+        """lnamon.c: Vrail = CAL_GAIN * Vadc * (R1 + R2) / R2 + CAL_OFFSET,
+        with R1=51k, R2=75.1k, CAL_GAIN=1.01164, CAL_OFFSET=-0.03222."""
         emu = LnaMonEmulator()
         emu.op()
         status = emu.get_status()
         assert status["lna_rail_voltage"] == pytest.approx(
-            status["lna_adc_voltage"] * 126.1 / 75.1
+            1.01164 * status["lna_adc_voltage"] * 126.1 / 75.1 - 0.03222
         )
 
     def test_nominal_rail_reading(self):
-        """A 5.0V rail reads ~2.98V at the pin and ~5.0V after scaling."""
+        """A 5.0V rail reads ~2.97V at the pin and ~5.0V after correction."""
         emu = LnaMonEmulator(rail_voltage=5.0)
         emu.op()
         status = emu.get_status()
-        assert status["lna_adc_voltage"] == pytest.approx(2.978, abs=0.03)
+        assert status["lna_adc_voltage"] == pytest.approx(2.962, abs=0.03)
         assert status["lna_rail_voltage"] == pytest.approx(5.0, abs=0.05)

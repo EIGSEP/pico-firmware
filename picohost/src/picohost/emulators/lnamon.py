@@ -9,6 +9,9 @@ VREF = 3.3
 R1_OHMS = 51000.0
 R2_OHMS = 75100.0
 DIVIDER_GAIN = (R1_OHMS + R2_OHMS) / R2_OHMS
+# Mirrors LNAMON_CAL_GAIN / LNAMON_CAL_OFFSET in src/lnamon.h.
+CAL_GAIN = 1.01164
+CAL_OFFSET = -0.03222
 
 
 class LnaMonEmulator(PicoEmulator):
@@ -30,15 +33,20 @@ class LnaMonEmulator(PicoEmulator):
         pass
 
     def op(self):
+        # Invert the cal so the emulated ADC reads what uncalibrated
+        # hardware would for the true rail; the firmware's correction then
+        # recovers that rail.
+        uncal_rail = (self._base_rail_voltage - CAL_OFFSET) / CAL_GAIN
         self.adc_voltage = float(
             np.clip(
-                self._base_rail_voltage / DIVIDER_GAIN
-                + np.random.normal(0, NOISE_STDDEV),
+                uncal_rail / DIVIDER_GAIN + np.random.normal(0, NOISE_STDDEV),
                 0.0,
                 VREF,
             )
         )
-        self.rail_voltage = self.adc_voltage * DIVIDER_GAIN
+        self.rail_voltage = (
+            CAL_GAIN * (self.adc_voltage * DIVIDER_GAIN) + CAL_OFFSET
+        )
 
     def get_status(self):
         return {

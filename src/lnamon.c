@@ -34,7 +34,8 @@ void lnamon_op(uint8_t app_id)
     }
     float counts = (float)total / (float)LNAMON_ADC_SAMPLES;
     adc_voltage = counts * LNAMON_VREF / (float)LNAMON_ADC_MAX;
-    rail_voltage = adc_voltage * LNAMON_DIVIDER_GAIN;
+    rail_voltage = LNAMON_CAL_GAIN * (adc_voltage * LNAMON_DIVIDER_GAIN)
+                   + LNAMON_CAL_OFFSET;
 }
 
 void lnamon_status(uint8_t app_id)
